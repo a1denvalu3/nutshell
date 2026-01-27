@@ -47,7 +47,9 @@ from .crud import (
     bump_secret_derivation,
     get_bolt11_melt_quote,
     get_bolt11_mint_quote,
+    get_bolt11_mint_quotes,
     get_keysets,
+
     get_mint_by_url,
     get_proofs,
     invalidate_proof,
