@@ -962,6 +962,25 @@ async def invoices(ctx: Context, paid: bool, unpaid: bool, pending: bool, mint: 
         melt_state = MeltQuoteState.paid
         mint_state = MintQuoteState.paid
 
+    if mint:
+        # Check all unpaid quotes first using batch check
+        await wallet.check_all_mint_quotes()
+        
+        # Get all paid quotes that are ready to be minted
+        mint_quotes_ready = await get_bolt11_mint_quotes(
+            db=wallet.db,
+            state=MintQuoteState.paid,
+        )
+        
+        if mint_quotes_ready:
+            print(f"Minting {len(mint_quotes_ready)} pending invoices...")
+            try:
+                proofs = await wallet.mint_batch(mint_quotes_ready)
+                print(f"Successfully minted {wallet.unit.str(sum_proofs(proofs))}")
+            except Exception as e:
+                print(f"Error minting batch: {e}")
+
+    # Re-fetch quotes after potential updates
     melt_quotes = await get_bolt11_melt_quotes(
         db=wallet.db,
         state=melt_state,
@@ -975,17 +994,6 @@ async def invoices(ctx: Context, paid: bool, unpaid: bool, pending: bool, mint: 
     if len(melt_quotes) == 0 and len(mint_quotes) == 0:
         print("No invoices found.")
         return
-
-    async def _try_to_mint_pending_invoice(
-        amount: int, quote_id: str
-    ) -> Optional[MintQuote]:
-        try:
-            proofs = await wallet.mint(amount, quote_id)
-            print(f"Received {wallet.unit.str(sum_proofs(proofs))}")
-            return await get_bolt11_mint_quote(db=wallet.db, quote=quote_id)
-        except Exception as e:
-            logger.error(f"Could not mint pending invoice: {e}")
-            return None
 
     def _print_quote_info(
         quote: MintQuote | MeltQuote | None, counter: int | None = None
@@ -1025,14 +1033,14 @@ async def invoices(ctx: Context, paid: bool, unpaid: bool, pending: bool, mint: 
         invoices_printed_count += 1
 
     for mint_quote in mint_quotes:
-        if mint_quote.state == MintQuoteState.unpaid and mint:
-            # Tries to mint pending invoice
-            mint_quote_pay = await _try_to_mint_pending_invoice(
-                mint_quote.amount, mint_quote.quote
-            )
-            # If minting was successful, we don't need to print this invoice
-            if mint_quote_pay:
-                continue
+        # if mint_quote.state == MintQuoteState.unpaid and mint:
+        #     # Tries to mint pending invoice
+        #     mint_quote_pay = await _try_to_mint_pending_invoice(
+        #         mint_quote.amount, mint_quote.quote
+        #     )
+        #     # If minting was successful, we don't need to print this invoice
+        #     if mint_quote_pay:
+        #         continue
         _print_quote_info(mint_quote, invoices_printed_count + 1)
         invoices_printed_count += 1
 

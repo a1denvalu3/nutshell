@@ -42,6 +42,9 @@ from ..core.models import (
     PostMeltResponse_deprecated,
     PostMintQuoteRequest,
     PostMintQuoteResponse,
+    PostMintQuoteCheckRequest,
+    PostMintBatchRequest,
+    PostMintBatchResponse,
     PostMintRequest,
     PostMintResponse,
     PostRestoreResponse,
@@ -449,6 +452,76 @@ class LedgerAPI(LedgerAPIDeprecated, SupportsAuth):
         logger.trace(f"Lightning invoice checked. POST {self.api_prefix}/mint/bolt11")
         promises = PostMintResponse.model_validate(response_dict).signatures
         return promises
+
+    @async_set_httpx_client
+    @async_ensure_mint_loaded
+    async def mint_batch(
+        self,
+        outputs: List[BlindedMessage],
+        quotes: List[str],
+        quote_amounts: Optional[List[int]] = None,
+        signatures: Optional[List[Optional[str]]] = None,
+    ) -> List[BlindedSignature]:
+        """Batch mints new coins and returns a proof of promise.
+
+        Args:
+            outputs (List[BlindedMessage]): Outputs to mint new tokens with
+            quotes (List[str]): List of Quote IDs.
+            quote_amounts (Optional[List[int]], optional): List of amounts for each quote.
+            signatures (Optional[List[str]], optional): NUT-20 signatures for each quote.
+
+        Returns:
+            list[Proof]: List of proofs.
+
+        Raises:
+            Exception: If the minting fails
+        """
+        payload = PostMintBatchRequest(
+            outputs=outputs,
+            quotes=quotes,
+            quote_amounts=quote_amounts,
+            signatures=signatures,
+        )
+        logger.trace("Batch minting. POST /v1/mint/bolt11/batch")
+
+        resp = await self._request(
+            POST,
+            "mint/bolt11/batch",
+            json=payload.model_dump(),
+        )
+        self.raise_on_error_request(resp)
+        response_dict = resp.json()
+        logger.trace(
+            f"Batch mint successful. POST {self.api_prefix}/mint/bolt11/batch"
+        )
+        promises = PostMintBatchResponse.model_validate(response_dict).signatures
+        return promises
+
+    @async_set_httpx_client
+    @async_ensure_mint_loaded
+    async def check_mint_quotes(self, quotes: List[str]) -> List[PostMintQuoteResponse]:
+        """Checks the status of multiple mint quotes.
+
+        Args:
+            quotes (List[str]): List of Quote IDs.
+
+        Returns:
+            List[PostMintQuoteResponse]: List of mint quote responses.
+        """
+        payload = PostMintQuoteCheckRequest(quotes=quotes)
+        logger.trace("Checking mint quotes. POST /v1/mint/quote/bolt11/check")
+
+        resp = await self._request(
+            POST,
+            "mint/quote/bolt11/check",
+            json=payload.model_dump(),
+        )
+        self.raise_on_error_request(resp)
+        response_list = resp.json()
+        logger.trace(
+            f"Mint quotes checked. POST {self.api_prefix}/mint/quote/bolt11/check"
+        )
+        return [PostMintQuoteResponse.model_validate(q) for q in response_list]
 
     @async_set_httpx_client
     @async_ensure_mint_loaded

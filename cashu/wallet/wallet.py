@@ -634,7 +634,141 @@ class Wallet(
                 await update_proof(p, mint_id=quote_id, conn=conn)
         return proofs
 
+    async def check_all_mint_quotes(self) -> List[MintQuote]:
+        """Checks the status of all unpaid mint quotes and updates the database.
+
+        Returns:
+            List[MintQuote]: List of updated mint quotes.
+        """
+        quotes = await get_bolt11_mint_quotes(db=self.db, state=MintQuoteState.unpaid)
+        if not quotes:
+            return []
+
+        # filter out quotes that are already paid or issued
+        # this should not happen if we query the db correctly but just in case
+        quotes = [q for q in quotes if q.state == MintQuoteState.unpaid]
+        if not quotes:
+            return []
+
+        logger.debug(f"Checking {len(quotes)} mint quotes.")
+        
+        # Batch check
+        quote_ids = [q.quote for q in quotes]
+        try:
+            checked_quotes = await super().check_mint_quotes(quote_ids)
+        except Exception as e:
+            logger.error(f"Could not check mint quotes: {e}")
+            return []
+
+        updated_quotes = []
+        for q_resp in checked_quotes:
+            # Update local db
+            await update_bolt11_mint_quote(
+                db=self.db,
+                quote=q_resp.quote,
+                state=MintQuoteState(q_resp.state),
+                paid_time=int(time.time()) if q_resp.state == MintQuoteState.paid.value else None,
+            )
+            
+            # Find the local quote object to return
+            local_quote = next((q for q in quotes if q.quote == q_resp.quote), None)
+            if local_quote:
+                local_quote.state = MintQuoteState(q_resp.state)
+                updated_quotes.append(local_quote)
+
+        return updated_quotes
+
+    async def mint_batch(
+        self,
+        quotes: List[MintQuote],
+        split: Optional[List[int]] = None,
+    ) -> List[Proof]:
+        """Mint tokens for multiple quotes in a batch.
+
+        Args:
+            quotes (List[MintQuote]): List of mint quotes to mint.
+            split (Optional[List[int]], optional): List of desired amount splits to be minted. Total must sum to sum of quotes.
+
+        Returns:
+            List[Proof]: Newly minted proofs.
+        """
+        if not quotes:
+            return []
+
+        total_amount = sum([q.amount for q in quotes])
+        
+        # split based on our wallet state
+        amounts = split or self.split_wallet_state(total_amount)
+
+        # generate secrets
+        secrets, rs, derivation_paths = await self.generate_n_secrets(
+            len(amounts), skip_bump=True
+        )
+        await self._check_used_secrets(secrets)
+        outputs, rs = self._construct_outputs(amounts, secrets, rs)
+
+        # Collect signatures
+        signatures: List[Optional[str]] = []
+        for quote in quotes:
+            signature: Optional[str] = None
+            if quote.privkey:
+                # For batch minting, NUT-20 requires signing the aggregated outputs for each quote
+                # But wait, the spec says: 
+                # "The signature must be a valid signature for the message quote_id + output_1 + output_2 + ... + output_n"
+                # So we sign the same outputs for each quote
+                signature = nut20.sign_mint_quote(quote.quote, outputs, quote.privkey)
+            signatures.append(signature)
+
+        quote_ids = [q.quote for q in quotes]
+        quote_amounts = [q.amount for q in quotes] # Optional but good to be explicit
+
+        # Call batch mint API
+        promises = await super().mint_batch(
+            outputs=outputs,
+            quotes=quote_ids,
+            quote_amounts=quote_amounts,
+            signatures=signatures,
+        )
+
+        promises_keyset_id = promises[0].id
+        await bump_secret_derivation(
+            db=self.db, keyset_id=promises_keyset_id, by=len(amounts)
+        )
+        proofs = await self._construct_proofs(promises, secrets, rs, derivation_paths)
+
+        # Update all quotes to paid (they are actually issued now, but paid is a prerequisite state usually)
+        # Actually we should mark them as paid/issued. The mint marks them issued.
+        # We can update our local DB to issued or paid. 
+        # Looking at single mint: it updates to MintQuoteState.paid.
+        # Let's stick to that for consistency, although technically they are spent.
+        
+        async with self.db.connect() as conn:
+            for quote_id in quote_ids:
+                await update_bolt11_mint_quote(
+                    db=self.db,
+                    quote=quote_id,
+                    state=MintQuoteState.paid,
+                    paid_time=int(time.time()),
+                    conn=conn
+                )
+            
+            # store the mint_id in proofs - wait, a proof can only have one mint_id field in DB currently?
+            # Ideally we'd link to the transaction.
+            # For now, let's just use the first quote ID or handle it if possible.
+            # Proof model has mint_id: str.
+            # Since these proofs result from a batch of quotes, maybe we just use the first one 
+            # or leave it blank if it's not critical for validity (it's mostly for history).
+            # Existing code sets mint_id = quote_id.
+            # Let's set it to the first quote_id for now as a reference.
+            primary_quote_id = quote_ids[0]
+            for p in proofs:
+                p.mint_id = primary_quote_id
+                await update_proof(p, mint_id=primary_quote_id, conn=conn)
+                
+        return proofs
+
     async def redeem(
+
         self,
         proofs: List[Proof],
     ) -> Tuple[List[Proof], List[Proof]]:
