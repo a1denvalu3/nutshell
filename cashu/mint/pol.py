@@ -1,7 +1,5 @@
 import datetime
 import hashlib
-import json
-import os
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -308,10 +306,7 @@ async def update_pol_manifests(ledger) -> None:
         logger.error(f"Failed to obtain aggregated OTS attestation: {e}")
         return
         
-    # 5. Sign and save synchronized manifests for each keyset
-    pol_dir = os.path.join(settings.mint_database, "pol")
-    os.makedirs(pol_dir, exist_ok=True)
-    
+    # 5. Sign and save synchronized manifests for each keyset to the database
     for kid in sorted_keyset_ids:
         ri_hash, ri_sum, rs_hash, rs_sum, keyset = keyset_results[kid]
         outstanding_balance = ri_sum - rs_sum
@@ -352,31 +347,4 @@ async def update_pol_manifests(ledger) -> None:
             }
         )
         
-        # Write manifest file
-        manifest = {
-            "keyset_id": kid,
-            "epoch_index": next_epoch_index,
-            "timestamp": timestamp_str,
-            "signing_pubkey": pub_key_hex,
-            "root_issued": {
-                "hash": ri_hash.hex(),
-                "sum": ri_sum
-            },
-            "root_spent": {
-                "hash": rs_hash.hex(),
-                "sum": rs_sum
-            },
-            "outstanding_balance": outstanding_balance,
-            "ots_receipt": ots_receipt_hex,
-            "mint_signature": signature
-        }
-        
-        manifest_path = os.path.join(pol_dir, f"{kid}_epoch_{next_epoch_index}_manifest.json")
-        with open(manifest_path, "w") as f:
-            json.dump(manifest, f, indent=2)
-            
-        latest_path = os.path.join(pol_dir, f"{kid}_latest_manifest.json")
-        with open(latest_path, "w") as f:
-            json.dump(manifest, f, indent=2)
-            
-        logger.info(f"PoL Keyset {kid} synchronized manifest successfully saved for Epoch {next_epoch_index}!")
+        logger.info(f"PoL Keyset {kid} synchronized manifest successfully saved in database for Epoch {next_epoch_index}!")
