@@ -309,7 +309,7 @@ async def update_pol_manifests(ledger) -> None:
         return
         
     # 5. Sign and save synchronized manifests for each keyset
-    pol_dir = os.path.join(settings.cashu_dir, "pol")
+    pol_dir = os.path.join(settings.mint_database, "pol")
     os.makedirs(pol_dir, exist_ok=True)
     
     for kid in sorted_keyset_ids:
