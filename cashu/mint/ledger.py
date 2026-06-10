@@ -178,8 +178,7 @@ class Ledger(
         Runs periodic PoL epoch checks and manifest updates.
         """
         logger.info("Starting ledger PoL regular tasks loop")
-        # Check every 10 seconds, or more frequently if epoch seconds is shorter (e.g. for testing)
-        interval = min(settings.mint_pol_epoch_seconds or 86400, 10)
+        interval = settings.mint_pol_epoch_seconds or 86400
         while True:
             try:
                 await update_pol_manifests(self)
