@@ -147,14 +147,14 @@ async def get_latest_pol_epoch(ledger, keyset_id: str) -> Optional[Dict]:
         f"SELECT * FROM {ledger.db.table_with_schema('pol_epochs')} WHERE keyset_id = :keyset_id ORDER BY epoch_index DESC LIMIT 1",
         {"keyset_id": keyset_id}
     )
-    return dict(row._mapping) if row else None
+    return dict(row) if row else None
 
 
 async def get_latest_global_pol_epoch(ledger) -> Optional[Dict]:
     row = await ledger.db.fetchone(
         f"SELECT * FROM {ledger.db.table_with_schema('pol_epochs')} ORDER BY timestamp DESC LIMIT 1"
     )
-    return dict(row._mapping) if row else None
+    return dict(row) if row else None
 
 
 async def get_pol_epoch_by_index(ledger, keyset_id: str, epoch_index: int) -> Optional[Dict]:
@@ -162,7 +162,7 @@ async def get_pol_epoch_by_index(ledger, keyset_id: str, epoch_index: int) -> Op
         f"SELECT * FROM {ledger.db.table_with_schema('pol_epochs')} WHERE keyset_id = :keyset_id AND epoch_index = :epoch_index",
         {"keyset_id": keyset_id, "epoch_index": epoch_index}
     )
-    return dict(row._mapping) if row else None
+    return dict(row) if row else None
 
 
 async def build_trees_for_keyset_at_timestamp(

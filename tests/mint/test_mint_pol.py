@@ -164,7 +164,7 @@ async def test_update_pol_manifests_lifecycle(monkeypatch):
         if "pol_epochs" in query:
             if epochs_in_db:
                 epoch = epochs_in_db[-1]
-                return SimpleNamespace(_mapping=epoch)
+                return epoch
             return None
         return None
         
@@ -234,20 +234,18 @@ def test_pol_endpoints_and_mock_ledger(monkeypatch):
         
     async def mock_fetchone(query, values=None):
         if "pol_epochs" in query:
-            return SimpleNamespace(
-                _mapping={
-                    "keyset_id": keyset_id,
-                    "epoch_index": 1,
-                    "timestamp": epoch_timestamp,
-                    "root_issued_hash": hashlib.sha256(b"issued").hexdigest(),
-                    "root_issued_sum": 300,
-                    "root_spent_hash": hashlib.sha256(b"spent").hexdigest(),
-                    "root_spent_sum": 200,
-                    "outstanding_balance": 100,
-                    "ots_receipt": "010203",
-                    "signature": "mock_sig",
-                }
-            )
+            return {
+                "keyset_id": keyset_id,
+                "epoch_index": 1,
+                "timestamp": epoch_timestamp,
+                "root_issued_hash": hashlib.sha256(b"issued").hexdigest(),
+                "root_issued_sum": 300,
+                "root_spent_hash": hashlib.sha256(b"spent").hexdigest(),
+                "root_spent_sum": 200,
+                "outstanding_balance": 100,
+                "ots_receipt": "010203",
+                "signature": "mock_sig",
+            }
         return None
         
     mock_db = SimpleNamespace(
