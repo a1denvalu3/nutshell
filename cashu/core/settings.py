@@ -83,6 +83,18 @@ class MintSettings(CashuSettings):
         description="Interval (in seconds) for running regular tasks like the invoice checker.",
     )
 
+    mint_pol_epoch_seconds: int = Field(
+        default=86400,
+        title="PoL Epoch seconds",
+        description="Time window for Proof of Liability epochs.",
+    )
+
+    mint_pol_mock_ots: bool = Field(
+        default=False,
+        title="Mock OTS",
+        description="If True, generate mock OTS receipts without making network requests.",
+    )
+
     mint_retry_exponential_backoff_base_delay: int = Field(default=1)
     mint_retry_exponential_backoff_max_delay: int = Field(default=10)
 

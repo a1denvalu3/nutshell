@@ -64,6 +64,7 @@ from .db.write import DbWriteHelper
 from .events.events import LedgerEventManager
 from .features import LedgerFeatures
 from .keysets import LedgerKeysets
+from .pol import update_pol_manifests
 from .tasks import LedgerTasks
 from .verification import LedgerVerification
 from .watchdog import LedgerWatchdog
@@ -166,6 +167,7 @@ class Ledger(
         while True:
             try:
                 await self._check_pending_proofs_and_melt_quotes()
+                await update_pol_manifests(self)
                 await asyncio.sleep(settings.mint_regular_tasks_interval_seconds)
             except Exception as e:
                 logger.error(f"Ledger regular task failed: {e}")

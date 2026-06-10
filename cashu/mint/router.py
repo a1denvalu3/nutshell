@@ -1,8 +1,12 @@
 import asyncio
+import datetime
+import hashlib
 import time
+from typing import List, Optional
 
-from fastapi import APIRouter, Request, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisconnect
 from loguru import logger
+from pydantic import BaseModel
 
 from ..core.errors import KeysetNotFoundError
 from ..core.models import (
@@ -32,6 +36,13 @@ from ..core.settings import settings
 from ..mint.startup import ledger
 from .cache import RedisCache
 from .limit import limit_websocket, limiter
+from .pol import (
+    build_trees_for_keyset_at_timestamp,
+    get_latest_pol_epoch,
+    get_pol_epoch_by_index,
+    parse_db_timestamp,
+    update_pol_manifests,
+)
 
 router = APIRouter()
 redis = RedisCache()
@@ -456,3 +467,207 @@ async def restore(payload: PostRestoreRequest) -> PostRestoreResponse:
     assert payload.outputs, Exception("no outputs provided.")
     outputs, signatures = await ledger.restore(payload.outputs)
     return PostRestoreResponse(outputs=outputs, signatures=signatures)
+
+
+class PolIssuedRequest(BaseModel):
+    blinded_messages: List[str]
+
+
+class PolSpentRequest(BaseModel):
+    secrets: List[str]
+
+
+class SiblingInfo(BaseModel):
+    hash: str
+    sum: int
+
+
+class PolProofItem(BaseModel):
+    item: str
+    index: str
+    value: int
+    compact_mask: str
+    siblings: List[SiblingInfo]
+
+
+class PolProofsResponse(BaseModel):
+    proofs: List[PolProofItem]
+
+
+class ManifestRoot(BaseModel):
+    hash: str
+    sum: int
+
+
+class PolManifestResponse(BaseModel):
+    keyset_id: str
+    epoch_index: int
+    timestamp: str
+    signing_pubkey: str
+    root_issued: ManifestRoot
+    root_spent: ManifestRoot
+    outstanding_balance: int
+    ots_receipt: str
+    mint_signature: str
+
+
+@router.get(
+    "/v1/pol/{keyset_id}/manifest",
+    name="Proof of Liabilities Manifest",
+    summary="Get the PoL manifest including MS-SMT roots, OTS receipt, and signature for a specific epoch (defaults to latest).",
+    response_model=PolManifestResponse,
+)
+async def pol_manifest(
+    keyset_id: str,
+    epoch_index: Optional[int] = None,
+) -> PolManifestResponse:
+    if keyset_id not in ledger.keysets:
+        raise HTTPException(status_code=404, detail="Keyset not found")
+
+    keyset = ledger.keysets[keyset_id]
+
+    # Try to run regular manifest updates first
+    await update_pol_manifests(ledger)
+
+    if epoch_index is not None:
+        epoch = await get_pol_epoch_by_index(ledger, keyset_id, epoch_index)
+    else:
+        epoch = await get_latest_pol_epoch(ledger, keyset_id)
+
+    if not epoch:
+        raise HTTPException(
+            status_code=404,
+            detail="No completed PoL epoch found for this keyset."
+        )
+
+    ts_val = epoch["timestamp"]
+    ts_str = ts_val.isoformat() if isinstance(ts_val, datetime.datetime) else str(ts_val)
+
+    from .pol import get_signing_key_for_keyset
+    _, pub_key_hex = get_signing_key_for_keyset(keyset)
+
+    return PolManifestResponse(
+        keyset_id=epoch["keyset_id"],
+        epoch_index=epoch["epoch_index"],
+        timestamp=ts_str,
+        signing_pubkey=pub_key_hex,
+        root_issued=ManifestRoot(hash=epoch["root_issued_hash"], sum=epoch["root_issued_sum"]),
+        root_spent=ManifestRoot(hash=epoch["root_spent_hash"], sum=epoch["root_spent_sum"]),
+        outstanding_balance=epoch["outstanding_balance"],
+        ots_receipt=epoch["ots_receipt"],
+        mint_signature=epoch["signature"],
+    )
+
+
+@router.post(
+    "/v1/pol/{keyset_id}/proofs/issued",
+    name="Batch Issued Proofs",
+    summary="Get MS-SMT inclusion proofs for a list of blinded messages relative to the last-tree.",
+    response_model=PolProofsResponse,
+)
+async def pol_proofs_issued(
+    keyset_id: str,
+    payload: PolIssuedRequest,
+    epoch_index: Optional[int] = None,
+) -> PolProofsResponse:
+    if keyset_id not in ledger.keysets:
+        raise HTTPException(status_code=404, detail="Keyset not found")
+
+    if epoch_index is not None:
+        epoch = await get_pol_epoch_by_index(ledger, keyset_id, epoch_index)
+    else:
+        epoch = await get_latest_pol_epoch(ledger, keyset_id)
+
+    if not epoch:
+        raise HTTPException(
+            status_code=400,
+            detail="No completed PoL epoch found for this keyset. Proofs are only available after an epoch has ended."
+        )
+
+    epoch_time = parse_db_timestamp(epoch["timestamp"])
+
+    # Build tree as of the epoch timestamp
+    issued_tree, _ = await build_trees_for_keyset_at_timestamp(ledger, keyset_id, epoch_time)
+
+    proof_items = []
+    for b_hex in payload.blinded_messages:
+        h_b = hashlib.sha256(b_hex.encode('utf-8')).digest()
+        idx_int = int.from_bytes(h_b, 'big')
+
+        # Check if active leaf
+        level_nodes = issued_tree.tree_levels[0]
+        leaf_node = level_nodes.get(idx_int) if level_nodes is not None else None
+        value = leaf_node[1] if leaf_node else 0
+
+        compact_mask, siblings = issued_tree.get_proof(idx_int)
+
+        proof_items.append(
+            PolProofItem(
+                item=b_hex,
+                index=h_b.hex(),
+                value=value,
+                compact_mask=compact_mask,
+                siblings=[SiblingInfo(**s) for s in siblings]
+            )
+        )
+
+    return PolProofsResponse(proofs=proof_items)
+
+
+@router.post(
+    "/v1/pol/{keyset_id}/proofs/spent",
+    name="Batch Spent Proofs",
+    summary="Get MS-SMT inclusion proofs for a list of spent secrets relative to the last-tree.",
+    response_model=PolProofsResponse,
+)
+async def pol_proofs_spent(
+    keyset_id: str,
+    payload: PolSpentRequest,
+    epoch_index: Optional[int] = None,
+) -> PolProofsResponse:
+    if keyset_id not in ledger.keysets:
+        raise HTTPException(status_code=404, detail="Keyset not found")
+
+    if epoch_index is not None:
+        epoch = await get_pol_epoch_by_index(ledger, keyset_id, epoch_index)
+    else:
+        epoch = await get_latest_pol_epoch(ledger, keyset_id)
+
+    if not epoch:
+        raise HTTPException(
+            status_code=400,
+            detail="No completed PoL epoch found for this keyset. Proofs are only available after an epoch has ended."
+        )
+
+    epoch_time = parse_db_timestamp(epoch["timestamp"])
+
+    # Build tree as of the epoch timestamp
+    _, spent_tree = await build_trees_for_keyset_at_timestamp(ledger, keyset_id, epoch_time)
+
+    proof_items = []
+    for secret in payload.secrets:
+        # Compute Y from secret
+        from ..core.crypto.b_dhke import hash_to_curve
+        y_hex = hash_to_curve(secret.encode("utf-8")).format().hex()
+
+        h_y = hashlib.sha256(y_hex.encode('utf-8')).digest()
+        idx_int = int.from_bytes(h_y, 'big')
+
+        # Check if active leaf
+        level_nodes = spent_tree.tree_levels[0]
+        leaf_node = level_nodes.get(idx_int) if level_nodes is not None else None
+        value = leaf_node[1] if leaf_node else 0
+
+        compact_mask, siblings = spent_tree.get_proof(idx_int)
+
+        proof_items.append(
+            PolProofItem(
+                item=secret,
+                index=h_y.hex(),
+                value=value,
+                compact_mask=compact_mask,
+                siblings=[SiblingInfo(**s) for s in siblings]
+            )
+        )
+
+    return PolProofsResponse(proofs=proof_items)
