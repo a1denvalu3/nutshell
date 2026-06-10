@@ -2,6 +2,7 @@
 
 import asyncio
 import getpass
+import hashlib
 import json
 import os
 import time
@@ -17,6 +18,7 @@ import bolt11
 import click
 import httpx
 from click import Context
+from coincurve import PrivateKey
 from loguru import logger
 
 from ...core.base import (
@@ -28,6 +30,7 @@ from ...core.base import (
     TokenV4,
     Unit,
 )
+from ...core.crypto import b_dhke
 from ...core.helpers import sum_proofs
 from ...core.json_rpc.base import JSONRPCNotficationParams
 from ...core.logging import configure_logger
@@ -1592,7 +1595,6 @@ async def pol_manifest_cmd(ctx: Context, keyset_id: Optional[str], epoch: Option
     # Call the mint
     print(f"Connecting to mint {wallet.url} to fetch PoL manifest...")
     try:
-        import httpx
         url = f"{wallet.url}/v1/pol/{keyset_id}/manifest"
         params = {}
         if epoch:
@@ -1629,12 +1631,6 @@ async def pol_manifest_cmd(ctx: Context, keyset_id: Optional[str], epoch: Option
 @click.pass_context
 @coro
 async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[int]):
-    import hashlib
-
-    from coincurve import PrivateKey
-
-    from cashu.core.crypto import b_dhke
-
     # Precompute empty tree default nodes for level 0 to 255
     default_nodes = []
     empty_hash = hashlib.sha256(b"").digest()

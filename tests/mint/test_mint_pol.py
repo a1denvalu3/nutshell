@@ -1,24 +1,24 @@
-import pytest
-import hashlib
 import datetime
-import httpx
-import respx
+import hashlib
 from types import SimpleNamespace
-from fastapi.testclient import TestClient
-from fastapi import FastAPI
 
+import httpx
+import pytest
+import respx
+from fastapi import FastAPI
+from fastapi.testclient import TestClient
+
+from cashu.core.crypto.b_dhke import hash_to_curve
+from cashu.core.settings import settings
+from cashu.mint import app as app_module
+from cashu.mint import middleware as middleware_module
+from cashu.mint import router as router_module
 from cashu.mint.pol import (
     SparseMerkleSumTree,
     submit_to_ots,
-    build_trees_for_keyset_at_timestamp,
-    get_latest_pol_epoch,
     update_pol_manifests,
 )
-from cashu.mint import router as router_module
-from cashu.mint import app as app_module
-from cashu.mint import middleware as middleware_module
-from cashu.core.crypto.b_dhke import hash_to_curve
-from cashu.core.settings import settings
+
 
 def _build_router_app() -> FastAPI:
     app = FastAPI()
