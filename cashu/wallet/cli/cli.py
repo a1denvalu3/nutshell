@@ -1608,6 +1608,13 @@ async def pol_manifest_cmd(ctx: Context, keyset_id: Optional[str], epoch: Option
             return
 
         manifest = resp.json()
+        
+        # Verify outstanding balance sum consistency
+        root_issued_sum = manifest["root_issued"]["sum"]
+        root_spent_sum = manifest["root_spent"]["sum"]
+        outstanding_balance = manifest["outstanding_balance"]
+        sum_check_str = "✓ Match" if outstanding_balance == root_issued_sum - root_spent_sum else "❌ MISMATCH (cheating detected!)"
+
         print("\n=== Proof of Liabilities Manifest ===")
         print(f"Keyset ID:          {manifest['keyset_id']}")
         print(f"Epoch Index:        {manifest['epoch_index']}")
@@ -1617,7 +1624,7 @@ async def pol_manifest_cmd(ctx: Context, keyset_id: Optional[str], epoch: Option
         print(f"Root Issued Sum:    {manifest['root_issued']['sum']}")
         print(f"Root Spent Hash:    {manifest['root_spent']['hash']}")
         print(f"Root Spent Sum:     {manifest['root_spent']['sum']}")
-        print(f"Outstanding Balance: {manifest['outstanding_balance']}")
+        print(f"Outstanding Balance: {manifest['outstanding_balance']} ({sum_check_str})")
         print(f"OTS Receipt (hex):  {manifest['ots_receipt'][:64]}... ({len(manifest['ots_receipt'])} chars)")
         print(f"Signature:          {manifest['mint_signature']}")
         print("=====================================")
@@ -1687,6 +1694,20 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
 
     epoch_idx = manifest["epoch_index"]
     print(f"Manifest fetched successfully for Epoch {epoch_idx} (Timestamp: {manifest['timestamp']})")
+
+    # Verify outstanding balance sum consistency
+    root_issued_sum = manifest["root_issued"]["sum"]
+    root_spent_sum = manifest["root_spent"]["sum"]
+    outstanding_balance = manifest["outstanding_balance"]
+
+    if outstanding_balance != root_issued_sum - root_spent_sum:
+        print(
+            f"CRITICAL WARNING: The manifest outstanding_balance ({outstanding_balance}) does NOT match "
+            f"the difference of the roots ({root_issued_sum} - {root_spent_sum} = {root_issued_sum - root_spent_sum})!"
+        )
+        return
+
+    print("✓ Manifest outstanding balance matches the difference of Merkle-Sum Tree roots.")
 
     # Extract roots for verification
     root_issued_hash = bytes.fromhex(manifest["root_issued"]["hash"])
