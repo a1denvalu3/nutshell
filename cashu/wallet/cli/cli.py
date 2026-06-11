@@ -2010,26 +2010,43 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
     skipped_error_count = 0
 
     for p in all_wallet_proofs:
-        if not p.derivation_path:
-            skipped_no_path_count += 1
-            continue
-        try:
-            # Format is either "HMAC-SHA256:keyset_id:counter" or BIP32 path "m/.../counter'"
-            if p.derivation_path.startswith("HMAC-SHA256:"):
-                counter = int(p.derivation_path.split(":")[-1])
-            else:
-                counter = int(p.derivation_path.split("/")[-1].replace("'", ""))
+        r_priv = None
+        
+        # 1. First choice: Use DLEQ blinding factor if present
+        p_dleq = getattr(p, "dleq", None)
+        if p_dleq and p_dleq.r:
+            try:
+                r_priv = PrivateKey(bytes.fromhex(p_dleq.r))
+            except Exception as e:
+                logger.trace(f"Failed to parse stored DLEQ blinding factor: {e}")
 
-            # Recompute B_
-            secret_bytes, r_bytes, _ = await wallet.generate_determinstic_secret(counter, keyset_id)
-            secret_str = secret_bytes.hex()
-            r_priv = PrivateKey(r_bytes)
-            
+        # 2. Second choice: Fall back to deterministic derivation path
+        if r_priv is None:
+            if not p.derivation_path:
+                skipped_no_path_count += 1
+                continue
+            try:
+                # Format is either "HMAC-SHA256:keyset_id:counter" or BIP32 path "m/.../counter'"
+                if p.derivation_path.startswith("HMAC-SHA256:"):
+                    counter = int(p.derivation_path.split(":")[-1])
+                else:
+                    counter = int(p.derivation_path.split("/")[-1].replace("'", ""))
+
+                # Recompute B_
+                secret_bytes, r_bytes, _ = await wallet.generate_determinstic_secret(counter, keyset_id)
+                r_priv = PrivateKey(r_bytes)
+            except Exception as e:
+                skipped_error_count += 1
+                logger.trace(f"Failed to derive blinding factor from derivation path '{p.derivation_path}': {e}")
+                continue
+
+        # 3. Recompute B_ using our derived/parsed r_priv
+        try:
             # Check backwards compatibility or normal h2c
             if not settings.wallet_use_deprecated_h2c:
-                B_, _ = b_dhke.step1_alice(secret_str, r_priv)
+                B_, _ = b_dhke.step1_alice(p.secret, r_priv)
             else:
-                B_, _ = b_dhke.step1_alice_deprecated(secret_str, r_priv)
+                B_, _ = b_dhke.step1_alice_deprecated(p.secret, r_priv)
 
             b_hex = B_.format().hex()
             derivable_proofs.append((p, b_hex))
@@ -2037,7 +2054,7 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
             proof_by_b_hex[b_hex] = p
         except Exception as e:
             skipped_error_count += 1
-            logger.trace(f"Failed to reconstruct B_ for derivation path '{p.derivation_path}': {e}")
+            logger.trace(f"Failed to reconstruct B_ from blinding factor: {e}")
 
     if not blinded_messages_to_query:
         print("⚠ No derivable blinding factors found in unspent proofs (tokens might have been imported manually). Skipping Issued Tree audits.")

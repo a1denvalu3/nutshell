@@ -370,7 +370,7 @@ def test_pol_audit_challenge_missing_and_invalid_proofs(monkeypatch):
     
     # Calculate the exact expected B_ hex derived from our seed and mock private keys
     # to return in the mocked proofs/issued endpoint response
-    secret_str = b"secret_1".hex()
+    secret_str = "secret_1"
     r_priv = PrivateKey(b"\x01"*32)
     B_, _ = b_dhke.step1_alice(secret_str, r_priv)
     expected_b_hex = B_.format().hex()
