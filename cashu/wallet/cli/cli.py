@@ -1663,6 +1663,18 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
 
     challenges = []
 
+    def _get_receipt_dict(proof) -> Optional[dict]:
+        receipt = getattr(proof, "pol_receipt", None)
+        if not receipt:
+            return None
+        try:
+            return receipt.model_dump()
+        except Exception:
+            try:
+                return receipt.dict()
+            except Exception:
+                return receipt
+
     if keyset_id:
         unspent_proofs = [p for p in unspent_proofs if p.id == keyset_id]
         if not unspent_proofs:
@@ -1770,6 +1782,7 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
                 "value": 0,
                 "signature": orig_c,
                 "amount": orig_amount,
+                "pol_receipt": _get_receipt_dict(orig_proof),
                 "error": f"Falsely registered as spent with value {value}"
             })
             continue
@@ -1834,6 +1847,7 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
                     "value": 0,
                     "signature": orig_c,
                     "amount": orig_amount,
+                    "pol_receipt": _get_receipt_dict(orig_proof),
                     "error": "Failed path verification"
                 })
         except Exception as e:
@@ -1848,6 +1862,7 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
                 "value": 0,
                 "signature": orig_c,
                 "amount": orig_amount,
+                "pol_receipt": _get_receipt_dict(orig_proof),
                 "error": f"Path verification raised exception: {e}"
             })
 
@@ -1913,6 +1928,7 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
                         "value": orig_spent_proof.amount,
                         "signature": orig_spent_proof.C,
                         "amount": orig_spent_proof.amount,
+                        "pol_receipt": _get_receipt_dict(orig_spent_proof),
                         "error": f"Falsely registered spent amount as {value}"
                     })
                     continue
@@ -1975,6 +1991,7 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
                             "value": orig_spent_proof.amount,
                             "signature": orig_spent_proof.C,
                             "amount": orig_spent_proof.amount,
+                            "pol_receipt": _get_receipt_dict(orig_spent_proof),
                             "error": "Failed path verification"
                         })
                 except Exception as e:
@@ -1989,6 +2006,7 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
                         "value": orig_spent_proof.amount,
                         "signature": orig_spent_proof.C,
                         "amount": orig_spent_proof.amount,
+                        "pol_receipt": _get_receipt_dict(orig_spent_proof),
                         "error": f"Path verification raised exception: {e}"
                     })
                     
@@ -2183,6 +2201,7 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
                     "value": orig_proof.amount,
                     "signature": orig_proof.C,
                     "secret": orig_proof.secret,
+                    "pol_receipt": _get_receipt_dict(orig_proof),
                     "error": "Failed path verification"
                 })
         except Exception as e:
@@ -2196,6 +2215,7 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
                 "value": orig_proof.amount,
                 "signature": orig_proof.C,
                 "secret": orig_proof.secret,
+                "pol_receipt": _get_receipt_dict(orig_proof),
                 "error": f"Path verification raised exception: {e}"
             })
 
