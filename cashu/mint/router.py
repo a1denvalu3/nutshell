@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 from loguru import logger
 from pydantic import BaseModel
 
+from ..core.base import PolReceipt
 from ..core.crypto.b_dhke import hash_to_curve
 from ..core.errors import KeysetNotFoundError
 from ..core.models import (
@@ -266,7 +267,9 @@ async def mint_batch(
 ) -> PostMintBatchResponse:
     logger.trace(f"> POST /v1/mint/bolt11/batch: payload={payload}")
     signatures = await ledger.mint_batch(payload)
-    resp = PostMintBatchResponse(signatures=signatures)
+    from .pol import generate_pol_receipt
+    receipt = await generate_pol_receipt(ledger, tx_type="mint", outputs=[o.B_ for o in payload.outputs])
+    resp = PostMintBatchResponse(signatures=signatures, pol_receipt=PolReceipt(**receipt))
     logger.trace(f"< POST /v1/mint/bolt11/batch: {resp}")
     return resp
 
@@ -321,7 +324,9 @@ async def mint(
     promises = await ledger.mint(
         outputs=payload.outputs, quote_id=payload.quote, signature=payload.signature
     )
-    blinded_signatures = PostMintResponse(signatures=promises)
+    from .pol import generate_pol_receipt
+    receipt = await generate_pol_receipt(ledger, tx_type="mint", outputs=[o.B_ for o in payload.outputs])
+    blinded_signatures = PostMintResponse(signatures=promises, pol_receipt=PolReceipt(**receipt))
     logger.trace(f"< POST /v1/mint/bolt11: {blinded_signatures}")
     return blinded_signatures
 
@@ -402,6 +407,13 @@ async def melt(request: Request, payload: PostMeltRequest) -> PostMeltQuoteRespo
         resp = await ledger.melt(
             proofs=payload.inputs, quote=payload.quote, outputs=payload.outputs
         )
+    try:
+        from .pol import generate_pol_receipt
+        inputs_hex = [hash_to_curve(p.secret.encode("utf-8")).format().hex() for p in payload.inputs]
+        receipt = await generate_pol_receipt(ledger, tx_type="melt", inputs=inputs_hex)
+        resp.pol_receipt = PolReceipt(**receipt)
+    except Exception as e:
+        logger.error(f"Failed to generate PoL receipt for melt: {e}")
     logger.trace(f"< POST /v1/melt/bolt11: {resp}")
     return resp
 
@@ -432,7 +444,12 @@ async def swap(
 
     signatures = await ledger.swap(proofs=payload.inputs, outputs=payload.outputs)
 
-    return PostSwapResponse(signatures=signatures)
+    from .pol import generate_pol_receipt
+    inputs_hex = [hash_to_curve(p.secret.encode("utf-8")).format().hex() for p in payload.inputs]
+    outputs_hex = [o.B_ for o in payload.outputs]
+    receipt = await generate_pol_receipt(ledger, tx_type="swap", inputs=inputs_hex, outputs=outputs_hex)
+
+    return PostSwapResponse(signatures=signatures, pol_receipt=PolReceipt(**receipt))
 
 
 @router.post(

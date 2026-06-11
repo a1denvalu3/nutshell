@@ -127,6 +127,43 @@ def get_mint_signing_key(ledger) -> Tuple[PrivateKey, str]:
     return signing_key, pub_key_hex
 
 
+async def get_target_epoch(ledger) -> int:
+    latest = await get_latest_global_pol_epoch(ledger)
+    if latest is None:
+        return 1
+    return latest["epoch_index"] + 1
+
+
+async def generate_pol_receipt(
+    ledger,
+    tx_type: str,
+    inputs: List[str] = [],
+    outputs: List[str] = []
+) -> Dict:
+    target_epoch = await get_target_epoch(ledger)
+    
+    sorted_inputs = sorted(inputs)
+    sorted_outputs = sorted(outputs)
+    
+    inputs_str = "".join(sorted_inputs)
+    outputs_str = "".join(sorted_outputs)
+    
+    if tx_type == "mint":
+        msg = f"mint:{outputs_str}:{target_epoch}"
+    elif tx_type == "melt":
+        msg = f"melt:{inputs_str}:{target_epoch}"
+    else:  # swap
+        msg = f"swap:{inputs_str}:{outputs_str}:{target_epoch}"
+        
+    signing_key, _ = get_mint_signing_key(ledger)
+    sig = signing_key.sign(msg.encode("utf-8")).hex()
+    
+    return {
+        "target_epoch": target_epoch,
+        "signature": sig
+    }
+
+
 def parse_db_timestamp(val) -> datetime.datetime:
     if isinstance(val, datetime.datetime):
         return val

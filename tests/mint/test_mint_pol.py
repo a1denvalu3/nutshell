@@ -20,6 +20,8 @@ from cashu.mint.pol import (
     SparseMerkleSumTree,
     submit_to_ots,
     update_pol_manifests,
+    get_target_epoch,
+    generate_pol_receipt,
 )
 from cashu.wallet.cli.cli import pol as pol_group
 
@@ -466,3 +468,58 @@ def test_pol_audit_challenge_missing_and_invalid_proofs(monkeypatch):
     assert "CRYPTOGRAPHIC FRAUD CHALLENGE" in result.output
     assert "spent_non_inclusion_path" in result.output
     assert "issued_inclusion_path" in result.output
+
+
+@pytest.mark.asyncio
+async def test_pol_receipt_generation():
+    async def mock_fetchone(q, v=None):
+        return None
+    async def mock_fetchall(q, v=None):
+        return []
+    async def mock_execute(q, v=None):
+        return None
+
+    # Mock ledger with seed
+    mock_ledger = SimpleNamespace(
+        seed="test_mint_pol_private_key_seed",
+        pubkey=PrivateKey(hashlib.sha256(b"test_mint_pol_private_key_seed").digest()).public_key,
+        db=SimpleNamespace(
+            fetchone=mock_fetchone,
+            fetchall=mock_fetchall,
+            execute=mock_execute,
+            table_with_schema=lambda t: t
+        )
+    )
+    
+    # 1. Test target epoch index default
+    epoch = await get_target_epoch(mock_ledger)
+    assert epoch == 1
+    
+    # 2. Test generate_pol_receipt for mint
+    receipt_mint = await generate_pol_receipt(
+        mock_ledger,
+        tx_type="mint",
+        outputs=["B_hex_1", "B_hex_2"]
+    )
+    assert receipt_mint["target_epoch"] == 1
+    assert "signature" in receipt_mint
+    assert isinstance(receipt_mint["signature"], str)
+    
+    # 3. Test generate_pol_receipt for melt
+    receipt_melt = await generate_pol_receipt(
+        mock_ledger,
+        tx_type="melt",
+        inputs=["Y_hex_1", "Y_hex_2"]
+    )
+    assert receipt_melt["target_epoch"] == 1
+    assert "signature" in receipt_melt
+    
+    # 4. Test generate_pol_receipt for swap
+    receipt_swap = await generate_pol_receipt(
+        mock_ledger,
+        tx_type="swap",
+        inputs=["Y_hex_1"],
+        outputs=["B_hex_1"]
+    )
+    assert receipt_swap["target_epoch"] == 1
+    assert "signature" in receipt_swap

@@ -274,6 +274,11 @@ class BlindedSignature(BaseModel):
         )
 
 
+class PolReceipt(BaseModel):
+    target_epoch: int
+    signature: str
+
+
 # ------- Quotes -------
 
 

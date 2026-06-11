@@ -6,6 +6,7 @@ from cashu.core.base import (
     BlindedMessage,
     BlindedMessage_Deprecated,
     BlindedSignature,
+    PolReceipt,
     Proof,
 )
 from cashu.core.settings import settings
@@ -20,6 +21,7 @@ class PostSwapRequest(BaseModel):
 
 class PostSwapResponse(BaseModel):
     signatures: List[BlindedSignature]
+    pol_receipt: Optional[PolReceipt] = None
 
 
 # deprecated since 0.13.0
