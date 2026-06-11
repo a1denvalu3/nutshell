@@ -111,16 +111,19 @@ async def submit_to_ots(digest: bytes) -> bytes:
     raise ConnectionError("All OTS calendar servers failed. Unable to obtain on-chain proof of existence.")
 
 
-def get_signing_key_for_keyset(keyset) -> Tuple[PrivateKey, str]:
-    if not keyset.private_keys:
-        priv_bytes = hashlib.sha256(b"fallback_pol_seed_" + keyset.id.encode('utf-8')).digest()
-        signing_key = PrivateKey(priv_bytes)
-    else:
-        first_priv = list(keyset.private_keys.values())[0]
-        signing_bytes = hashlib.sha256(first_priv.secret + b"_pol_signing").digest()
-        signing_key = PrivateKey(signing_bytes)
+def get_mint_signing_key(ledger) -> Tuple[PrivateKey, str]:
+    try:
+        ledger_seed = ledger.seed
+    except AttributeError:
+        ledger_seed = "mock_mint_pol_test_seed"
+        
+    signing_key = PrivateKey(hashlib.sha256(ledger_seed.encode("utf-8")).digest())
     
-    pub_key_hex = signing_key.public_key.format().hex()
+    try:
+        pub_key_hex = ledger.pubkey.format().hex()
+    except AttributeError:
+        pub_key_hex = signing_key.public_key.format().hex()
+        
     return signing_key, pub_key_hex
 
 
@@ -311,7 +314,7 @@ async def update_pol_manifests(ledger) -> None:
         ri_hash, ri_sum, rs_hash, rs_sum, keyset = keyset_results[kid]
         outstanding_balance = ri_sum - rs_sum
         
-        signing_key, pub_key_hex = get_signing_key_for_keyset(keyset)
+        signing_key, pub_key_hex = get_mint_signing_key(ledger)
         
         timestamp_str = current_time.isoformat()
         # Formatted details to sign

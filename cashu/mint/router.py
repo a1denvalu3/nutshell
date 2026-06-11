@@ -525,8 +525,6 @@ async def pol_manifest(
     if keyset_id not in ledger.keysets:
         raise HTTPException(status_code=404, detail="Keyset not found")
 
-    keyset = ledger.keysets[keyset_id]
-
     # Try to run regular manifest updates first
     await update_pol_manifests(ledger)
 
@@ -544,8 +542,8 @@ async def pol_manifest(
     ts_val = epoch["timestamp"]
     ts_str = ts_val.isoformat() if isinstance(ts_val, datetime.datetime) else str(ts_val)
 
-    from .pol import get_signing_key_for_keyset
-    _, pub_key_hex = get_signing_key_for_keyset(keyset)
+    from .pol import get_mint_signing_key
+    _, pub_key_hex = get_mint_signing_key(ledger)
 
     return PolManifestResponse(
         keyset_id=epoch["keyset_id"],
