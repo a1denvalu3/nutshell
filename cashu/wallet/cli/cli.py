@@ -2006,32 +2006,38 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
     proof_by_b_hex = {}
 
     all_wallet_proofs = list(unspent_proofs) + spent_proofs
+    skipped_no_path_count = 0
+    skipped_error_count = 0
+
     for p in all_wallet_proofs:
-        if p.derivation_path:
-            try:
-                # Format is either "HMAC-SHA256:keyset_id:counter" or BIP32 path "m/.../counter'"
-                if p.derivation_path.startswith("HMAC-SHA256:"):
-                    counter = int(p.derivation_path.split(":")[-1])
-                else:
-                    counter = int(p.derivation_path.split("/")[-1].replace("'", ""))
+        if not p.derivation_path:
+            skipped_no_path_count += 1
+            continue
+        try:
+            # Format is either "HMAC-SHA256:keyset_id:counter" or BIP32 path "m/.../counter'"
+            if p.derivation_path.startswith("HMAC-SHA256:"):
+                counter = int(p.derivation_path.split(":")[-1])
+            else:
+                counter = int(p.derivation_path.split("/")[-1].replace("'", ""))
 
-                # Recompute B_
-                secret_bytes, r_bytes, _ = await wallet.generate_determinstic_secret(counter, keyset_id)
-                secret_str = secret_bytes.hex()
-                r_priv = PrivateKey(r_bytes)
-                
-                # Check backwards compatibility or normal h2c
-                if not settings.wallet_use_deprecated_h2c:
-                    B_, _ = b_dhke.step1_alice(secret_str, r_priv)
-                else:
-                    B_, _ = b_dhke.step1_alice_deprecated(secret_str, r_priv)
+            # Recompute B_
+            secret_bytes, r_bytes, _ = await wallet.generate_determinstic_secret(counter, keyset_id)
+            secret_str = secret_bytes.hex()
+            r_priv = PrivateKey(r_bytes)
+            
+            # Check backwards compatibility or normal h2c
+            if not settings.wallet_use_deprecated_h2c:
+                B_, _ = b_dhke.step1_alice(secret_str, r_priv)
+            else:
+                B_, _ = b_dhke.step1_alice_deprecated(secret_str, r_priv)
 
-                b_hex = B_.format().hex()
-                derivable_proofs.append((p, b_hex))
-                blinded_messages_to_query.append(b_hex)
-                proof_by_b_hex[b_hex] = p
-            except Exception as e:
-                logger.trace(f"Failed to reconstruct B_ for derivation path '{p.derivation_path}': {e}")
+            b_hex = B_.format().hex()
+            derivable_proofs.append((p, b_hex))
+            blinded_messages_to_query.append(b_hex)
+            proof_by_b_hex[b_hex] = p
+        except Exception as e:
+            skipped_error_count += 1
+            logger.trace(f"Failed to reconstruct B_ for derivation path '{p.derivation_path}': {e}")
 
     if not blinded_messages_to_query:
         print("⚠ No derivable blinding factors found in unspent proofs (tokens might have been imported manually). Skipping Issued Tree audits.")
@@ -2149,7 +2155,16 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
 
     # 4. Final Audit Result and Challenge Reporting
     if not challenges:
-        print(f"✓ All derivable tokens ({len(blinded_messages_to_query)} of {len(all_wallet_proofs)}) successfully audited for Inclusion in Issued Tree.")
+        skip_msg = ""
+        if skipped_no_path_count > 0 or skipped_error_count > 0:
+            skip_parts = []
+            if skipped_no_path_count > 0:
+                skip_parts.append(f"{skipped_no_path_count} manually imported/non-derivable tokens")
+            if skipped_error_count > 0:
+                skip_parts.append(f"{skipped_error_count} reconstruction errors")
+            skip_msg = f" ({', '.join(skip_parts)} skipped)"
+
+        print(f"✓ All derivable tokens ({len(blinded_messages_to_query)} of {len(all_wallet_proofs)}) successfully audited for Inclusion in Issued Tree.{skip_msg}")
         print("\n🎉 AUDIT COMPLETE: ALL CHECKS PASSED.")
     else:
         print("\n=== CRYPTOGRAPHIC FRAUD CHALLENGE ===")
