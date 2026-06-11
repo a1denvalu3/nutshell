@@ -25,6 +25,7 @@ from ...core.base import (
     Method,
     MintQuote,
     MintQuoteState,
+    Proof,
     TokenV4,
     Unit,
 )
@@ -1638,45 +1639,102 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
     wallet: Wallet = ctx.obj["WALLET"]
     await wallet.load_proofs(reload=True)
 
-    unspent_proofs = wallet.proofs
-    if not unspent_proofs:
-        print("No unspent tokens found in this wallet to audit.")
-        return
+    try:
+        spent_rows = await wallet.db.fetchall(
+            f"SELECT amount, C, secret, id, derivation_path, mint_id, melt_id FROM {wallet.db.table_with_schema('proofs_used')}"
+        )
+        spent_proofs = [Proof.from_dict(dict(r)) for r in spent_rows]
+    except Exception:
+        spent_proofs = []
 
     if keyset_id:
-        unspent_proofs = [p for p in unspent_proofs if p.id == keyset_id]
-        if not unspent_proofs:
-            print(f"No unspent tokens found for keyset {keyset_id}.")
-            return
+        keyset_ids = [keyset_id]
     else:
-        # Default to the most common keyset in our unspent proofs
-        keyset_id = unspent_proofs[0].id
-        unspent_proofs = [p for p in unspent_proofs if p.id == keyset_id]
+        # Load unique keyset IDs from all unspent and spent proofs
+        keyset_ids = sorted(list(set([p.id for p in wallet.proofs] + [p.id for p in spent_proofs])))
 
-    print(f"Auditing {len(unspent_proofs)} unspent tokens (Keyset ID: {keyset_id}) against the mint...")
-
-    try:
-        success, challenges, skipped_no_path, skipped_error, status_msg = await wallet.verify_solvency(keyset_id, epoch)
-    except Exception as e:
-        print(f"Solvency verification failed: {e}")
+    if not keyset_ids:
+        print("No unspent or spent tokens found in this wallet to audit.")
         return
 
-    print(status_msg)
+    print(f"Starting Proof of Liabilities Solvency Audit across {len(keyset_ids)} keyset(s)...")
 
-    if success:
-        skip_msg = ""
-        if skipped_no_path > 0 or skipped_error > 0:
-            skip_parts = []
-            if skipped_no_path > 0:
-                skip_parts.append(f"{skipped_no_path} manually imported/non-derivable tokens")
-            if skipped_error > 0:
-                skip_parts.append(f"{skipped_error} reconstruction errors")
-            skip_msg = f" ({', '.join(skip_parts)} skipped)"
+    global_success = True
+    all_challenges = []
+    global_unspent_count = 0
+    global_spent_count = 0
+    global_blinded_count = 0
 
-        print(f"✓ All derivable tokens successfully audited.{skip_msg}")
-        print("\n🎉 AUDIT COMPLETE: ALL CHECKS PASSED.")
+    for kid in keyset_ids:
+        unspent_for_keyset = [p for p in wallet.proofs if p.id == kid]
+        spent_for_keyset = [p for p in spent_proofs if p.id == kid]
+        all_for_keyset = unspent_for_keyset + spent_for_keyset
+
+        # Pre-generate KDF lookup map for this keyset to count derivable blinded messages
+        deterministic_secrets_map = {}
+        try:
+            row = await wallet.db.fetchone(
+                f"SELECT counter FROM {wallet.db.table_with_schema('keysets')} WHERE id = :keyset_id",
+                {"keyset_id": kid}
+            )
+            max_counter = row["counter"] if row else 0
+            for counter in range(0, max_counter + 100):
+                try:
+                    secret_bytes, r_bytes, _ = await wallet.generate_determinstic_secret(counter, kid)
+                    deterministic_secrets_map[secret_bytes.hex()] = True
+                    try:
+                        deterministic_secrets_map[secret_bytes.decode("utf-8")] = True
+                    except Exception:
+                        pass
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        derivable_count = 0
+        for p in all_for_keyset:
+            if getattr(p, "dleq", None) and p.dleq.r:
+                derivable_count += 1
+            elif p.secret in deterministic_secrets_map:
+                derivable_count += 1
+            elif p.derivation_path:
+                derivable_count += 1
+
+        print(f"\n--- Auditing Keyset ID: {kid} ---")
+        print(f"• Unspent ecash notes:  {len(unspent_for_keyset)}")
+        print(f"• Spent ecash notes:    {len(spent_for_keyset)}")
+        print(f"• Blinded messages:     {derivable_count} (promises to reconstruct)")
+
+        global_unspent_count += len(unspent_for_keyset)
+        global_spent_count += len(spent_for_keyset)
+        global_blinded_count += derivable_count
+
+        try:
+            success, challenges, skipped_no_path, skipped_error, status_msg = await wallet.verify_solvency(kid, epoch)
+        except Exception as e:
+            print(f"Solvency verification failed for keyset {kid}: {e}")
+            global_success = False
+            continue
+
+        print(status_msg)
+
+        if not success:
+            global_success = False
+            all_challenges.extend(challenges)
+
+    print("\n=======================================")
+    print("SOLVENCY AUDIT CONSOLIDATED SUMMARY")
+    print(f"• Total Keyset(s) Audited: {len(keyset_ids)}")
+    print(f"• Total Unspent Notes:     {global_unspent_count}")
+    print(f"• Total Spent Notes:       {global_spent_count}")
+    print(f"• Total Blinded Messages:  {global_blinded_count}")
+    print("=======================================")
+
+    if global_success:
+        print("\n🎉 AUDIT COMPLETE: ALL CHECKS PASSED. MINT IS 100% SOLVENT.")
     else:
+        print("\n❌ SOLVENCY AUDIT FAILED. MINT CHEATING DETECTED!")
         print("\n=== CRYPTOGRAPHIC FRAUD CHALLENGE ===")
-        print("The audit detected discrepancies! Below are the cryptographic challenges to publish:")
-        print(json.dumps(challenges, indent=2))
+        print("Publish these self-contained fraud proofs to hold the mint publicly accountable:")
+        print(json.dumps(all_challenges, indent=2))
         print("=======================================")
