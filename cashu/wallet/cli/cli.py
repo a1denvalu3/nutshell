@@ -1752,9 +1752,9 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
                         "sum": def_sum
                     })
 
-            current_hash = bytes.fromhex(index_hex)
+            idx_int = int.from_bytes(bytes.fromhex(index_hex), "big")
+            current_hash = bytes.fromhex(index_hex) if value > 0 else default_nodes[0][0]
             current_sum = value
-            idx_int = int.from_bytes(current_hash, "big")
 
             for d in range(256):
                 sib = reconstructed_siblings[d]
@@ -1888,9 +1888,9 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
                         "sum": def_sum
                     })
 
-            current_hash = bytes.fromhex(index_hex)
+            idx_int = int.from_bytes(bytes.fromhex(index_hex), "big")
+            current_hash = bytes.fromhex(index_hex) if value > 0 else default_nodes[0][0]
             current_sum = value
-            idx_int = int.from_bytes(current_hash, "big")
 
             for d in range(256):
                 sib = reconstructed_siblings[d]
