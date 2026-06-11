@@ -2009,6 +2009,29 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
     skipped_no_path_count = 0
     skipped_error_count = 0
 
+    # Pre-generate deterministic secrets KDF lookup table
+    deterministic_secrets_map = {}
+    try:
+        row = await wallet.db.fetchone(
+            f"SELECT counter FROM {wallet.db.table_with_schema('keysets')} WHERE id = :keyset_id",
+            {"keyset_id": keyset_id}
+        )
+        max_counter = row["counter"] if row else 0
+        for counter in range(0, max_counter + 100):
+            try:
+                secret_bytes, r_bytes, _ = await wallet.generate_determinstic_secret(counter, keyset_id)
+                secret_str = secret_bytes.hex()
+                r_priv_obj = PrivateKey(r_bytes)
+                deterministic_secrets_map[secret_str] = r_priv_obj
+                try:
+                    deterministic_secrets_map[secret_bytes.decode("utf-8")] = r_priv_obj
+                except Exception:
+                    pass
+            except Exception:
+                continue
+    except Exception as e:
+        logger.trace(f"Failed to pre-generate KDF lookup table: {e}")
+
     for p in all_wallet_proofs:
         r_priv = None
         
@@ -2020,7 +2043,11 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
             except Exception as e:
                 logger.trace(f"Failed to parse stored DLEQ blinding factor: {e}")
 
-        # 2. Second choice: Fall back to deterministic derivation path
+        # 2. Second choice: Look up in pre-generated KDF lookup table
+        if r_priv is None:
+            r_priv = deterministic_secrets_map.get(p.secret)
+
+        # 3. Third choice: Fall back to deterministic derivation path
         if r_priv is None:
             if not p.derivation_path:
                 skipped_no_path_count += 1
