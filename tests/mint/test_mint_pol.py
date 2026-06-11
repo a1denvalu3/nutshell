@@ -418,6 +418,7 @@ def test_pol_audit_challenge_missing_and_invalid_proofs(monkeypatch):
     )
     # Bind the verify_solvency method dynamically to our mock wallet object
     mock_wallet.verify_solvency = lambda k, e=None: Wallet.verify_solvency(mock_wallet, k, e)
+    mock_wallet._verify_ots_anchoring = lambda o: Wallet._verify_ots_anchoring(mock_wallet, o)
 
     obj_ctx = {
         "HOST": "http://localhost:3337",
@@ -539,6 +540,7 @@ def test_pol_audit_challenge_with_receipts(monkeypatch):
     )
     # Bind the verify_solvency method dynamically to our mock wallet object
     mock_wallet.verify_solvency = lambda k, e=None: Wallet.verify_solvency(mock_wallet, k, e)
+    mock_wallet._verify_ots_anchoring = lambda o: Wallet._verify_ots_anchoring(mock_wallet, o)
 
     obj_ctx = {
         "HOST": "http://localhost:3337",
