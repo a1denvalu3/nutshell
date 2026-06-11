@@ -6,7 +6,6 @@ from cashu.core.base import (
     BlindedMessage,
     BlindedMessage_Deprecated,
     BlindedSignature,
-    PolReceipt,
 )
 from cashu.core.constants import MAX_QUOTE_ID_LEN, MAX_SIG_LEN
 from cashu.core.settings import settings
@@ -24,7 +23,6 @@ class PostMintRequest(BaseModel):
 
 class PostMintResponse(BaseModel):
     signatures: List[BlindedSignature] = []
-    pol_receipt: Optional[PolReceipt] = None
 
 
 class PostMintBatchRequest(BaseModel):
@@ -40,7 +38,6 @@ class PostMintBatchRequest(BaseModel):
 
 class PostMintBatchResponse(BaseModel):
     signatures: List[BlindedSignature] = []
-    pol_receipt: Optional[PolReceipt] = None
 
 
 

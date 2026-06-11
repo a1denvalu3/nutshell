@@ -254,6 +254,11 @@ class BlindedMessage_Deprecated(BaseModel):
         return P2PKWitness.from_witness(self.witness).signatures
 
 
+class PolReceipt(BaseModel):
+    target_epoch: int
+    signature: str
+
+
 class BlindedSignature(BaseModel):
     """
     Blinded signature or "promise" which is the signature on a `BlindedMessage`
@@ -263,6 +268,7 @@ class BlindedSignature(BaseModel):
     amount: int
     C_: str  # Hex-encoded signature
     dleq: Optional[DLEQ] = None  # DLEQ proof
+    pol_receipt: Optional[PolReceipt] = None
 
     @classmethod
     def from_row(cls, row: Row):
@@ -272,11 +278,6 @@ class BlindedSignature(BaseModel):
             C_=row["c_"],
             dleq=DLEQ(e=row["dleq_e"], s=row["dleq_s"]),
         )
-
-
-class PolReceipt(BaseModel):
-    target_epoch: int
-    signature: str
 
 
 # ------- Quotes -------

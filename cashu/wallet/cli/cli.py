@@ -1722,7 +1722,7 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
     print("OTS Attestation Receipt: Valid (anchored/pending proof exists)")
 
     # 2. Collect secrets and compute Y for non-inclusion spent audits
-    secrets = [p.secret for p in unspent_proofs]
+    ys = [b_dhke.hash_to_curve(p.secret.encode("utf-8")).format().hex() for p in unspent_proofs]
 
     # Query POST /v1/pol/{keyset_id}/proofs/spent
     print("Checking Non-Inclusion in Spent Tree (Double-Spend Audits)...")
@@ -1730,7 +1730,7 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
         async with httpx.AsyncClient() as client:
             resp_spent = await client.post(
                 f"{wallet.url}/v1/pol/{keyset_id}/proofs/spent",
-                json={"secrets": secrets},
+                json={"ys": ys},
                 params=params
             )
 
@@ -1745,14 +1745,15 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
 
     # Re-verify spent proofs mathematically
     spent_audit_passes = True
-    proof_by_secret_unspent = {p.secret: p for p in unspent_proofs}
+    proof_by_y_unspent = {b_dhke.hash_to_curve(p.secret.encode("utf-8")).format().hex(): p for p in unspent_proofs}
     for item in spent_proof_data["proofs"]:
-        secret = item["item"]
+        y_hex = item["item"]
         index_hex = item["index"]
         value = item["value"]
         siblings = item["siblings"]
 
-        orig_proof = proof_by_secret_unspent.get(secret)
+        orig_proof = proof_by_y_unspent.get(y_hex)
+        secret = orig_proof.secret if orig_proof else ""
         orig_c = orig_proof.C if orig_proof else ""
         orig_amount = orig_proof.amount if orig_proof else 0
 
@@ -1870,14 +1871,14 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
     if not spent_proofs:
         print("No spent proofs found in wallet database. Skipping Spent Tree inclusion check.")
     else:
-        spent_secrets = [p.secret for p in spent_proofs]
-        proof_by_secret = {p.secret: p for p in spent_proofs}
+        spent_ys = [b_dhke.hash_to_curve(p.secret.encode("utf-8")).format().hex() for p in spent_proofs]
+        proof_by_y_spent = {b_dhke.hash_to_curve(p.secret.encode("utf-8")).format().hex(): p for p in spent_proofs}
         
         try:
             async with httpx.AsyncClient() as client:
                 resp_spent_inclusion = await client.post(
                     f"{wallet.url}/v1/pol/{keyset_id}/proofs/spent",
-                    json={"secrets": spent_secrets},
+                    json={"ys": spent_ys},
                     params=params
                 )
                 
@@ -1889,15 +1890,16 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
             
             spent_inclusion_passes = True
             for item in spent_inclusion_data["proofs"]:
-                secret = item["item"]
+                y_hex = item["item"]
                 index_hex = item["index"]
                 value = item["value"]
                 siblings = item["siblings"]
                 
-                orig_spent_proof = proof_by_secret.get(secret)
+                orig_spent_proof = proof_by_y_spent.get(y_hex)
                 if not orig_spent_proof:
                     continue
                     
+                secret = orig_spent_proof.secret
                 # The value in Spent Tree must match the spent token's amount!
                 if value != orig_spent_proof.amount:
                     print(f"CRITICAL WARNING: Spent token with amount {orig_spent_proof.amount} has registered amount {value} in Spent Tree!")
@@ -1991,7 +1993,7 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
                     })
                     
             if spent_inclusion_passes:
-                print(f"✓ All spent tokens ({len(spent_secrets)}) successfully audited for Inclusion in Spent Tree (100% burn proof integrity).")
+                print(f"✓ All spent tokens ({len(spent_proofs)}) successfully audited for Inclusion in Spent Tree (100% burn proof integrity).")
             else:
                 print("❌ Spent Tree inclusion audit FAILED. Mint cheating detected!")
         except Exception as e:

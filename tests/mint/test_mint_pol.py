@@ -18,10 +18,11 @@ from cashu.mint import middleware as middleware_module
 from cashu.mint import router as router_module
 from cashu.mint.pol import (
     SparseMerkleSumTree,
+    generate_output_receipt,
+    generate_spent_receipt,
+    get_target_epoch,
     submit_to_ots,
     update_pol_manifests,
-    get_target_epoch,
-    generate_pol_receipt,
 )
 from cashu.wallet.cli.cli import pol as pol_group
 
@@ -305,17 +306,18 @@ def test_pol_endpoints_and_mock_ledger(monkeypatch):
     assert len(item2["siblings"]) < 256  # Sibling proofs must be compact (under 256 items)
 
     # Test POST /v1/pol/{keyset_id}/proofs/spent
+    y_non_existent = hash_to_curve(b"secret_non_existent").format().hex()
     resp_spent = client.post(
         f"/v1/pol/{keyset_id}/proofs/spent",
-        json={"secrets": ["secret_1", "secret_non_existent"]}
+        json={"ys": [y1, y_non_existent]}
     )
     assert resp_spent.status_code == 200
     spent_data = resp_spent.json()
     assert len(spent_data["proofs"]) == 2
-    assert spent_data["proofs"][0]["item"] == "secret_1"
+    assert spent_data["proofs"][0]["item"] == y1
     assert spent_data["proofs"][0]["value"] == 50
     assert spent_data["proofs"][0]["compact_mask"] is not None
-    assert spent_data["proofs"][1]["item"] == "secret_non_existent"
+    assert spent_data["proofs"][1]["item"] == y_non_existent
     assert spent_data["proofs"][1]["value"] == 0
 
 
@@ -376,6 +378,7 @@ def test_pol_audit_challenge_missing_and_invalid_proofs(monkeypatch):
     r_priv = PrivateKey(b"\x01"*32)
     B_, _ = b_dhke.step1_alice(secret_str, r_priv)
     expected_b_hex = B_.format().hex()
+    expected_y_hex = hash_to_curve(secret_str.encode("utf-8")).format().hex()
 
     # Mock all the HTTP requests made during the pol audit CLI command
     respx.get("http://localhost:3337/v1/pol/test_keyset_pol/manifest").mock(
@@ -401,7 +404,7 @@ def test_pol_audit_challenge_missing_and_invalid_proofs(monkeypatch):
             json={
                 "proofs": [
                     {
-                        "item": "secret_1",
+                        "item": expected_y_hex,
                         "index": "00"*32,
                         "value": 0,
                         "compact_mask": "0x0",
@@ -495,31 +498,24 @@ async def test_pol_receipt_generation():
     epoch = await get_target_epoch(mock_ledger)
     assert epoch == 1
     
-    # 2. Test generate_pol_receipt for mint
-    receipt_mint = await generate_pol_receipt(
+    # 2. Test generate_output_receipt for individual output
+    receipt_out = await generate_output_receipt(
         mock_ledger,
-        tx_type="mint",
-        outputs=["B_hex_1", "B_hex_2"]
+        keyset_id="test_keyset",
+        amount=100,
+        b_hex="B_hex_1"
     )
-    assert receipt_mint["target_epoch"] == 1
-    assert "signature" in receipt_mint
-    assert isinstance(receipt_mint["signature"], str)
+    assert receipt_out.target_epoch == 1
+    assert receipt_out.signature is not None
+    assert isinstance(receipt_out.signature, str)
     
-    # 3. Test generate_pol_receipt for melt
-    receipt_melt = await generate_pol_receipt(
+    # 3. Test generate_spent_receipt for individual spent input
+    receipt_in = await generate_spent_receipt(
         mock_ledger,
-        tx_type="melt",
-        inputs=["Y_hex_1", "Y_hex_2"]
+        keyset_id="test_keyset",
+        amount=50,
+        y_hex="Y_hex_1"
     )
-    assert receipt_melt["target_epoch"] == 1
-    assert "signature" in receipt_melt
-    
-    # 4. Test generate_pol_receipt for swap
-    receipt_swap = await generate_pol_receipt(
-        mock_ledger,
-        tx_type="swap",
-        inputs=["Y_hex_1"],
-        outputs=["B_hex_1"]
-    )
-    assert receipt_swap["target_epoch"] == 1
-    assert "signature" in receipt_swap
+    assert receipt_in.target_epoch == 1
+    assert receipt_in.signature is not None
+    assert isinstance(receipt_in.signature, str)

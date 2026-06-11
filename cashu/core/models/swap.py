@@ -21,7 +21,7 @@ class PostSwapRequest(BaseModel):
 
 class PostSwapResponse(BaseModel):
     signatures: List[BlindedSignature]
-    pol_receipt: Optional[PolReceipt] = None
+    spent_receipts: Optional[List[PolReceipt]] = None
 
 
 # deprecated since 0.13.0

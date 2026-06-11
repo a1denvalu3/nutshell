@@ -8,7 +8,6 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 from loguru import logger
 from pydantic import BaseModel
 
-from ..core.base import PolReceipt
 from ..core.crypto.b_dhke import hash_to_curve
 from ..core.errors import KeysetNotFoundError
 from ..core.models import (
@@ -267,9 +266,10 @@ async def mint_batch(
 ) -> PostMintBatchResponse:
     logger.trace(f"> POST /v1/mint/bolt11/batch: payload={payload}")
     signatures = await ledger.mint_batch(payload)
-    from .pol import generate_pol_receipt
-    receipt = await generate_pol_receipt(ledger, tx_type="mint", outputs=[o.B_ for o in payload.outputs])
-    resp = PostMintBatchResponse(signatures=signatures, pol_receipt=PolReceipt(**receipt))
+    from .pol import generate_output_receipt
+    for sig, output in zip(signatures, payload.outputs):
+        sig.pol_receipt = await generate_output_receipt(ledger, keyset_id=sig.id, amount=sig.amount, b_hex=output.B_)
+    resp = PostMintBatchResponse(signatures=signatures)
     logger.trace(f"< POST /v1/mint/bolt11/batch: {resp}")
     return resp
 
@@ -324,9 +324,10 @@ async def mint(
     promises = await ledger.mint(
         outputs=payload.outputs, quote_id=payload.quote, signature=payload.signature
     )
-    from .pol import generate_pol_receipt
-    receipt = await generate_pol_receipt(ledger, tx_type="mint", outputs=[o.B_ for o in payload.outputs])
-    blinded_signatures = PostMintResponse(signatures=promises, pol_receipt=PolReceipt(**receipt))
+    from .pol import generate_output_receipt
+    for sig, output in zip(promises, payload.outputs):
+        sig.pol_receipt = await generate_output_receipt(ledger, keyset_id=sig.id, amount=sig.amount, b_hex=output.B_)
+    blinded_signatures = PostMintResponse(signatures=promises)
     logger.trace(f"< POST /v1/mint/bolt11: {blinded_signatures}")
     return blinded_signatures
 
@@ -408,12 +409,15 @@ async def melt(request: Request, payload: PostMeltRequest) -> PostMeltQuoteRespo
             proofs=payload.inputs, quote=payload.quote, outputs=payload.outputs
         )
     try:
-        from .pol import generate_pol_receipt
-        inputs_hex = [hash_to_curve(p.secret.encode("utf-8")).format().hex() for p in payload.inputs]
-        receipt = await generate_pol_receipt(ledger, tx_type="melt", inputs=inputs_hex)
-        resp.pol_receipt = PolReceipt(**receipt)
+        from .pol import generate_spent_receipt
+        spent_receipts = []
+        for p in payload.inputs:
+            y_hex = hash_to_curve(p.secret.encode("utf-8")).format().hex()
+            r_spent = await generate_spent_receipt(ledger, keyset_id=p.id, amount=p.amount, y_hex=y_hex)
+            spent_receipts.append(r_spent)
+        resp.spent_receipts = spent_receipts
     except Exception as e:
-        logger.error(f"Failed to generate PoL receipt for melt: {e}")
+        logger.error(f"Failed to generate spent PoL receipts for melt: {e}")
     logger.trace(f"< POST /v1/melt/bolt11: {resp}")
     return resp
 
@@ -444,12 +448,17 @@ async def swap(
 
     signatures = await ledger.swap(proofs=payload.inputs, outputs=payload.outputs)
 
-    from .pol import generate_pol_receipt
-    inputs_hex = [hash_to_curve(p.secret.encode("utf-8")).format().hex() for p in payload.inputs]
-    outputs_hex = [o.B_ for o in payload.outputs]
-    receipt = await generate_pol_receipt(ledger, tx_type="swap", inputs=inputs_hex, outputs=outputs_hex)
+    from .pol import generate_output_receipt, generate_spent_receipt
+    for sig, output in zip(signatures, payload.outputs):
+        sig.pol_receipt = await generate_output_receipt(ledger, keyset_id=sig.id, amount=sig.amount, b_hex=output.B_)
 
-    return PostSwapResponse(signatures=signatures, pol_receipt=PolReceipt(**receipt))
+    spent_receipts = []
+    for p in payload.inputs:
+        y_hex = hash_to_curve(p.secret.encode("utf-8")).format().hex()
+        r_spent = await generate_spent_receipt(ledger, keyset_id=p.id, amount=p.amount, y_hex=y_hex)
+        spent_receipts.append(r_spent)
+
+    return PostSwapResponse(signatures=signatures, spent_receipts=spent_receipts)
 
 
 @router.post(
@@ -492,7 +501,7 @@ class PolIssuedRequest(BaseModel):
 
 
 class PolSpentRequest(BaseModel):
-    secrets: List[str]
+    ys: List[str]
 
 
 class SiblingInfo(BaseModel):
@@ -661,10 +670,7 @@ async def pol_proofs_spent(
     _, spent_tree = await build_trees_for_keyset_at_timestamp(ledger, keyset_id, epoch_time)
 
     proof_items = []
-    for secret in payload.secrets:
-        # Compute Y from secret
-        y_hex = hash_to_curve(secret.encode("utf-8")).format().hex()
-
+    for y_hex in payload.ys:
         h_y = hashlib.sha256(y_hex.encode('utf-8')).digest()
         idx_int = int.from_bytes(h_y, 'big')
 
@@ -677,7 +683,7 @@ async def pol_proofs_spent(
 
         proof_items.append(
             PolProofItem(
-                item=secret,
+                item=y_hex,
                 index=h_y.hex(),
                 value=value,
                 compact_mask=compact_mask,
