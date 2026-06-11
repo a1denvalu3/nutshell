@@ -1,9 +1,11 @@
 import copy
+import hashlib
 import json
 import threading
 import time
 from typing import Callable, Dict, List, Optional, Tuple, Union
 
+import httpx
 from bip32 import BIP32
 from loguru import logger
 
@@ -1530,3 +1532,504 @@ class Wallet(
         )
         logger.debug(f"Restored {len(restored_promises)} promises")
         return next_restored_output_index, proofs
+
+    async def verify_solvency(
+        self,
+        keyset_id: str,
+        epoch_index: Optional[int] = None
+    ) -> Tuple[bool, List[dict], int, int, str]:
+        """
+        Runs the complete Proof of Liabilities (PoL) solvency verification walk.
+        Returns:
+            Tuple of:
+            - success_bool (bool)
+            - list_of_fraud_challenges (List[dict])
+            - skipped_no_path_count (int)
+            - skipped_error_count (int)
+            - status_message (str)
+        """
+        # Precompute empty tree default nodes for level 0 to 255
+        default_nodes = []
+        empty_hash = hashlib.sha256(b"").digest()
+        default_nodes.append((empty_hash, 0))
+        for d in range(1, 257):
+            left_hash, left_sum = default_nodes[d-1]
+            right_hash, right_sum = default_nodes[d-1]
+            parent_sum = left_sum + right_sum
+            parent_hash = hashlib.sha256(
+                left_hash + right_hash + 
+                left_sum.to_bytes(8, 'big') + right_sum.to_bytes(8, 'big')
+            ).digest()
+            default_nodes.append((parent_hash, parent_sum))
+
+        await self.load_proofs(reload=True)
+        unspent_proofs = [p for p in self.proofs if p.id == keyset_id]
+        if not unspent_proofs:
+            return False, [], 0, 0, f"No unspent tokens found for keyset {keyset_id}."
+
+        challenges = []
+
+        def _get_receipt_dict(proof) -> Optional[dict]:
+            receipt = getattr(proof, "pol_receipt", None)
+            if not receipt:
+                return None
+            try:
+                return receipt.model_dump()
+            except Exception:
+                try:
+                    return receipt.dict()
+                except Exception:
+                    return receipt
+
+        # 1. Fetch manifest
+        url = f"{self.url}/v1/pol/{keyset_id}/manifest"
+        params = {}
+        if epoch_index:
+            params["epoch_index"] = epoch_index
+
+        async with httpx.AsyncClient() as client:
+            resp = await client.get(url, params=params)
+
+        if resp.status_code != 200:
+            return False, [], 0, 0, f"Error fetching manifest from mint: {resp.text}"
+
+        manifest = resp.json()
+        epoch_idx = manifest["epoch_index"]
+
+        # Verify outstanding balance sum consistency
+        root_issued_sum = manifest["root_issued"]["sum"]
+        root_spent_sum = manifest["root_spent"]["sum"]
+        outstanding_balance = manifest["outstanding_balance"]
+
+        if outstanding_balance != root_issued_sum - root_spent_sum:
+            return False, [], 0, 0, f"Manifest outstanding_balance ({outstanding_balance}) does NOT match difference of roots ({root_issued_sum} - {root_spent_sum})!"
+
+        # Extract roots for verification
+        root_issued_hash = bytes.fromhex(manifest["root_issued"]["hash"])
+        root_issued_sum = manifest["root_issued"]["sum"]
+        root_spent_hash = bytes.fromhex(manifest["root_spent"]["hash"])
+        root_spent_sum = manifest["root_spent"]["sum"]
+
+        # 2. Collect secrets and compute Y for non-inclusion spent audits
+        ys = [b_dhke.hash_to_curve(p.secret.encode("utf-8")).format().hex() for p in unspent_proofs]
+
+        # Query POST /v1/pol/{keyset_id}/proofs/spent
+        async with httpx.AsyncClient() as client:
+            resp_spent = await client.post(
+                f"{self.url}/v1/pol/{keyset_id}/proofs/spent",
+                json={"ys": ys},
+                params=params
+            )
+
+        if resp_spent.status_code != 200:
+            return False, [], 0, 0, f"Error querying spent proofs from mint: {resp_spent.text}"
+
+        spent_proof_data = resp_spent.json()
+
+        # Re-verify spent proofs mathematically
+        proof_by_y_unspent = {b_dhke.hash_to_curve(p.secret.encode("utf-8")).format().hex(): p for p in unspent_proofs}
+        for item in spent_proof_data["proofs"]:
+            y_hex = item["item"]
+            index_hex = item["index"]
+            value = item["value"]
+            siblings = item["siblings"]
+
+            orig_proof = proof_by_y_unspent.get(y_hex)
+            secret = orig_proof.secret if orig_proof else ""
+            orig_c = orig_proof.C if orig_proof else ""
+            orig_amount = orig_proof.amount if orig_proof else 0
+
+            # Unspent secrets MUST have value 0 in the Spent Tree!
+            if value != 0:
+                challenges.append({
+                    "keyset_id": keyset_id,
+                    "epoch_index": epoch_idx,
+                    "item_type": "spent_non_inclusion",
+                    "item": secret,
+                    "index": index_hex,
+                    "value": 0,
+                    "signature": orig_c,
+                    "amount": orig_amount,
+                    "pol_receipt": _get_receipt_dict(orig_proof),
+                    "error": f"Falsely registered as spent with value {value}"
+                })
+                continue
+
+            # Verify the sibling proof up to root_spent
+            try:
+                compact_mask = item["compact_mask"]
+                siblings = item["siblings"]
+
+                mask_int = int(compact_mask, 16)
+                sibling_iter = iter(siblings)
+                reconstructed_siblings = []
+                for d in range(256):
+                    bit = (mask_int >> d) & 1
+                    if bit == 1:
+                        reconstructed_siblings.append(next(sibling_iter))
+                    else:
+                        def_hash, def_sum = default_nodes[d]
+                        reconstructed_siblings.append({
+                            "hash": def_hash.hex(),
+                            "sum": def_sum
+                        })
+
+                idx_int = int.from_bytes(bytes.fromhex(index_hex), "big")
+                current_hash = bytes.fromhex(index_hex) if value > 0 else default_nodes[0][0]
+                current_sum = value
+
+                for d in range(256):
+                    sib = reconstructed_siblings[d]
+                    sib_hash = bytes.fromhex(sib["hash"])
+                    sib_sum = sib["sum"]
+
+                    bit = (idx_int >> d) & 1
+                    parent_sum = current_sum + sib_sum
+
+                    if bit == 0:
+                        left_hash = current_hash
+                        left_sum = current_sum
+                        right_hash = sib_hash
+                        right_sum = sib_sum
+                    else:
+                        left_hash = sib_hash
+                        left_sum = sib_sum
+                        right_hash = current_hash
+                        right_sum = current_sum
+
+                    current_hash = hashlib.sha256(
+                        left_hash + right_hash + 
+                        left_sum.to_bytes(8, "big") + right_sum.to_bytes(8, "big")
+                    ).digest()
+                    current_sum = parent_sum
+
+                if current_hash != root_spent_hash or current_sum != root_spent_sum:
+                    challenges.append({
+                        "keyset_id": keyset_id,
+                        "epoch_index": epoch_idx,
+                        "item_type": "spent_non_inclusion_path",
+                        "item": secret,
+                        "index": index_hex,
+                        "value": 0,
+                        "signature": orig_c,
+                        "amount": orig_amount,
+                        "pol_receipt": _get_receipt_dict(orig_proof),
+                        "error": "Failed path verification"
+                    })
+            except Exception as e:
+                challenges.append({
+                    "keyset_id": keyset_id,
+                    "epoch_index": epoch_idx,
+                    "item_type": "spent_non_inclusion_path_error",
+                    "item": secret,
+                    "index": index_hex,
+                    "value": 0,
+                    "signature": orig_c,
+                    "amount": orig_amount,
+                    "pol_receipt": _get_receipt_dict(orig_proof),
+                    "error": f"Path verification raised exception: {e}"
+                })
+
+        # 2b. Check Inclusion of Spent Proofs in Spent Tree (Spent/Burn Integrity Audits)
+        try:
+            spent_rows = await self.db.fetchall(
+                f"SELECT amount, C, secret, id, derivation_path, mint_id, melt_id FROM {self.db.table_with_schema('proofs_used')} WHERE id = :keyset_id",
+                {"keyset_id": keyset_id}
+            )
+            spent_proofs = [Proof.from_dict(dict(r)) for r in spent_rows]
+        except Exception:
+            spent_proofs = []
+
+        if spent_proofs:
+            spent_ys = [b_dhke.hash_to_curve(p.secret.encode("utf-8")).format().hex() for p in spent_proofs]
+            proof_by_y_spent = {b_dhke.hash_to_curve(p.secret.encode("utf-8")).format().hex(): p for p in spent_proofs}
+            
+            async with httpx.AsyncClient() as client:
+                resp_spent_inclusion = await client.post(
+                    f"{self.url}/v1/pol/{keyset_id}/proofs/spent",
+                    json={"ys": spent_ys},
+                    params=params
+                )
+                
+            if resp_spent_inclusion.status_code != 200:
+                return False, [], 0, 0, f"Error querying spent proofs inclusion from mint: {resp_spent_inclusion.text}"
+                
+            spent_inclusion_data = resp_spent_inclusion.json()
+            
+            for item in spent_inclusion_data["proofs"]:
+                y_hex = item["item"]
+                index_hex = item["index"]
+                value = item["value"]
+                siblings = item["siblings"]
+                
+                orig_spent_proof = proof_by_y_spent.get(y_hex)
+                if not orig_spent_proof:
+                    continue
+                    
+                secret = orig_spent_proof.secret
+                if value != orig_spent_proof.amount:
+                    challenges.append({
+                        "keyset_id": keyset_id,
+                        "epoch_index": epoch_idx,
+                        "item_type": "spent_inclusion_value",
+                        "item": secret,
+                        "index": index_hex,
+                        "value": orig_spent_proof.amount,
+                        "signature": orig_spent_proof.C,
+                        "amount": orig_spent_proof.amount,
+                        "pol_receipt": _get_receipt_dict(orig_spent_proof),
+                        "error": f"Falsely registered spent amount as {value}"
+                    })
+                    continue
+                    
+                try:
+                    compact_mask = item["compact_mask"]
+                    mask_int = int(compact_mask, 16)
+                    sibling_iter = iter(siblings)
+                    reconstructed_siblings = []
+                    for d in range(256):
+                        bit = (mask_int >> d) & 1
+                        if bit == 1:
+                            reconstructed_siblings.append(next(sibling_iter))
+                        else:
+                            def_hash, def_sum = default_nodes[d]
+                            reconstructed_siblings.append({
+                                "hash": def_hash.hex(),
+                                "sum": def_sum
+                            })
+
+                    current_hash = bytes.fromhex(index_hex)
+                    current_sum = value
+                    idx_int = int.from_bytes(current_hash, "big")
+
+                    for d in range(256):
+                        sib = reconstructed_siblings[d]
+                        sib_hash = bytes.fromhex(sib["hash"])
+                        sib_sum = sib["sum"]
+
+                        bit = (idx_int >> d) & 1
+                        parent_sum = current_sum + sib_sum
+
+                        if bit == 0:
+                            left_hash = current_hash
+                            left_sum = current_sum
+                            right_hash = sib_hash
+                            right_sum = sib_sum
+                        else:
+                            left_hash = sib_hash
+                            left_sum = sib_sum
+                            right_hash = current_hash
+                            right_sum = current_sum
+
+                        current_hash = hashlib.sha256(
+                            left_hash + right_hash + 
+                            left_sum.to_bytes(8, "big") + right_sum.to_bytes(8, "big")
+                        ).digest()
+                        current_sum = parent_sum
+
+                    if current_hash != root_spent_hash or current_sum != root_spent_sum:
+                        challenges.append({
+                            "keyset_id": keyset_id,
+                            "epoch_index": epoch_idx,
+                            "item_type": "spent_inclusion_path",
+                            "item": secret,
+                            "index": index_hex,
+                            "value": orig_spent_proof.amount,
+                            "signature": orig_spent_proof.C,
+                            "amount": orig_spent_proof.amount,
+                            "pol_receipt": _get_receipt_dict(orig_spent_proof),
+                            "error": "Failed path verification"
+                        })
+                except Exception as e:
+                    challenges.append({
+                        "keyset_id": keyset_id,
+                        "epoch_index": epoch_idx,
+                        "item_type": "spent_inclusion_path_error",
+                        "item": secret,
+                        "index": index_hex,
+                        "value": orig_spent_proof.amount,
+                        "signature": orig_spent_proof.C,
+                        "amount": orig_spent_proof.amount,
+                        "pol_receipt": _get_receipt_dict(orig_spent_proof),
+                        "error": f"Path verification raised exception: {e}"
+                    })
+
+        # 3. Check Issued Tree inclusion for outputs derived from our seed
+        derivable_proofs = []
+        blinded_messages_to_query = []
+        proof_by_b_hex = {}
+
+        all_wallet_proofs = list(unspent_proofs) + spent_proofs
+        skipped_no_path_count = 0
+        skipped_error_count = 0
+
+        # Pre-generate deterministic secrets KDF lookup table
+        deterministic_secrets_map = {}
+        try:
+            row = await self.db.fetchone(
+                f"SELECT counter FROM {self.db.table_with_schema('keysets')} WHERE id = :keyset_id",
+                {"keyset_id": keyset_id}
+            )
+            max_counter = row["counter"] if row else 0
+            for counter in range(0, max_counter + 100):
+                try:
+                    secret_bytes, r_bytes, _ = await self.generate_determinstic_secret(counter, keyset_id)
+                    secret_str = secret_bytes.hex()
+                    r_priv_obj = PrivateKey(r_bytes)
+                    deterministic_secrets_map[secret_str] = r_priv_obj
+                    try:
+                        deterministic_secrets_map[secret_bytes.decode("utf-8")] = r_priv_obj
+                    except Exception:
+                        pass
+                except Exception:
+                    continue
+        except Exception:
+            pass
+
+        for p in all_wallet_proofs:
+            r_priv = None
+            
+            p_dleq = getattr(p, "dleq", None)
+            if p_dleq and p_dleq.r:
+                try:
+                    r_priv = PrivateKey(bytes.fromhex(p_dleq.r))
+                except Exception:
+                    pass
+
+            if r_priv is None:
+                r_priv = deterministic_secrets_map.get(p.secret)
+
+            if r_priv is None:
+                if not p.derivation_path:
+                    skipped_no_path_count += 1
+                    continue
+                try:
+                    if p.derivation_path.startswith("HMAC-SHA256:"):
+                        counter = int(p.derivation_path.split(":")[-1])
+                    else:
+                        counter = int(p.derivation_path.split("/")[-1].replace("'", ""))
+
+                    secret_bytes, r_bytes, _ = await self.generate_determinstic_secret(counter, keyset_id)
+                    r_priv = PrivateKey(r_bytes)
+                except Exception:
+                    skipped_error_count += 1
+                    continue
+
+            try:
+                if not settings.wallet_use_deprecated_h2c:
+                    B_, _ = b_dhke.step1_alice(p.secret, r_priv)
+                else:
+                    B_, _ = b_dhke.step1_alice_deprecated(p.secret, r_priv)
+
+                b_hex = B_.format().hex()
+                derivable_proofs.append((p, b_hex))
+                blinded_messages_to_query.append(b_hex)
+                proof_by_b_hex[b_hex] = p
+            except Exception:
+                skipped_error_count += 1
+
+        if not blinded_messages_to_query:
+            return len(challenges) == 0, challenges, skipped_no_path_count, skipped_error_count, f"Manifest fetched successfully for Epoch {epoch_idx} but skipped Issued Tree walks."
+
+        # Query POST /v1/pol/{keyset_id}/proofs/issued
+        async with httpx.AsyncClient() as client:
+            resp_issued = await client.post(
+                f"{self.url}/v1/pol/{keyset_id}/proofs/issued",
+                json={"blinded_messages": blinded_messages_to_query},
+                params=params
+            )
+
+        if resp_issued.status_code != 200:
+            return False, [], 0, 0, f"Error querying issued proofs from mint: {resp_issued.text}"
+
+        issued_proof_data = resp_issued.json()
+
+        # Re-verify issued proofs mathematically
+        for item in issued_proof_data["proofs"]:
+            b_hex = item["item"]
+            index_hex = item["index"]
+            value = item["value"]
+            siblings = item["siblings"]
+
+            orig_proof = proof_by_b_hex.get(b_hex)
+            if not orig_proof:
+                continue
+
+            if value != orig_proof.amount:
+                continue
+
+            try:
+                compact_mask = item["compact_mask"]
+                siblings = item["siblings"]
+
+                mask_int = int(compact_mask, 16)
+                sibling_iter = iter(siblings)
+                reconstructed_siblings = []
+                for d in range(256):
+                    bit = (mask_int >> d) & 1
+                    if bit == 1:
+                        reconstructed_siblings.append(next(sibling_iter))
+                    else:
+                        def_hash, def_sum = default_nodes[d]
+                        reconstructed_siblings.append({
+                            "hash": def_hash.hex(),
+                            "sum": def_sum
+                        })
+
+                idx_int = int.from_bytes(bytes.fromhex(index_hex), "big")
+                current_hash = bytes.fromhex(index_hex) if value > 0 else default_nodes[0][0]
+                current_sum = value
+
+                for d in range(256):
+                    sib = reconstructed_siblings[d]
+                    sib_hash = bytes.fromhex(sib["hash"])
+                    sib_sum = sib["sum"]
+
+                    bit = (idx_int >> d) & 1
+                    parent_sum = current_sum + sib_sum
+
+                    if bit == 0:
+                        left_hash = current_hash
+                        left_sum = current_sum
+                        right_hash = sib_hash
+                        right_sum = sib_sum
+                    else:
+                        left_hash = sib_hash
+                        left_sum = sib_sum
+                        right_hash = current_hash
+                        right_sum = current_sum
+
+                    current_hash = hashlib.sha256(
+                        left_hash + right_hash + 
+                        left_sum.to_bytes(8, "big") + right_sum.to_bytes(8, "big")
+                    ).digest()
+                    current_sum = parent_sum
+
+                if current_hash != root_issued_hash or current_sum != root_issued_sum:
+                    challenges.append({
+                        "keyset_id": keyset_id,
+                        "epoch_index": epoch_idx,
+                        "item_type": "issued_inclusion_path",
+                        "item": b_hex,
+                        "index": index_hex,
+                        "value": orig_proof.amount,
+                        "signature": orig_proof.C,
+                        "secret": orig_proof.secret,
+                        "pol_receipt": _get_receipt_dict(orig_proof),
+                        "error": "Failed path verification"
+                    })
+            except Exception as e:
+                challenges.append({
+                    "keyset_id": keyset_id,
+                    "epoch_index": epoch_idx,
+                    "item_type": "issued_inclusion_path_error",
+                    "item": b_hex,
+                    "index": index_hex,
+                    "value": orig_proof.amount,
+                    "signature": orig_proof.C,
+                    "secret": orig_proof.secret,
+                    "pol_receipt": _get_receipt_dict(orig_proof),
+                    "error": f"Path verification raised exception: {e}"
+                })
+
+        return len(challenges) == 0, challenges, skipped_no_path_count, skipped_error_count, f"✓ Solvency audit completed successfully for Keysets in Epoch {epoch_idx}."

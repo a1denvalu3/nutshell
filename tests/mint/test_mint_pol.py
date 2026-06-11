@@ -24,6 +24,7 @@ from cashu.mint.pol import (
     submit_to_ots,
 )
 from cashu.wallet.cli.cli import pol as pol_group
+from cashu.wallet.wallet import Wallet
 
 BASE_URL = "http://localhost:3337"
 
@@ -400,24 +401,28 @@ def test_pol_audit_challenge_missing_and_invalid_proofs(monkeypatch):
     async def mock_generate_determinstic_secret(counter, keyset_id):
         return (b"secret_1", b"\x01"*32, "HMAC-SHA256:test_keyset_pol:42")
         
+    mock_wallet = SimpleNamespace(
+        url="http://localhost:3337",
+        load_proofs=mock_load_proofs,
+        db=mock_db,
+        proofs=[
+            SimpleNamespace(
+                id=keyset_id,
+                amount=100,
+                secret="secret_1",
+                C="C_hex_1",
+                derivation_path="HMAC-SHA256:test_keyset_pol:42"
+            )
+        ],
+        generate_determinstic_secret=mock_generate_determinstic_secret
+    )
+    # Bind the verify_solvency method dynamically to our mock wallet object
+    mock_wallet.verify_solvency = lambda k, e=None: Wallet.verify_solvency(mock_wallet, k, e)
+
     obj_ctx = {
         "HOST": "http://localhost:3337",
         "WALLET_NAME": "test_wallet",
-        "WALLET": SimpleNamespace(
-            url="http://localhost:3337",
-            load_proofs=mock_load_proofs,
-            db=mock_db,
-            proofs=[
-                SimpleNamespace(
-                    id=keyset_id,
-                    amount=100,
-                    secret="secret_1",
-                    C="C_hex_1",
-                    derivation_path="HMAC-SHA256:test_keyset_pol:42"
-                )
-            ],
-            generate_determinstic_secret=mock_generate_determinstic_secret
-        )
+        "WALLET": mock_wallet
     }
     
     runner = CliRunner()
@@ -516,25 +521,29 @@ def test_pol_audit_challenge_with_receipts(monkeypatch):
     async def mock_generate_determinstic_secret(counter, keyset_id):
         return (b"secret_1", b"\x01"*32, "HMAC-SHA256:test_keyset_pol:42")
     
+    mock_wallet = SimpleNamespace(
+        url="http://localhost:3337",
+        load_proofs=mock_load_proofs,
+        db=mock_db,
+        proofs=[
+            SimpleNamespace(
+                id=keyset_id,
+                amount=100,
+                secret="secret_1",
+                C="C_hex_1",
+                derivation_path="HMAC-SHA256:test_keyset_pol:42",
+                pol_receipt=mock_receipt
+            )
+        ],
+        generate_determinstic_secret=mock_generate_determinstic_secret
+    )
+    # Bind the verify_solvency method dynamically to our mock wallet object
+    mock_wallet.verify_solvency = lambda k, e=None: Wallet.verify_solvency(mock_wallet, k, e)
+
     obj_ctx = {
         "HOST": "http://localhost:3337",
         "WALLET_NAME": "test_wallet",
-        "WALLET": SimpleNamespace(
-            url="http://localhost:3337",
-            load_proofs=mock_load_proofs,
-            db=mock_db,
-            proofs=[
-                SimpleNamespace(
-                    id=keyset_id,
-                    amount=100,
-                    secret="secret_1",
-                    C="C_hex_1",
-                    derivation_path="HMAC-SHA256:test_keyset_pol:42",
-                    pol_receipt=mock_receipt
-                )
-            ],
-            generate_determinstic_secret=mock_generate_determinstic_secret
-        )
+        "WALLET": mock_wallet
     }
     
     runner = CliRunner()
