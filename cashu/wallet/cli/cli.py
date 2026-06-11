@@ -1913,7 +1913,8 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
     blinded_messages_to_query = []
     proof_by_b_hex = {}
 
-    for p in unspent_proofs:
+    all_wallet_proofs = list(unspent_proofs) + spent_proofs
+    for p in all_wallet_proofs:
         if p.derivation_path:
             try:
                 # Format is either "HMAC-SHA256:keyset_id:counter" or BIP32 path "m/.../counter'"
@@ -2037,7 +2038,7 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
             issued_audit_passes = False
 
     if issued_audit_passes:
-        print(f"✓ All derivable tokens ({len(blinded_messages_to_query)} of {len(unspent_proofs)}) successfully audited for Inclusion in Issued Tree.")
+        print(f"✓ All derivable tokens ({len(blinded_messages_to_query)} of {len(all_wallet_proofs)}) successfully audited for Inclusion in Issued Tree.")
         print("\n🎉 AUDIT COMPLETE: ALL CHECKS PASSED.")
     else:
         print("❌ Liabilities / Issued Tree audit FAILED. Mint cheating detected!")
