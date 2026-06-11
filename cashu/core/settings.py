@@ -90,7 +90,7 @@ class MintSettings(CashuSettings):
     )
 
     mint_pol_mock_ots: bool = Field(
-        default=False,
+        default=True,
         title="Mock OTS",
         description="If True, generate mock OTS receipts without making network requests.",
     )
