@@ -6,9 +6,11 @@ import httpx
 import pytest
 import respx
 from click.testing import CliRunner
+from coincurve import PrivateKey
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from cashu.core.crypto import b_dhke
 from cashu.core.crypto.b_dhke import hash_to_curve
 from cashu.core.settings import settings
 from cashu.mint import app as app_module
@@ -368,9 +370,6 @@ def test_pol_audit_challenge_missing_and_invalid_proofs(monkeypatch):
     
     # Calculate the exact expected B_ hex derived from our seed and mock private keys
     # to return in the mocked proofs/issued endpoint response
-    from coincurve import PrivateKey
-
-    from cashu.core.crypto import b_dhke
     secret_str = b"secret_1".hex()
     r_priv = PrivateKey(b"\x01"*32)
     B_, _ = b_dhke.step1_alice(secret_str, r_priv)
