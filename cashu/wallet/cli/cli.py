@@ -1794,6 +1794,118 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
         print("❌ Double-spend / Spent Tree audit FAILED. Mint cheating detected!")
         return
 
+    # 2b. Check Inclusion of Spent Proofs in Spent Tree (Spent/Burn Integrity Audits)
+    from ...core.base import Proof
+    print("\nChecking Inclusion of Spent Proofs in Spent Tree (Spent/Burn Audits)...")
+    try:
+        spent_rows = await wallet.db.fetchall(
+            f"SELECT amount, C, secret, id, derivation_path, mint_id, melt_id FROM {wallet.db.table_with_schema('proofs_used')} WHERE id = :keyset_id",
+            {"keyset_id": keyset_id}
+        )
+        spent_proofs = [Proof.from_dict(dict(r)) for r in spent_rows]
+    except Exception as e:
+        logger.trace(f"Failed to load spent proofs from database: {e}")
+        spent_proofs = []
+
+    if not spent_proofs:
+        print("No spent proofs found in wallet database. Skipping Spent Tree inclusion check.")
+    else:
+        spent_secrets = [p.secret for p in spent_proofs]
+        proof_by_secret = {p.secret: p for p in spent_proofs}
+        
+        try:
+            async with httpx.AsyncClient() as client:
+                resp_spent_inclusion = await client.post(
+                    f"{wallet.url}/v1/pol/{keyset_id}/proofs/spent",
+                    json={"secrets": spent_secrets},
+                    params=params
+                )
+                
+            if resp_spent_inclusion.status_code != 200:
+                print(f"Error querying spent proofs inclusion from mint: {resp_spent_inclusion.text}")
+                return
+                
+            spent_inclusion_data = resp_spent_inclusion.json()
+            
+            spent_inclusion_passes = True
+            for item in spent_inclusion_data["proofs"]:
+                secret = item["item"]
+                index_hex = item["index"]
+                value = item["value"]
+                siblings = item["siblings"]
+                
+                orig_spent_proof = proof_by_secret.get(secret)
+                if not orig_spent_proof:
+                    continue
+                    
+                # The value in Spent Tree must match the spent token's amount!
+                if value != orig_spent_proof.amount:
+                    print(f"CRITICAL WARNING: Spent token with amount {orig_spent_proof.amount} has registered amount {value} in Spent Tree!")
+                    spent_inclusion_passes = False
+                    continue
+                    
+                # Verify path mathematically
+                try:
+                    compact_mask = item["compact_mask"]
+                    mask_int = int(compact_mask, 16)
+                    sibling_iter = iter(siblings)
+                    reconstructed_siblings = []
+                    for d in range(256):
+                        bit = (mask_int >> d) & 1
+                        if bit == 1:
+                            reconstructed_siblings.append(next(sibling_iter))
+                        else:
+                            def_hash, def_sum = default_nodes[d]
+                            reconstructed_siblings.append({
+                                "hash": def_hash.hex(),
+                                "sum": def_sum
+                            })
+
+                    current_hash = bytes.fromhex(index_hex)
+                    current_sum = value
+                    idx_int = int.from_bytes(current_hash, "big")
+
+                    for d in range(256):
+                        sib = reconstructed_siblings[d]
+                        sib_hash = bytes.fromhex(sib["hash"])
+                        sib_sum = sib["sum"]
+
+                        bit = (idx_int >> d) & 1
+                        parent_sum = current_sum + sib_sum
+
+                        if bit == 0:
+                            left_hash = current_hash
+                            left_sum = current_sum
+                            right_hash = sib_hash
+                            right_sum = sib_sum
+                        else:
+                            left_hash = sib_hash
+                            left_sum = sib_sum
+                            right_hash = current_hash
+                            right_sum = current_sum
+
+                        current_hash = hashlib.sha256(
+                            left_hash + right_hash + 
+                            left_sum.to_bytes(8, "big") + right_sum.to_bytes(8, "big")
+                        ).digest()
+                        current_sum = parent_sum
+
+                    if current_hash != root_spent_hash or current_sum != root_spent_sum:
+                        print(f"CRITICAL WARNING: Spent proof inclusion path failed verification for secret '{secret}'!")
+                        spent_inclusion_passes = False
+                except Exception as e:
+                    print(f"Failed to mathematically verify spent path for secret '{secret}': {e}")
+                    spent_inclusion_passes = False
+                    
+            if spent_inclusion_passes:
+                print(f"✓ All spent tokens ({len(spent_secrets)}) successfully audited for Inclusion in Spent Tree (100% burn proof integrity).")
+            else:
+                print("❌ Spent Tree inclusion audit FAILED. Mint cheating detected!")
+                return
+        except Exception as e:
+            print(f"Failed to query or verify spent proofs inclusion: {e}")
+            return
+
     # 3. Check Issued Tree inclusion for outputs derived from our seed
     print("\nChecking Inclusion in Issued Tree (Liabilities Audits)...")
 
