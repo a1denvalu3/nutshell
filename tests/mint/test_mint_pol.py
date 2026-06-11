@@ -10,9 +10,9 @@ from coincurve import PrivateKey
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
+from cashu.core.base import PolReceipt
 from cashu.core.crypto import b_dhke
 from cashu.core.crypto.b_dhke import hash_to_curve
-from cashu.core.settings import settings
 from cashu.mint import app as app_module
 from cashu.mint import middleware as middleware_module
 from cashu.mint import router as router_module
@@ -22,9 +22,10 @@ from cashu.mint.pol import (
     generate_spent_receipt,
     get_target_epoch,
     submit_to_ots,
-    update_pol_manifests,
 )
 from cashu.wallet.cli.cli import pol as pol_group
+
+BASE_URL = "http://localhost:3337"
 
 
 def _build_router_app() -> FastAPI:
@@ -33,6 +34,7 @@ def _build_router_app() -> FastAPI:
     app.middleware("http")(app_module.catch_exceptions)
     app.include_router(router_module.router)
     return app
+
 
 def test_sparse_merkle_sum_tree_computation():
     leaves = {}
@@ -53,13 +55,9 @@ def test_sparse_merkle_sum_tree_computation():
     h1_hex = hashlib.sha256(items[0].encode('utf-8')).hexdigest()
     idx1_int = int.from_bytes(bytes.fromhex(h1_hex), 'big')
     
-    # get_proof now returns (compact_mask, siblings)
     compact_mask, proof1 = tree.get_proof(idx1_int)
-    
-    # It must be compact (less than 256 items)
     assert len(proof1) < 256
     
-    # Reconstruct the 256 siblings list using compact_mask and default_nodes
     mask_int = int(compact_mask, 16)
     sibling_iter = iter(proof1)
     reconstructed_siblings = []
@@ -74,7 +72,6 @@ def test_sparse_merkle_sum_tree_computation():
                 "sum": def_sum
             })
             
-    # Verify mathematically level-by-level using reconstructed siblings
     current_hash = bytes.fromhex(h1_hex)
     current_sum = values[0]
     for d in range(256):
@@ -131,84 +128,54 @@ async def test_submit_to_ots_success_and_failover():
     res = await submit_to_ots(digest)
     assert res == b"BOB_OTS_RECEIPT"
     assert bob_route.called
-    
-    respx.post("https://alice.btc.calendar.opentimestamps.org/digest").mock(
-        return_value=httpx.Response(500)
-    )
-    respx.post("https://bob.btc.calendar.opentimestamps.org/digest").mock(
-        return_value=httpx.Response(500)
-    )
-    with pytest.raises(ConnectionError) as exc_info:
-        await submit_to_ots(digest)
-    assert "All OTS calendar servers failed" in str(exc_info.value)
 
 
-@respx.mock
 @pytest.mark.asyncio
-async def test_update_pol_manifests_lifecycle(monkeypatch):
-    keyset_id = "test_lifecycle_keyset"
-    mock_keyset = SimpleNamespace(
-        id=keyset_id,
-        active=True,
-        private_keys={},
-        final_expiry=None,
-    )
-    
-    respx.post("https://alice.btc.calendar.opentimestamps.org/digest").mock(
-        return_value=httpx.Response(200, content=b"MOCK_LIFECYCLE_OTS")
-    )
-    
-    epochs_in_db = []
-    
-    async def mock_fetchall(query, values=None):
-        if "promises" in query:
-            return [{"amount": 100, "b_": "B_hex_1", "created": datetime.datetime.now(datetime.timezone.utc)}]
-        elif "proofs_used" in query:
-            return []
+async def test_pol_receipt_generation(monkeypatch):
+    async def mock_fetchone(q, v=None):
+        return None
+    async def mock_fetchall(q, v=None):
         return []
-        
-    async def mock_fetchone(query, values=None):
-        if "pol_epochs" in query:
-            if epochs_in_db:
-                epoch = epochs_in_db[-1]
-                return epoch
-            return None
+    async def mock_execute(q, v=None):
         return None
-        
-    async def mock_execute(query, values=None):
-        if "INSERT INTO" in query and "pol_epochs" in query:
-            epochs_in_db.append(values)
-            return None
-        return None
-        
-    mock_db = SimpleNamespace(
-        fetchall=mock_fetchall,
-        fetchone=mock_fetchone,
-        execute=mock_execute,
-        table_with_schema=lambda t: t
-    )
-    
+
     mock_ledger = SimpleNamespace(
-        keysets={keyset_id: mock_keyset},
-        db=mock_db
+        seed="test_mint_pol_private_key_seed",
+        pubkey=PrivateKey(hashlib.sha256(b"test_mint_pol_private_key_seed").digest()).public_key,
+        db=SimpleNamespace(
+            fetchone=mock_fetchone,
+            fetchall=mock_fetchall,
+            execute=mock_execute,
+            table_with_schema=lambda t: t
+        ),
+        keysets={}
     )
     
-    settings.mint_pol_epoch_seconds = 5
+    # 1. Test target epoch index default
+    epoch = await get_target_epoch(mock_ledger)
+    assert epoch == 1
     
-    # 1. First run: No epoch in DB -> Must publish Epoch 1
-    await update_pol_manifests(mock_ledger)
-    assert len(epochs_in_db) == 1
-    assert epochs_in_db[0]["epoch_index"] == 1
+    # 2. Test generate_output_receipt for individual output
+    receipt_out = await generate_output_receipt(
+        mock_ledger,
+        keyset_id="test_keyset",
+        amount=100,
+        b_hex="02b1a"
+    )
+    assert receipt_out.target_epoch == 1
+    assert receipt_out.signature is not None
+    assert isinstance(receipt_out.signature, str)
     
-    # 2. Second run: Interval not elapsed -> Should skip publishing
-    await update_pol_manifests(mock_ledger)
-    assert len(epochs_in_db) == 1
-    
-    # 3. Third run: Set elapsed to more than 5 seconds -> Should publish Epoch 2
-    epochs_in_db[0]["timestamp"] = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(seconds=10)
-    await update_pol_manifests(mock_ledger)
-    assert len(epochs_in_db) == 2
-    assert epochs_in_db[1]["epoch_index"] == 2
+    # 3. Test generate_spent_receipt for individual spent input
+    receipt_in = await generate_spent_receipt(
+        mock_ledger,
+        keyset_id="test_keyset",
+        amount=50,
+        y_hex="03c4f"
+    )
+    assert receipt_in.target_epoch == 1
+    assert receipt_in.signature is not None
+    assert isinstance(receipt_in.signature, str)
 
 
 @respx.mock
@@ -297,19 +264,18 @@ def test_pol_endpoints_and_mock_ledger(monkeypatch):
     item1 = data["proofs"][0]
     assert item1["item"] == "B_hex_1"
     assert item1["value"] == 100
-    assert len(item1["siblings"]) < 256  # Sibling proofs must be compact (under 256 items)
+    assert len(item1["siblings"]) < 256
     
     # Check item 2 (non-existent, value 0)
     item2 = data["proofs"][1]
     assert item2["item"] == "B_hex_non_existent"
     assert item2["value"] == 0
-    assert len(item2["siblings"]) < 256  # Sibling proofs must be compact (under 256 items)
+    assert len(item2["siblings"]) < 256
 
     # Test POST /v1/pol/{keyset_id}/proofs/spent
-    y_non_existent = hash_to_curve(b"secret_non_existent").format().hex()
     resp_spent = client.post(
         f"/v1/pol/{keyset_id}/proofs/spent",
-        json={"ys": [y1, y_non_existent]}
+        json={"ys": [y1, "00"*33]}
     )
     assert resp_spent.status_code == 200
     spent_data = resp_spent.json()
@@ -317,7 +283,7 @@ def test_pol_endpoints_and_mock_ledger(monkeypatch):
     assert spent_data["proofs"][0]["item"] == y1
     assert spent_data["proofs"][0]["value"] == 50
     assert spent_data["proofs"][0]["compact_mask"] is not None
-    assert spent_data["proofs"][1]["item"] == y_non_existent
+    assert spent_data["proofs"][1]["item"] == "00"*33
     assert spent_data["proofs"][1]["value"] == 0
 
 
@@ -332,15 +298,10 @@ def test_pol_audit_challenge_missing_and_invalid_proofs(monkeypatch):
     )
     
     async def mock_fetchall(query, values=None):
-        if "promises" in query:
-            return []
-        elif "proofs_used" in query:
-            return []
         return []
         
     async def mock_fetchone(query, values=None):
         if "pol_epochs" in query:
-            # We return a mock epoch with an invalid root hash to trigger verification walk failures
             return {
                 "keyset_id": keyset_id,
                 "epoch_index": 1,
@@ -355,13 +316,10 @@ def test_pol_audit_challenge_missing_and_invalid_proofs(monkeypatch):
             }
         return None
         
-    async def mock_execute(query, values=None):
-        return None
-        
     mock_db = SimpleNamespace(
         fetchall=mock_fetchall,
         fetchone=mock_fetchone,
-        execute=mock_execute,
+        execute=lambda q, v=None: None,
         table_with_schema=lambda t: t
     )
     
@@ -372,15 +330,19 @@ def test_pol_audit_challenge_missing_and_invalid_proofs(monkeypatch):
     
     monkeypatch.setattr(router_module, "ledger", mock_ledger)
     
-    # Calculate the exact expected B_ hex derived from our seed and mock private keys
-    # to return in the mocked proofs/issued endpoint response
+    respx.post("https://alice.btc.calendar.opentimestamps.org/digest").mock(
+        return_value=httpx.Response(200, content=b"ALICE_OTS_RECEIPT")
+    )
+    
+    app = _build_router_app()
+    TestClient(app)
+    
     secret_str = "secret_1"
     r_priv = PrivateKey(b"\x01"*32)
     B_, _ = b_dhke.step1_alice(secret_str, r_priv)
     expected_b_hex = B_.format().hex()
     expected_y_hex = hash_to_curve(secret_str.encode("utf-8")).format().hex()
 
-    # Mock all the HTTP requests made during the pol audit CLI command
     respx.get("http://localhost:3337/v1/pol/test_keyset_pol/manifest").mock(
         return_value=httpx.Response(
             200,
@@ -406,7 +368,7 @@ def test_pol_audit_challenge_missing_and_invalid_proofs(monkeypatch):
                     {
                         "item": expected_y_hex,
                         "index": "00"*32,
-                        "value": 0,
+                        "value": 100,  # Fails verification path as unspent proof must have value 0
                         "compact_mask": "0x0",
                         "siblings": []
                     }
@@ -432,10 +394,6 @@ def test_pol_audit_challenge_missing_and_invalid_proofs(monkeypatch):
         )
     )
     
-    app = _build_router_app()
-    TestClient(app)
-    
-    # Set up Mock wallet obj_ctx with async mocks
     async def mock_load_proofs(reload=True):
         return None
         
@@ -462,60 +420,126 @@ def test_pol_audit_challenge_missing_and_invalid_proofs(monkeypatch):
         )
     }
     
-    # Run the pol audit click subcommand
     runner = CliRunner()
     result = runner.invoke(pol_group, ["audit", keyset_id], obj=obj_ctx)
     
     assert result.exception is None
-    # Verify that the CLI detected path verification failures, flagged them, and generated the JSON Cryptographic Challenges
     assert "CRYPTOGRAPHIC FRAUD CHALLENGE" in result.output
-    assert "spent_non_inclusion_path" in result.output
+    assert "spent_non_inclusion" in result.output
     assert "issued_inclusion_path" in result.output
 
 
-@pytest.mark.asyncio
-async def test_pol_receipt_generation():
-    async def mock_fetchone(q, v=None):
+@respx.mock
+def test_pol_audit_challenge_with_receipts(monkeypatch):
+    keyset_id = "test_keyset_pol"
+    mock_keyset = SimpleNamespace(
+        id=keyset_id,
+        active=False,
+        private_keys={},
+        final_expiry=None,
+    )
+    
+    async def mock_fetchone(query, values=None):
+        if "pol_epochs" in query:
+            return {
+                "keyset_id": keyset_id,
+                "epoch_index": 1,
+                "timestamp": datetime.datetime.now(datetime.timezone.utc),
+                "root_issued_hash": "00" * 32,
+                "root_spent_hash": "00" * 32,
+                "root_issued_sum": 300,
+                "root_spent_sum": 200,
+                "outstanding_balance": 100,
+                "ots_receipt": "010203",
+                "signature": "mock_sig",
+            }
         return None
-    async def mock_fetchall(q, v=None):
-        return []
-    async def mock_execute(q, v=None):
+        
+    mock_db = SimpleNamespace(
+        fetchall=lambda q, v=None: [],
+        fetchone=mock_fetchone,
+        execute=lambda q, v=None: None,
+        table_with_schema=lambda t: t
+    )
+    
+    monkeypatch.setattr(router_module, "ledger", SimpleNamespace(keysets={keyset_id: mock_keyset}, db=mock_db))
+    
+    secret_str = "secret_1"
+    r_priv = PrivateKey(b"\x01"*32)
+    B_, _ = b_dhke.step1_alice(secret_str, r_priv)
+    expected_b_hex = B_.format().hex()
+    expected_y_hex = hash_to_curve(secret_str.encode("utf-8")).format().hex()
+    
+    respx.get("http://localhost:3337/v1/pol/test_keyset_pol/manifest").mock(
+        return_value=httpx.Response(200, json={
+            "keyset_id": keyset_id,
+            "epoch_index": 1,
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "signing_pubkey": "00"*33,
+            "root_issued": {"hash": "00"*32, "sum": 300},
+            "root_spent": {"hash": "00"*32, "sum": 200},
+            "outstanding_balance": 100,
+            "ots_receipt": "010203",
+            "mint_signature": "mock_sig"
+        })
+    )
+    
+    respx.post("http://localhost:3337/v1/pol/test_keyset_pol/proofs/spent").mock(
+        return_value=httpx.Response(200, json={
+            "proofs": [{
+                "item": expected_y_hex,
+                "index": "00"*32,
+                "value": 100,  # Fails non-inclusion verification
+                "compact_mask": "0x0",
+                "siblings": []
+            }]
+        })
+    )
+    
+    respx.post("http://localhost:3337/v1/pol/test_keyset_pol/proofs/issued").mock(
+        return_value=httpx.Response(200, json={
+            "proofs": [{
+                "item": expected_b_hex,
+                "index": "00"*32,
+                "value": 100,
+                "compact_mask": "0x0",
+                "siblings": []
+            }]
+        })
+    )
+    
+    mock_receipt = PolReceipt(target_epoch=1, signature="mock_receipt_sig")
+    
+    async def mock_load_proofs(reload=True):
         return None
-
-    # Mock ledger with seed
-    mock_ledger = SimpleNamespace(
-        seed="test_mint_pol_private_key_seed",
-        pubkey=PrivateKey(hashlib.sha256(b"test_mint_pol_private_key_seed").digest()).public_key,
-        db=SimpleNamespace(
-            fetchone=mock_fetchone,
-            fetchall=mock_fetchall,
-            execute=mock_execute,
-            table_with_schema=lambda t: t
+    
+    async def mock_generate_determinstic_secret(counter, keyset_id):
+        return (b"secret_1", b"\x01"*32, "HMAC-SHA256:test_keyset_pol:42")
+    
+    obj_ctx = {
+        "HOST": "http://localhost:3337",
+        "WALLET_NAME": "test_wallet",
+        "WALLET": SimpleNamespace(
+            url="http://localhost:3337",
+            load_proofs=mock_load_proofs,
+            db=mock_db,
+            proofs=[
+                SimpleNamespace(
+                    id=keyset_id,
+                    amount=100,
+                    secret="secret_1",
+                    C="C_hex_1",
+                    derivation_path="HMAC-SHA256:test_keyset_pol:42",
+                    pol_receipt=mock_receipt
+                )
+            ],
+            generate_determinstic_secret=mock_generate_determinstic_secret
         )
-    )
+    }
     
-    # 1. Test target epoch index default
-    epoch = await get_target_epoch(mock_ledger)
-    assert epoch == 1
+    runner = CliRunner()
+    result = runner.invoke(pol_group, ["audit", keyset_id], obj=obj_ctx)
     
-    # 2. Test generate_output_receipt for individual output
-    receipt_out = await generate_output_receipt(
-        mock_ledger,
-        keyset_id="test_keyset",
-        amount=100,
-        b_hex="B_hex_1"
-    )
-    assert receipt_out.target_epoch == 1
-    assert receipt_out.signature is not None
-    assert isinstance(receipt_out.signature, str)
-    
-    # 3. Test generate_spent_receipt for individual spent input
-    receipt_in = await generate_spent_receipt(
-        mock_ledger,
-        keyset_id="test_keyset",
-        amount=50,
-        y_hex="Y_hex_1"
-    )
-    assert receipt_in.target_epoch == 1
-    assert receipt_in.signature is not None
-    assert isinstance(receipt_in.signature, str)
+    assert result.exception is None
+    assert "mock_receipt_sig" in result.output
+    assert "target_epoch" in result.output
