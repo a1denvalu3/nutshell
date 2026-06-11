@@ -2037,7 +2037,7 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
             issued_audit_passes = False
 
     if issued_audit_passes:
-        print(f"✓ All derivable tokens ({len(blinded_messages_to_query)} of {len(unspent_proofs)}) successfully audited for Inclusion in Issued Tree (100% liability backing proof).")
-        print("\n🎉 AUDIT COMPLETE: ALL CHECKS PASSED. YOUR TOKENS ARE 100% MATHEMATICALLY BACKED BY THE MINT.")
+        print(f"✓ All derivable tokens ({len(blinded_messages_to_query)} of {len(unspent_proofs)}) successfully audited for Inclusion in Issued Tree.")
+        print("\n🎉 AUDIT COMPLETE: ALL CHECKS PASSED.")
     else:
         print("❌ Liabilities / Issued Tree audit FAILED. Mint cheating detected!")
