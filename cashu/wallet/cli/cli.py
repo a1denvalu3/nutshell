@@ -27,6 +27,7 @@ from ...core.base import (
     Method,
     MintQuote,
     MintQuoteState,
+    Proof,
     TokenV4,
     Unit,
 )
@@ -1660,6 +1661,8 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
         print("No unspent tokens found in this wallet to audit.")
         return
 
+    challenges = []
+
     if keyset_id:
         unspent_proofs = [p for p in unspent_proofs if p.id == keyset_id]
         if not unspent_proofs:
@@ -1742,16 +1745,32 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
 
     # Re-verify spent proofs mathematically
     spent_audit_passes = True
+    proof_by_secret_unspent = {p.secret: p for p in unspent_proofs}
     for item in spent_proof_data["proofs"]:
         secret = item["item"]
         index_hex = item["index"]
         value = item["value"]
         siblings = item["siblings"]
 
+        orig_proof = proof_by_secret_unspent.get(secret)
+        orig_c = orig_proof.C if orig_proof else ""
+        orig_amount = orig_proof.amount if orig_proof else 0
+
         # Unspent secrets MUST have value 0 in the Spent Tree!
         if value != 0:
             print(f"CRITICAL WARNING: Token secret '{secret}' is flagged as SPENT (value={value}) in the mint's Spent Tree!")
             spent_audit_passes = False
+            challenges.append({
+                "keyset_id": keyset_id,
+                "epoch_index": epoch_idx,
+                "item_type": "spent_non_inclusion",
+                "item": secret,
+                "index": index_hex,
+                "value": 0,
+                "signature": orig_c,
+                "amount": orig_amount,
+                "error": f"Falsely registered as spent with value {value}"
+            })
             continue
 
         # Verify the sibling proof up to root_spent
@@ -1805,18 +1824,38 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
             if current_hash != root_spent_hash or current_sum != root_spent_sum:
                 print(f"CRITICAL WARNING: Spent proof for secret '{secret}' failed cryptographic path validation!")
                 spent_audit_passes = False
+                challenges.append({
+                    "keyset_id": keyset_id,
+                    "epoch_index": epoch_idx,
+                    "item_type": "spent_non_inclusion_path",
+                    "item": secret,
+                    "index": index_hex,
+                    "value": 0,
+                    "signature": orig_c,
+                    "amount": orig_amount,
+                    "error": "Failed path verification"
+                })
         except Exception as e:
             print(f"Failed to mathematically verify path for secret '{secret}': {e}")
             spent_audit_passes = False
+            challenges.append({
+                "keyset_id": keyset_id,
+                "epoch_index": epoch_idx,
+                "item_type": "spent_non_inclusion_path_error",
+                "item": secret,
+                "index": index_hex,
+                "value": 0,
+                "signature": orig_c,
+                "amount": orig_amount,
+                "error": f"Path verification raised exception: {e}"
+            })
 
     if spent_audit_passes:
         print("✓ All unspent tokens successfully audited for Non-Inclusion in Spent Tree (0% double-spend risk).")
     else:
         print("❌ Double-spend / Spent Tree audit FAILED. Mint cheating detected!")
-        return
 
     # 2b. Check Inclusion of Spent Proofs in Spent Tree (Spent/Burn Integrity Audits)
-    from ...core.base import Proof
     print("\nChecking Inclusion of Spent Proofs in Spent Tree (Spent/Burn Audits)...")
     try:
         spent_rows = await wallet.db.fetchall(
@@ -1863,6 +1902,17 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
                 if value != orig_spent_proof.amount:
                     print(f"CRITICAL WARNING: Spent token with amount {orig_spent_proof.amount} has registered amount {value} in Spent Tree!")
                     spent_inclusion_passes = False
+                    challenges.append({
+                        "keyset_id": keyset_id,
+                        "epoch_index": epoch_idx,
+                        "item_type": "spent_inclusion_value",
+                        "item": secret,
+                        "index": index_hex,
+                        "value": orig_spent_proof.amount,
+                        "signature": orig_spent_proof.C,
+                        "amount": orig_spent_proof.amount,
+                        "error": f"Falsely registered spent amount as {value}"
+                    })
                     continue
                     
                 # Verify path mathematically
@@ -1914,15 +1964,36 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
                     if current_hash != root_spent_hash or current_sum != root_spent_sum:
                         print(f"CRITICAL WARNING: Spent proof inclusion path failed verification for secret '{secret}'!")
                         spent_inclusion_passes = False
+                        challenges.append({
+                            "keyset_id": keyset_id,
+                            "epoch_index": epoch_idx,
+                            "item_type": "spent_inclusion_path",
+                            "item": secret,
+                            "index": index_hex,
+                            "value": orig_spent_proof.amount,
+                            "signature": orig_spent_proof.C,
+                            "amount": orig_spent_proof.amount,
+                            "error": "Failed path verification"
+                        })
                 except Exception as e:
                     print(f"Failed to mathematically verify spent path for secret '{secret}': {e}")
                     spent_inclusion_passes = False
+                    challenges.append({
+                        "keyset_id": keyset_id,
+                        "epoch_index": epoch_idx,
+                        "item_type": "spent_inclusion_path_error",
+                        "item": secret,
+                        "index": index_hex,
+                        "value": orig_spent_proof.amount,
+                        "signature": orig_spent_proof.C,
+                        "amount": orig_spent_proof.amount,
+                        "error": f"Path verification raised exception: {e}"
+                    })
                     
             if spent_inclusion_passes:
                 print(f"✓ All spent tokens ({len(spent_secrets)}) successfully audited for Inclusion in Spent Tree (100% burn proof integrity).")
             else:
                 print("❌ Spent Tree inclusion audit FAILED. Mint cheating detected!")
-                return
         except Exception as e:
             print(f"Failed to query or verify spent proofs inclusion: {e}")
             return

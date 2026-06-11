@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Request, WebSocket, WebSocketDisco
 from loguru import logger
 from pydantic import BaseModel
 
+from ..core.crypto.b_dhke import hash_to_curve
 from ..core.errors import KeysetNotFoundError
 from ..core.models import (
     GetInfoResponse,
@@ -647,7 +648,6 @@ async def pol_proofs_spent(
     proof_items = []
     for secret in payload.secrets:
         # Compute Y from secret
-        from ..core.crypto.b_dhke import hash_to_curve
         y_hex = hash_to_curve(secret.encode("utf-8")).format().hex()
 
         h_y = hashlib.sha256(y_hex.encode('utf-8')).digest()
