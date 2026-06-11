@@ -2057,7 +2057,6 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
         return
 
     # Re-verify issued proofs mathematically
-    issued_audit_passes = True
     for item in issued_proof_data["proofs"]:
         b_hex = item["item"]
         index_hex = item["index"]
@@ -2071,7 +2070,6 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
         # Issued amount MUST match the unspent proof amount!
         if value != orig_proof.amount:
             print(f"CRITICAL WARNING: Token with amount {orig_proof.amount} has registered amount {value} in the mint's Issued Tree!")
-            issued_audit_passes = False
             continue
 
         # Verify the sibling proof up to root_issued
@@ -2124,13 +2122,37 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
 
             if current_hash != root_issued_hash or current_sum != root_issued_sum:
                 print(f"CRITICAL WARNING: Issued proof for blinded message '{b_hex}' failed cryptographic path validation!")
-                issued_audit_passes = False
+                challenges.append({
+                    "keyset_id": keyset_id,
+                    "epoch_index": epoch_idx,
+                    "item_type": "issued_inclusion_path",
+                    "item": b_hex,
+                    "index": index_hex,
+                    "value": orig_proof.amount,
+                    "signature": orig_proof.C,
+                    "secret": orig_proof.secret,
+                    "error": "Failed path verification"
+                })
         except Exception as e:
             print(f"Failed to mathematically verify path for blinded message '{b_hex}': {e}")
-            issued_audit_passes = False
+            challenges.append({
+                "keyset_id": keyset_id,
+                "epoch_index": epoch_idx,
+                "item_type": "issued_inclusion_path_error",
+                "item": b_hex,
+                "index": index_hex,
+                "value": orig_proof.amount,
+                "signature": orig_proof.C,
+                "secret": orig_proof.secret,
+                "error": f"Path verification raised exception: {e}"
+            })
 
-    if issued_audit_passes:
+    # 4. Final Audit Result and Challenge Reporting
+    if not challenges:
         print(f"✓ All derivable tokens ({len(blinded_messages_to_query)} of {len(all_wallet_proofs)}) successfully audited for Inclusion in Issued Tree.")
         print("\n🎉 AUDIT COMPLETE: ALL CHECKS PASSED.")
     else:
-        print("❌ Liabilities / Issued Tree audit FAILED. Mint cheating detected!")
+        print("\n=== CRYPTOGRAPHIC FRAUD CHALLENGE ===")
+        print("The audit detected discrepancies! Below are the cryptographic challenges to publish:")
+        print(json.dumps(challenges, indent=2))
+        print("=======================================")

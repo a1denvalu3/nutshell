@@ -5,6 +5,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 import respx
+from click.testing import CliRunner
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -18,6 +19,7 @@ from cashu.mint.pol import (
     submit_to_ots,
     update_pol_manifests,
 )
+from cashu.wallet.cli.cli import pol as pol_group
 
 
 def _build_router_app() -> FastAPI:
@@ -311,3 +313,157 @@ def test_pol_endpoints_and_mock_ledger(monkeypatch):
     assert spent_data["proofs"][0]["compact_mask"] is not None
     assert spent_data["proofs"][1]["item"] == "secret_non_existent"
     assert spent_data["proofs"][1]["value"] == 0
+
+
+@respx.mock
+def test_pol_audit_challenge_missing_and_invalid_proofs(monkeypatch):
+    keyset_id = "test_keyset_pol"
+    mock_keyset = SimpleNamespace(
+        id=keyset_id,
+        active=False,
+        private_keys={},
+        final_expiry=None,
+    )
+    
+    async def mock_fetchall(query, values=None):
+        if "promises" in query:
+            return []
+        elif "proofs_used" in query:
+            return []
+        return []
+        
+    async def mock_fetchone(query, values=None):
+        if "pol_epochs" in query:
+            # We return a mock epoch with an invalid root hash to trigger verification walk failures
+            return {
+                "keyset_id": keyset_id,
+                "epoch_index": 1,
+                "timestamp": datetime.datetime.now(datetime.timezone.utc),
+                "root_issued_hash": "00" * 32,
+                "root_spent_hash": "00" * 32,
+                "root_issued_sum": 300,
+                "root_spent_sum": 200,
+                "outstanding_balance": 100,
+                "ots_receipt": "010203",
+                "signature": "mock_sig",
+            }
+        return None
+        
+    async def mock_execute(query, values=None):
+        return None
+        
+    mock_db = SimpleNamespace(
+        fetchall=mock_fetchall,
+        fetchone=mock_fetchone,
+        execute=mock_execute,
+        table_with_schema=lambda t: t
+    )
+    
+    mock_ledger = SimpleNamespace(
+        keysets={keyset_id: mock_keyset},
+        db=mock_db
+    )
+    
+    monkeypatch.setattr(router_module, "ledger", mock_ledger)
+    
+    # Calculate the exact expected B_ hex derived from our seed and mock private keys
+    # to return in the mocked proofs/issued endpoint response
+    from coincurve import PrivateKey
+
+    from cashu.core.crypto import b_dhke
+    secret_str = b"secret_1".hex()
+    r_priv = PrivateKey(b"\x01"*32)
+    B_, _ = b_dhke.step1_alice(secret_str, r_priv)
+    expected_b_hex = B_.format().hex()
+
+    # Mock all the HTTP requests made during the pol audit CLI command
+    respx.get("http://localhost:3337/v1/pol/test_keyset_pol/manifest").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "keyset_id": keyset_id,
+                "epoch_index": 1,
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "signing_pubkey": "00"*33,
+                "root_issued": {"hash": "00"*32, "sum": 300},
+                "root_spent": {"hash": "00"*32, "sum": 200},
+                "outstanding_balance": 100,
+                "ots_receipt": "010203",
+                "mint_signature": "mock_sig"
+            }
+        )
+    )
+    
+    respx.post("http://localhost:3337/v1/pol/test_keyset_pol/proofs/spent").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "proofs": [
+                    {
+                        "item": "secret_1",
+                        "index": "00"*32,
+                        "value": 0,
+                        "compact_mask": "0x0",
+                        "siblings": []
+                    }
+                ]
+            }
+        )
+    )
+    
+    respx.post("http://localhost:3337/v1/pol/test_keyset_pol/proofs/issued").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "proofs": [
+                    {
+                        "item": expected_b_hex,
+                        "index": "00"*32,
+                        "value": 100,
+                        "compact_mask": "0x0",
+                        "siblings": []
+                    }
+                ]
+            }
+        )
+    )
+    
+    app = _build_router_app()
+    TestClient(app)
+    
+    # Set up Mock wallet obj_ctx with async mocks
+    async def mock_load_proofs(reload=True):
+        return None
+        
+    async def mock_generate_determinstic_secret(counter, keyset_id):
+        return (b"secret_1", b"\x01"*32, "HMAC-SHA256:test_keyset_pol:42")
+        
+    obj_ctx = {
+        "HOST": "http://localhost:3337",
+        "WALLET_NAME": "test_wallet",
+        "WALLET": SimpleNamespace(
+            url="http://localhost:3337",
+            load_proofs=mock_load_proofs,
+            db=mock_db,
+            proofs=[
+                SimpleNamespace(
+                    id=keyset_id,
+                    amount=100,
+                    secret="secret_1",
+                    C="C_hex_1",
+                    derivation_path="HMAC-SHA256:test_keyset_pol:42"
+                )
+            ],
+            generate_determinstic_secret=mock_generate_determinstic_secret
+        )
+    }
+    
+    # Run the pol audit click subcommand
+    runner = CliRunner()
+    result = runner.invoke(pol_group, ["audit", keyset_id], obj=obj_ctx)
+    
+    assert result.exception is None
+    # Verify that the CLI detected path verification failures, flagged them, and generated the JSON Cryptographic Challenges
+    assert "CRYPTOGRAPHIC FRAUD CHALLENGE" in result.output
+    assert "spent_non_inclusion_path" in result.output
+    assert "issued_inclusion_path" in result.output
