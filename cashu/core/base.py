@@ -143,6 +143,7 @@ class Proof(BaseModel):
     melt_id: Union[None, str] = (
         None  # holds the id of the melt operation that destroyed this proof
     )
+    pol_receipt: Optional["PolReceipt"] = None
 
     def __init__(self, **data):
         super().__init__(**data)
@@ -158,6 +159,14 @@ class Proof(BaseModel):
         else:
             # overwrite the empty string with None
             proof_dict["dleq"] = None
+
+        if proof_dict.get("pol_receipt") and isinstance(proof_dict["pol_receipt"], dict):
+            proof_dict["pol_receipt"] = PolReceipt(**proof_dict["pol_receipt"])
+        elif proof_dict.get("pol_receipt") and isinstance(proof_dict["pol_receipt"], str):
+            proof_dict["pol_receipt"] = PolReceipt(**json.loads(proof_dict["pol_receipt"]))
+        else:
+            proof_dict["pol_receipt"] = None
+
         c = cls(**proof_dict)
         return c
 

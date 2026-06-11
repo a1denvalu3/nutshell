@@ -719,7 +719,7 @@ class Wallet(
         original_indices, sorted_outputs = zip(*sorted_outputs_with_indices)
 
         # Call swap API
-        sorted_promises = await super().split(proofs, list(sorted_outputs))
+        sorted_promises, spent_receipts = await super().split(proofs, list(sorted_outputs))
 
         # sort promises back to original order
         promises = [
@@ -733,6 +733,10 @@ class Wallet(
         new_proofs = await self._construct_proofs(
             promises, secrets, rs, derivation_paths
         )
+
+        if spent_receipts:
+            for proof, receipt in zip(proofs, spent_receipts):
+                proof.pol_receipt = receipt
 
         await self.invalidate(proofs)
 
@@ -888,6 +892,10 @@ class Wallet(
             logger.debug("Payment is still pending.")
             return melt_quote_resp
 
+        if getattr(melt_quote_resp, "spent_receipts", None):
+            for proof, receipt in zip(proofs, melt_quote_resp.spent_receipts):
+                proof.pol_receipt = receipt
+
         # invoice was paid successfully
         await self.invalidate(proofs)
 
@@ -1019,6 +1027,10 @@ class Wallet(
                 proof.dleq = DLEQWallet(
                     e=promise.dleq.e, s=promise.dleq.s, r=r.to_hex()
                 )
+
+            # if the mint returned a pol receipt, we add it to the proof
+            if promise.pol_receipt:
+                proof.pol_receipt = promise.pol_receipt
 
             proofs.append(proof)
 
