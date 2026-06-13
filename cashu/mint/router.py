@@ -267,8 +267,11 @@ async def mint_batch(
     logger.trace(f"> POST /v1/mint/bolt11/batch: payload={payload}")
     signatures = await ledger.mint_batch(payload)
     from .pol import generate_output_receipt
+
     for sig, output in zip(signatures, payload.outputs):
-        sig.pol_receipt = await generate_output_receipt(ledger, keyset_id=sig.id, amount=sig.amount, b_hex=output.B_)
+        sig.pol_receipt = await generate_output_receipt(
+            ledger, keyset_id=sig.id, amount=sig.amount, b_hex=output.B_
+        )
     resp = PostMintBatchResponse(signatures=signatures)
     logger.trace(f"< POST /v1/mint/bolt11/batch: {resp}")
     return resp
@@ -325,8 +328,11 @@ async def mint(
         outputs=payload.outputs, quote_id=payload.quote, signature=payload.signature
     )
     from .pol import generate_output_receipt
+
     for sig, output in zip(promises, payload.outputs):
-        sig.pol_receipt = await generate_output_receipt(ledger, keyset_id=sig.id, amount=sig.amount, b_hex=output.B_)
+        sig.pol_receipt = await generate_output_receipt(
+            ledger, keyset_id=sig.id, amount=sig.amount, b_hex=output.B_
+        )
     blinded_signatures = PostMintResponse(signatures=promises)
     logger.trace(f"< POST /v1/mint/bolt11: {blinded_signatures}")
     return blinded_signatures
@@ -410,10 +416,13 @@ async def melt(request: Request, payload: PostMeltRequest) -> PostMeltQuoteRespo
         )
     try:
         from .pol import generate_spent_receipt
+
         spent_receipts = []
         for p in payload.inputs:
             y_hex = hash_to_curve(p.secret.encode("utf-8")).format().hex()
-            r_spent = await generate_spent_receipt(ledger, keyset_id=p.id, amount=p.amount, y_hex=y_hex)
+            r_spent = await generate_spent_receipt(
+                ledger, keyset_id=p.id, amount=p.amount, y_hex=y_hex
+            )
             spent_receipts.append(r_spent)
         resp.spent_receipts = spent_receipts
     except Exception as e:
@@ -449,13 +458,18 @@ async def swap(
     signatures = await ledger.swap(proofs=payload.inputs, outputs=payload.outputs)
 
     from .pol import generate_output_receipt, generate_spent_receipt
+
     for sig, output in zip(signatures, payload.outputs):
-        sig.pol_receipt = await generate_output_receipt(ledger, keyset_id=sig.id, amount=sig.amount, b_hex=output.B_)
+        sig.pol_receipt = await generate_output_receipt(
+            ledger, keyset_id=sig.id, amount=sig.amount, b_hex=output.B_
+        )
 
     spent_receipts = []
     for p in payload.inputs:
         y_hex = hash_to_curve(p.secret.encode("utf-8")).format().hex()
-        r_spent = await generate_spent_receipt(ledger, keyset_id=p.id, amount=p.amount, y_hex=y_hex)
+        r_spent = await generate_spent_receipt(
+            ledger, keyset_id=p.id, amount=p.amount, y_hex=y_hex
+        )
         spent_receipts.append(r_spent)
 
     return PostSwapResponse(signatures=signatures, spent_receipts=spent_receipts)
@@ -561,14 +575,16 @@ async def pol_manifest(
 
     if not epoch:
         raise HTTPException(
-            status_code=404,
-            detail="No completed PoL epoch found for this keyset."
+            status_code=404, detail="No completed PoL epoch found for this keyset."
         )
 
     ts_val = epoch["timestamp"]
-    ts_str = ts_val.isoformat() if isinstance(ts_val, datetime.datetime) else str(ts_val)
+    ts_str = (
+        ts_val.isoformat() if isinstance(ts_val, datetime.datetime) else str(ts_val)
+    )
 
     from .pol import get_mint_signing_key
+
     _, pub_key_hex = get_mint_signing_key(ledger)
 
     return PolManifestResponse(
@@ -576,8 +592,12 @@ async def pol_manifest(
         epoch_index=epoch["epoch_index"],
         timestamp=ts_str,
         signing_pubkey=pub_key_hex,
-        root_issued=ManifestRoot(hash=epoch["root_issued_hash"], sum=epoch["root_issued_sum"]),
-        root_spent=ManifestRoot(hash=epoch["root_spent_hash"], sum=epoch["root_spent_sum"]),
+        root_issued=ManifestRoot(
+            hash=epoch["root_issued_hash"], sum=epoch["root_issued_sum"]
+        ),
+        root_spent=ManifestRoot(
+            hash=epoch["root_spent_hash"], sum=epoch["root_spent_sum"]
+        ),
         outstanding_balance=epoch["outstanding_balance"],
         ots_receipt=epoch["ots_receipt"],
         mint_signature=epoch["signature"],
@@ -606,18 +626,20 @@ async def pol_proofs_issued(
     if not epoch:
         raise HTTPException(
             status_code=400,
-            detail="No completed PoL epoch found for this keyset. Proofs are only available after an epoch has ended."
+            detail="No completed PoL epoch found for this keyset. Proofs are only available after an epoch has ended.",
         )
 
     epoch_time = parse_db_timestamp(epoch["timestamp"])
 
     # Build tree as of the epoch timestamp
-    issued_tree, _ = await build_trees_for_keyset_at_timestamp(ledger, keyset_id, epoch_time)
+    issued_tree, _ = await build_trees_for_keyset_at_timestamp(
+        ledger, keyset_id, epoch_time, epoch_index=epoch["epoch_index"]
+    )
 
     proof_items = []
     for b_hex in payload.blinded_messages:
-        h_b = hashlib.sha256(b_hex.encode('utf-8')).digest()
-        idx_int = int.from_bytes(h_b, 'big')
+        h_b = hashlib.sha256(b_hex.encode("utf-8")).digest()
+        idx_int = int.from_bytes(h_b, "big")
 
         # Check if active leaf
         level_nodes = issued_tree.tree_levels[0]
@@ -632,7 +654,7 @@ async def pol_proofs_issued(
                 index=h_b.hex(),
                 value=value,
                 compact_mask=compact_mask,
-                siblings=[SiblingInfo(**s) for s in siblings]
+                siblings=[SiblingInfo(**s) for s in siblings],
             )
         )
 
@@ -661,18 +683,20 @@ async def pol_proofs_spent(
     if not epoch:
         raise HTTPException(
             status_code=400,
-            detail="No completed PoL epoch found for this keyset. Proofs are only available after an epoch has ended."
+            detail="No completed PoL epoch found for this keyset. Proofs are only available after an epoch has ended.",
         )
 
     epoch_time = parse_db_timestamp(epoch["timestamp"])
 
     # Build tree as of the epoch timestamp
-    _, spent_tree = await build_trees_for_keyset_at_timestamp(ledger, keyset_id, epoch_time)
+    _, spent_tree = await build_trees_for_keyset_at_timestamp(
+        ledger, keyset_id, epoch_time, epoch_index=epoch["epoch_index"]
+    )
 
     proof_items = []
     for y_hex in payload.ys:
-        h_y = hashlib.sha256(y_hex.encode('utf-8')).digest()
-        idx_int = int.from_bytes(h_y, 'big')
+        h_y = hashlib.sha256(y_hex.encode("utf-8")).digest()
+        idx_int = int.from_bytes(h_y, "big")
 
         # Check if active leaf
         level_nodes = spent_tree.tree_levels[0]
@@ -687,7 +711,7 @@ async def pol_proofs_spent(
                 index=h_y.hex(),
                 value=value,
                 compact_mask=compact_mask,
-                siblings=[SiblingInfo(**s) for s in siblings]
+                siblings=[SiblingInfo(**s) for s in siblings],
             )
         )
 
