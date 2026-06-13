@@ -42,7 +42,9 @@ async def store_proof(
             "dleq": json.dumps(proof.dleq.model_dump()) if proof.dleq else "",
             "mint_id": proof.mint_id,
             "melt_id": proof.melt_id,
-            "pol_receipt": json.dumps(proof.pol_receipt.model_dump()) if proof.pol_receipt else "",
+            "pol_receipt": json.dumps(proof.pol_receipt.model_dump())
+            if proof.pol_receipt
+            else "",
         },
     )
 
@@ -122,7 +124,9 @@ async def invalidate_proof(
             "derivation_path": proof.derivation_path,
             "mint_id": proof.mint_id,
             "melt_id": proof.melt_id,
-            "pol_receipt": json.dumps(proof.pol_receipt.model_dump()) if proof.pol_receipt else "",
+            "pol_receipt": json.dumps(proof.pol_receipt.model_dump())
+            if proof.pol_receipt
+            else "",
         },
     )
 
@@ -392,7 +396,9 @@ async def store_bolt11_melt_quote(
             "payment_preimage": quote.payment_preimage,
             "expiry": quote.expiry,
             "change": (
-                json.dumps([c.model_dump() for c in quote.change]) if quote.change else ""
+                json.dumps([c.model_dump() for c in quote.change])
+                if quote.change
+                else ""
             ),
         },
     )

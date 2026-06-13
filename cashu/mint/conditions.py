@@ -69,14 +69,19 @@ class LedgerSpendingConditions:
         can_use_main_path = True
         if SecretKind(secret.kind) == SecretKind.HTLC and not proof.htlcpreimage:
             can_use_main_path = False
-            exception_to_raise = TransactionError("HTLC requires preimage for main path.")
+            exception_to_raise = TransactionError(
+                "HTLC requires preimage for main path."
+            )
 
         # Check if we can spend via the normal path (main pubkeys)
         if can_use_main_path:
             if main_pubkeys:
                 try:
                     if self._verify_p2pk_signatures(
-                        message_to_sign, main_pubkeys, proof.p2pksigs.copy(), main_n_sigs
+                        message_to_sign,
+                        main_pubkeys,
+                        proof.p2pksigs.copy(),
+                        main_n_sigs,
                     ):
                         logger.trace("Spending condition satisfied via main pubkeys.")
                         return True
@@ -339,7 +344,6 @@ class LedgerSpendingConditions:
             [p.secret for p in proofs] + [o.B_ for o in outputs]
         )
 
-
         first_proof = proofs[0]
         if not first_proof.witness:
             raise TransactionError("no witness in proof.")
@@ -348,9 +352,13 @@ class LedgerSpendingConditions:
         exception_to_raise: Optional[Exception] = None
 
         can_use_main_path = True
-        if SecretKind(secret.kind) == SecretKind.HTLC and not all([p.htlcpreimage for p in proofs]):
+        if SecretKind(secret.kind) == SecretKind.HTLC and not all(
+            [p.htlcpreimage for p in proofs]
+        ):
             can_use_main_path = False
-            exception_to_raise = TransactionError("HTLC requires preimage for main path.")
+            exception_to_raise = TransactionError(
+                "HTLC requires preimage for main path."
+            )
 
         # Check if we can spend via the normal path (main pubkeys)
         if can_use_main_path:

@@ -288,14 +288,15 @@ async def test_verify_inputs_and_outputs_htlc_custom_sigflag_fails_without_outpu
             InvalidProofsError(),
         )
 
+
 def test_verify_p2pk_signatures_rejects_same_x_coord_different_prefix():
     cond = LedgerSpendingConditions()
     message = "msg-1"
-    
+
     # Generate one private key
     priv = PrivateKey()
     pubkey = priv.public_key.format().hex()
-    
+
     # Generate the 02 and 03 version of the same pubkey
     if pubkey.startswith("02"):
         pub1 = pubkey
@@ -303,25 +304,27 @@ def test_verify_p2pk_signatures_rejects_same_x_coord_different_prefix():
     else:
         pub1 = pubkey
         pub2 = "02" + pubkey[2:]
-        
+
     # Generate two different signatures for the same message using different nonces
-    sig1 = priv.sign_schnorr(sha256(message.encode()).digest(), b"1"*32).hex()
-    sig2 = priv.sign_schnorr(sha256(message.encode()).digest(), b"2"*32).hex()
-    
-    with pytest.raises(TransactionError, match="pubkeys must have unique x-coordinates"):
+    sig1 = priv.sign_schnorr(sha256(message.encode()).digest(), b"1" * 32).hex()
+    sig2 = priv.sign_schnorr(sha256(message.encode()).digest(), b"2" * 32).hex()
+
+    with pytest.raises(
+        TransactionError, match="pubkeys must have unique x-coordinates"
+    ):
         cond._verify_p2pk_signatures(message, [pub1, pub2], [sig1, sig2], 2)
 
 
 def test_verify_p2pk_sig_inputs_handles_duplicate_pubkeys_gracefully():
     cond = LedgerSpendingConditions()
-    
+
     sk = PrivateKey()
     pk = sk.public_key.format().hex()
-    
+
     tags = [["pubkeys", pk], ["sigflag", "SIG_INPUTS"]]
     secret_str = _secret(kind=SecretKind.P2PK, data=pk, extra_tags=tags)
-    
+
     sig = schnorr_sign(secret_str.encode("utf-8"), sk).hex()
     proof = _proof(secret_str, signatures=[sig])
-    
+
     assert cond._verify_input_spending_conditions(proof)

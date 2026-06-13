@@ -189,7 +189,7 @@ class LedgerEventClientManager:
         for f in filters:
             logger.debug(f"Adding subscription {subId} for filter {f}")
             self.subscriptions[kind].setdefault(f, []).append(subId)
-            
+
         # Initialize the subscriptions in batch
         asyncio.create_task(self._init_subscriptions(subId, filters, kind))
 
@@ -198,9 +198,7 @@ class LedgerEventClientManager:
         for kind, sub_filters in self.subscriptions.items():
             for filter, subs in sub_filters.items():
                 while subId in subs:
-                    logger.debug(
-                        f"Removing subscription {subId} for filter {filter}"
-                    )
+                    logger.debug(f"Removing subscription {subId} for filter {filter}")
                     subs.remove(subId)
                     removed = True
         if not removed:
@@ -226,18 +224,26 @@ class LedgerEventClientManager:
                         quote_id=filter, db=self.db_read.db, conn=conn
                     )
                     if mint_quote:
-                        results.append(PostMintQuoteResponse.from_mint_quote(mint_quote).model_dump())
+                        results.append(
+                            PostMintQuoteResponse.from_mint_quote(
+                                mint_quote
+                            ).model_dump()
+                        )
             elif kind == JSONRPCSubscriptionKinds.BOLT11_MELT_QUOTE:
                 for filter in filters:
                     melt_quote = await self.db_read.crud.get_melt_quote(
                         quote_id=filter, db=self.db_read.db, conn=conn
                     )
                     if melt_quote:
-                        results.append(PostMeltQuoteResponse.from_melt_quote(melt_quote).model_dump())
+                        results.append(
+                            PostMeltQuoteResponse.from_melt_quote(
+                                melt_quote
+                            ).model_dump()
+                        )
             elif kind == JSONRPCSubscriptionKinds.PROOF_STATE:
                 proofs = await self.db_read.get_proofs_states(Ys=filters, conn=conn)
                 for proof in proofs:
                     results.append(proof.model_dump())
-        
+
         for result in results:
             await self._send_obj(result, subId)

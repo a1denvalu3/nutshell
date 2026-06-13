@@ -677,7 +677,9 @@ async def test_p2pk_sig_all_with_multiple_pubkeys(
     signature2 = wallet2.schnorr_sign_message(message_to_sign)
 
     # Add both signatures to the first proof only (SIG_ALL)
-    send_proofs[0].witness = P2PKWitness(signatures=[signature1, signature2]).model_dump_json()
+    send_proofs[0].witness = P2PKWitness(
+        signatures=[signature1, signature2]
+    ).model_dump_json()
 
     # This should succeed with 2 valid signatures
     promises = await ledger.swap(proofs=send_proofs, outputs=outputs)

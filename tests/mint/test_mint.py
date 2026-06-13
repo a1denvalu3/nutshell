@@ -57,7 +57,10 @@ async def test_privatekeys(ledger: Ledger):
 async def test_keysets(ledger: Ledger):
     assert len(ledger.keysets)
     assert len(list(ledger.keysets.keys()))
-    assert ledger.keyset.id == "01d8a63077d0a51f9855f066409782ffcb322dc8a2265291865221ed06c039f6bc"
+    assert (
+        ledger.keyset.id
+        == "01d8a63077d0a51f9855f066409782ffcb322dc8a2265291865221ed06c039f6bc"
+    )
 
 
 @pytest.mark.asyncio
@@ -136,7 +139,10 @@ async def test_generate_promises(ledger: Ledger):
         == "031422eeffb25319e519c68de000effb294cb362ef713a7cf4832cea7b0452ba6e"
     )
     assert promises[0].amount == 8
-    assert promises[0].id == "01d8a63077d0a51f9855f066409782ffcb322dc8a2265291865221ed06c039f6bc"
+    assert (
+        promises[0].id
+        == "01d8a63077d0a51f9855f066409782ffcb322dc8a2265291865221ed06c039f6bc"
+    )
 
     # DLEQ proof present
     assert promises[0].dleq
@@ -385,7 +391,9 @@ async def test_melt_quote_ttl_setting_overrides_invoice_expiry(ledger: Ledger):
     ttl = 600  # 10 minutes
     settings.melt_quote_ttl = ttl
     try:
-        mint_quote = await ledger.mint_quote(PostMintQuoteRequest(amount=64, unit="sat"))
+        mint_quote = await ledger.mint_quote(
+            PostMintQuoteRequest(amount=64, unit="sat")
+        )
         before = int(time.time())
         melt_quote = await ledger.melt_quote(
             PostMeltQuoteRequest(request=mint_quote.request, unit="sat")

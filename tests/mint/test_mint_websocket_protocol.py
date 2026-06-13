@@ -173,7 +173,7 @@ async def test_init_subscription_sends_initial_snapshots():
     proof_state = ProofState(Y="Y1", state=ProofSpentState.unspent)
 
     from contextlib import asynccontextmanager
-    
+
     @asynccontextmanager
     async def mock_connect():
         yield object()

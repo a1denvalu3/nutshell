@@ -160,10 +160,16 @@ class Proof(BaseModel):
             # overwrite the empty string with None
             proof_dict["dleq"] = None
 
-        if proof_dict.get("pol_receipt") and isinstance(proof_dict["pol_receipt"], dict):
+        if proof_dict.get("pol_receipt") and isinstance(
+            proof_dict["pol_receipt"], dict
+        ):
             proof_dict["pol_receipt"] = PolReceipt(**proof_dict["pol_receipt"])
-        elif proof_dict.get("pol_receipt") and isinstance(proof_dict["pol_receipt"], str):
-            proof_dict["pol_receipt"] = PolReceipt(**json.loads(proof_dict["pol_receipt"]))
+        elif proof_dict.get("pol_receipt") and isinstance(
+            proof_dict["pol_receipt"], str
+        ):
+            proof_dict["pol_receipt"] = PolReceipt(
+                **json.loads(proof_dict["pol_receipt"])
+            )
         else:
             proof_dict["pol_receipt"] = None
 
@@ -453,8 +459,16 @@ class MintQuote(LedgerEvent):
             #  SQLITE: row is timestamp (string)
             created_time = int(row["created_time"]) if row["created_time"] else None
             paid_time = int(row["paid_time"]) if row["paid_time"] else None
-            issued_time = int(row["issued_time"]) if "issued_time" in row.keys() and row["issued_time"] else None
-            last_checked = int(row["last_checked"]) if "last_checked" in row.keys() and row["last_checked"] else None
+            issued_time = (
+                int(row["issued_time"])
+                if "issued_time" in row.keys() and row["issued_time"]
+                else None
+            )
+            last_checked = (
+                int(row["last_checked"])
+                if "last_checked" in row.keys() and row["last_checked"]
+                else None
+            )
         except Exception:
             # POSTGRES: row is datetime.datetime
             created_time = (
@@ -462,10 +476,14 @@ class MintQuote(LedgerEvent):
             )
             paid_time = int(row["paid_time"].timestamp()) if row["paid_time"] else None
             issued_time = (
-                int(row["issued_time"].timestamp()) if "issued_time" in row.keys() and row["issued_time"] else None
+                int(row["issued_time"].timestamp())
+                if "issued_time" in row.keys() and row["issued_time"]
+                else None
             )
             last_checked = (
-                int(row["last_checked"].timestamp()) if "last_checked" in row.keys() and row["last_checked"] else None
+                int(row["last_checked"].timestamp())
+                if "last_checked" in row.keys() and row["last_checked"]
+                else None
             )
         return cls(
             quote=row["quote"],
@@ -949,8 +967,7 @@ class MintKeyset:
     def public_keys_hex(self) -> Dict[int, str]:
         assert self.public_keys, "public keys not set"
         return {
-            int(amount): key.format().hex()
-            for amount, key in self.public_keys.items()
+            int(amount): key.format().hex() for amount, key in self.public_keys.items()
         }
 
     def generate_keys(self):
@@ -991,7 +1008,7 @@ class MintKeyset:
                 self.seed, self.derivation_path, self.amounts
             )
             self.public_keys = derive_pubkeys(self.private_keys, self.amounts)  # type: ignore
-            
+
             if id_in_db:
                 # If loading from DB, preserve existing ID
                 self.id = id_in_db
@@ -1004,14 +1021,19 @@ class MintKeyset:
                 self.seed, self.derivation_path, self.amounts
             )
             self.public_keys = derive_pubkeys(self.private_keys, self.amounts)  # type: ignore
-            
+
             # KEYSETS V2: Use new keyset ID derivation
             if id_in_db:
                 # If loading from DB, preserve existing ID
                 self.id = id_in_db
             else:
                 assert self.public_keys is not None
-                self.id = derive_keyset_id_v2(self.public_keys, self.unit.name, self.final_expiry, self.input_fee_ppk)
+                self.id = derive_keyset_id_v2(
+                    self.public_keys,
+                    self.unit.name,
+                    self.final_expiry,
+                    self.input_fee_ppk,
+                )
                 logger.info(f"Generated keyset v2 ID: {self.id}")
 
 
@@ -1442,9 +1464,9 @@ class AuthProof(BaseModel):
     def to_base64(self):
         serialize_dict = self.model_dump()
         serialize_dict.pop("amount", None)
-        return (
-            self.prefix + base64.urlsafe_b64encode(json.dumps(serialize_dict).encode()).decode().rstrip("=")
-        )
+        return self.prefix + base64.urlsafe_b64encode(
+            json.dumps(serialize_dict).encode()
+        ).decode().rstrip("=")
 
     @classmethod
     def from_base64(cls, base64_str: str):

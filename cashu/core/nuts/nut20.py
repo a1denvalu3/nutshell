@@ -25,7 +25,6 @@ def sign_mint_quote(
     outputs: List[BlindedMessage],
     private_key: str,
 ) -> str:
-
     privkey = PrivateKey(bytes.fromhex(private_key))
     msgbytes = construct_message(quote_id, outputs)
     sig = privkey.sign_schnorr(msgbytes)

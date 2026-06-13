@@ -826,9 +826,9 @@ async def test_melt_race_condition_fixed(wallet: Wallet, ledger: Ledger):
     states = await ledger.db_read.get_proofs_states([p.Y for p in failed_proofs])
 
     # We expect them to NOT be pending if the bug is fixed
-    assert not any(s.pending for s in states), (
-        "Proofs from failed melt request stuck in pending!"
-    )
+    assert not any(
+        s.pending for s in states
+    ), "Proofs from failed melt request stuck in pending!"
 
 
 @pytest.mark.asyncio

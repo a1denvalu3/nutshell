@@ -20,10 +20,24 @@ class InfoContact(_message.Message):
     INFO_FIELD_NUMBER: _ClassVar[int]
     method: str
     info: str
-    def __init__(self, method: _Optional[str] = ..., info: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self, method: _Optional[str] = ..., info: _Optional[str] = ...
+    ) -> None: ...
 
 class GetInfoResponse(_message.Message):
-    __slots__ = ("name", "pubkey", "version", "description", "long_description", "contact", "motd", "icon_url", "urls", "time", "tos_url")
+    __slots__ = (
+        "name",
+        "pubkey",
+        "version",
+        "description",
+        "long_description",
+        "contact",
+        "motd",
+        "icon_url",
+        "urls",
+        "time",
+        "tos_url",
+    )
     NAME_FIELD_NUMBER: _ClassVar[int]
     PUBKEY_FIELD_NUMBER: _ClassVar[int]
     VERSION_FIELD_NUMBER: _ClassVar[int]
@@ -46,7 +60,20 @@ class GetInfoResponse(_message.Message):
     urls: _containers.RepeatedScalarFieldContainer[str]
     time: int
     tos_url: str
-    def __init__(self, name: _Optional[str] = ..., pubkey: _Optional[str] = ..., version: _Optional[str] = ..., description: _Optional[str] = ..., long_description: _Optional[str] = ..., contact: _Optional[_Iterable[_Union[InfoContact, _Mapping]]] = ..., motd: _Optional[str] = ..., icon_url: _Optional[str] = ..., urls: _Optional[_Iterable[str]] = ..., time: _Optional[int] = ..., tos_url: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        name: _Optional[str] = ...,
+        pubkey: _Optional[str] = ...,
+        version: _Optional[str] = ...,
+        description: _Optional[str] = ...,
+        long_description: _Optional[str] = ...,
+        contact: _Optional[_Iterable[_Union[InfoContact, _Mapping]]] = ...,
+        motd: _Optional[str] = ...,
+        icon_url: _Optional[str] = ...,
+        urls: _Optional[_Iterable[str]] = ...,
+        time: _Optional[int] = ...,
+        tos_url: _Optional[str] = ...,
+    ) -> None: ...
 
 class UpdateResponse(_message.Message):
     __slots__ = ()
@@ -88,7 +115,9 @@ class UpdateContactRequest(_message.Message):
     INFO_FIELD_NUMBER: _ClassVar[int]
     method: str
     info: str
-    def __init__(self, method: _Optional[str] = ..., info: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self, method: _Optional[str] = ..., info: _Optional[str] = ...
+    ) -> None: ...
 
 class MintMethodOptions(_message.Message):
     __slots__ = ("description",)
@@ -110,7 +139,15 @@ class UpdateNut04Request(_message.Message):
     min_amount: int
     max_amount: int
     options: MintMethodOptions
-    def __init__(self, unit: _Optional[str] = ..., method: _Optional[str] = ..., disabled: bool = ..., min_amount: _Optional[int] = ..., max_amount: _Optional[int] = ..., options: _Optional[_Union[MintMethodOptions, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        unit: _Optional[str] = ...,
+        method: _Optional[str] = ...,
+        disabled: bool = ...,
+        min_amount: _Optional[int] = ...,
+        max_amount: _Optional[int] = ...,
+        options: _Optional[_Union[MintMethodOptions, _Mapping]] = ...,
+    ) -> None: ...
 
 class MeltMethodOptions(_message.Message):
     __slots__ = ("amountless",)
@@ -132,7 +169,15 @@ class UpdateNut05Request(_message.Message):
     min_amount: int
     max_amount: int
     options: MeltMethodOptions
-    def __init__(self, unit: _Optional[str] = ..., method: _Optional[str] = ..., disabled: bool = ..., min_amount: _Optional[int] = ..., max_amount: _Optional[int] = ..., options: _Optional[_Union[MeltMethodOptions, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        unit: _Optional[str] = ...,
+        method: _Optional[str] = ...,
+        disabled: bool = ...,
+        min_amount: _Optional[int] = ...,
+        max_amount: _Optional[int] = ...,
+        options: _Optional[_Union[MeltMethodOptions, _Mapping]] = ...,
+    ) -> None: ...
 
 class UpdateQuoteTtlRequest(_message.Message):
     __slots__ = ("mint_ttl", "melt_ttl")
@@ -140,7 +185,9 @@ class UpdateQuoteTtlRequest(_message.Message):
     MELT_TTL_FIELD_NUMBER: _ClassVar[int]
     mint_ttl: int
     melt_ttl: int
-    def __init__(self, mint_ttl: _Optional[int] = ..., melt_ttl: _Optional[int] = ...) -> None: ...
+    def __init__(
+        self, mint_ttl: _Optional[int] = ..., melt_ttl: _Optional[int] = ...
+    ) -> None: ...
 
 class GetQuoteTtlRequest(_message.Message):
     __slots__ = ("quote_id",)
@@ -155,7 +202,21 @@ class GetQuoteTtlResponse(_message.Message):
     def __init__(self, expiry: _Optional[int] = ...) -> None: ...
 
 class Nut04Quote(_message.Message):
-    __slots__ = ("quote", "method", "request", "checking_id", "unit", "amount", "state", "created_time", "paid_time", "expiry", "last_checked", "pubkey", "issued_time")
+    __slots__ = (
+        "quote",
+        "method",
+        "request",
+        "checking_id",
+        "unit",
+        "amount",
+        "state",
+        "created_time",
+        "paid_time",
+        "expiry",
+        "last_checked",
+        "pubkey",
+        "issued_time",
+    )
     QUOTE_FIELD_NUMBER: _ClassVar[int]
     METHOD_FIELD_NUMBER: _ClassVar[int]
     REQUEST_FIELD_NUMBER: _ClassVar[int]
@@ -182,7 +243,22 @@ class Nut04Quote(_message.Message):
     last_checked: int
     pubkey: str
     issued_time: int
-    def __init__(self, quote: _Optional[str] = ..., method: _Optional[str] = ..., request: _Optional[str] = ..., checking_id: _Optional[str] = ..., unit: _Optional[str] = ..., amount: _Optional[int] = ..., state: _Optional[str] = ..., created_time: _Optional[int] = ..., paid_time: _Optional[int] = ..., expiry: _Optional[int] = ..., last_checked: _Optional[int] = ..., pubkey: _Optional[str] = ..., issued_time: _Optional[int] = ...) -> None: ...
+    def __init__(
+        self,
+        quote: _Optional[str] = ...,
+        method: _Optional[str] = ...,
+        request: _Optional[str] = ...,
+        checking_id: _Optional[str] = ...,
+        unit: _Optional[str] = ...,
+        amount: _Optional[int] = ...,
+        state: _Optional[str] = ...,
+        created_time: _Optional[int] = ...,
+        paid_time: _Optional[int] = ...,
+        expiry: _Optional[int] = ...,
+        last_checked: _Optional[int] = ...,
+        pubkey: _Optional[str] = ...,
+        issued_time: _Optional[int] = ...,
+    ) -> None: ...
 
 class BlindedMessage(_message.Message):
     __slots__ = ("amount", "id", "B_", "witness")
@@ -194,7 +270,13 @@ class BlindedMessage(_message.Message):
     id: str
     B_: str
     witness: str
-    def __init__(self, amount: _Optional[int] = ..., id: _Optional[str] = ..., B_: _Optional[str] = ..., witness: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self,
+        amount: _Optional[int] = ...,
+        id: _Optional[str] = ...,
+        B_: _Optional[str] = ...,
+        witness: _Optional[str] = ...,
+    ) -> None: ...
 
 class DLEQ(_message.Message):
     __slots__ = ("e", "s")
@@ -214,10 +296,32 @@ class BlindedSignature(_message.Message):
     amount: int
     C_: str
     dleq: DLEQ
-    def __init__(self, id: _Optional[str] = ..., amount: _Optional[int] = ..., C_: _Optional[str] = ..., dleq: _Optional[_Union[DLEQ, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self,
+        id: _Optional[str] = ...,
+        amount: _Optional[int] = ...,
+        C_: _Optional[str] = ...,
+        dleq: _Optional[_Union[DLEQ, _Mapping]] = ...,
+    ) -> None: ...
 
 class Nut05Quote(_message.Message):
-    __slots__ = ("quote", "method", "request", "checking_id", "unit", "amount", "fee_reserve", "state", "created_time", "paid_time", "fee_paid", "payment_preimage", "expiry", "outputs", "change")
+    __slots__ = (
+        "quote",
+        "method",
+        "request",
+        "checking_id",
+        "unit",
+        "amount",
+        "fee_reserve",
+        "state",
+        "created_time",
+        "paid_time",
+        "fee_paid",
+        "payment_preimage",
+        "expiry",
+        "outputs",
+        "change",
+    )
     QUOTE_FIELD_NUMBER: _ClassVar[int]
     METHOD_FIELD_NUMBER: _ClassVar[int]
     REQUEST_FIELD_NUMBER: _ClassVar[int]
@@ -248,7 +352,24 @@ class Nut05Quote(_message.Message):
     expiry: int
     outputs: _containers.RepeatedCompositeFieldContainer[BlindedMessage]
     change: _containers.RepeatedCompositeFieldContainer[BlindedSignature]
-    def __init__(self, quote: _Optional[str] = ..., method: _Optional[str] = ..., request: _Optional[str] = ..., checking_id: _Optional[str] = ..., unit: _Optional[str] = ..., amount: _Optional[int] = ..., fee_reserve: _Optional[int] = ..., state: _Optional[str] = ..., created_time: _Optional[int] = ..., paid_time: _Optional[int] = ..., fee_paid: _Optional[int] = ..., payment_preimage: _Optional[str] = ..., expiry: _Optional[int] = ..., outputs: _Optional[_Iterable[_Union[BlindedMessage, _Mapping]]] = ..., change: _Optional[_Iterable[_Union[BlindedSignature, _Mapping]]] = ...) -> None: ...
+    def __init__(
+        self,
+        quote: _Optional[str] = ...,
+        method: _Optional[str] = ...,
+        request: _Optional[str] = ...,
+        checking_id: _Optional[str] = ...,
+        unit: _Optional[str] = ...,
+        amount: _Optional[int] = ...,
+        fee_reserve: _Optional[int] = ...,
+        state: _Optional[str] = ...,
+        created_time: _Optional[int] = ...,
+        paid_time: _Optional[int] = ...,
+        fee_paid: _Optional[int] = ...,
+        payment_preimage: _Optional[str] = ...,
+        expiry: _Optional[int] = ...,
+        outputs: _Optional[_Iterable[_Union[BlindedMessage, _Mapping]]] = ...,
+        change: _Optional[_Iterable[_Union[BlindedSignature, _Mapping]]] = ...,
+    ) -> None: ...
 
 class GetNut04QuoteRequest(_message.Message):
     __slots__ = ("quote_id",)
@@ -260,7 +381,9 @@ class GetNut04QuoteResponse(_message.Message):
     __slots__ = ("quote",)
     QUOTE_FIELD_NUMBER: _ClassVar[int]
     quote: Nut04Quote
-    def __init__(self, quote: _Optional[_Union[Nut04Quote, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self, quote: _Optional[_Union[Nut04Quote, _Mapping]] = ...
+    ) -> None: ...
 
 class GetNut05QuoteRequest(_message.Message):
     __slots__ = ("quote_id",)
@@ -272,7 +395,9 @@ class GetNut05QuoteResponse(_message.Message):
     __slots__ = ("quote",)
     QUOTE_FIELD_NUMBER: _ClassVar[int]
     quote: Nut05Quote
-    def __init__(self, quote: _Optional[_Union[Nut05Quote, _Mapping]] = ...) -> None: ...
+    def __init__(
+        self, quote: _Optional[_Union[Nut05Quote, _Mapping]] = ...
+    ) -> None: ...
 
 class UpdateQuoteRequest(_message.Message):
     __slots__ = ("quote_id", "state")
@@ -280,7 +405,9 @@ class UpdateQuoteRequest(_message.Message):
     STATE_FIELD_NUMBER: _ClassVar[int]
     quote_id: str
     state: str
-    def __init__(self, quote_id: _Optional[str] = ..., state: _Optional[str] = ...) -> None: ...
+    def __init__(
+        self, quote_id: _Optional[str] = ..., state: _Optional[str] = ...
+    ) -> None: ...
 
 class RotateNextKeysetRequest(_message.Message):
     __slots__ = ("unit", "max_order", "input_fee_ppk", "final_expiry")
@@ -292,7 +419,13 @@ class RotateNextKeysetRequest(_message.Message):
     max_order: int
     input_fee_ppk: int
     final_expiry: int
-    def __init__(self, unit: _Optional[str] = ..., max_order: _Optional[int] = ..., input_fee_ppk: _Optional[int] = ..., final_expiry: _Optional[int] = ...) -> None: ...
+    def __init__(
+        self,
+        unit: _Optional[str] = ...,
+        max_order: _Optional[int] = ...,
+        input_fee_ppk: _Optional[int] = ...,
+        final_expiry: _Optional[int] = ...,
+    ) -> None: ...
 
 class RotateNextKeysetResponse(_message.Message):
     __slots__ = ("id", "unit", "max_order", "input_fee_ppk", "final_expiry")
@@ -306,7 +439,14 @@ class RotateNextKeysetResponse(_message.Message):
     max_order: int
     input_fee_ppk: int
     final_expiry: int
-    def __init__(self, id: _Optional[str] = ..., unit: _Optional[str] = ..., max_order: _Optional[int] = ..., input_fee_ppk: _Optional[int] = ..., final_expiry: _Optional[int] = ...) -> None: ...
+    def __init__(
+        self,
+        id: _Optional[str] = ...,
+        unit: _Optional[str] = ...,
+        max_order: _Optional[int] = ...,
+        input_fee_ppk: _Optional[int] = ...,
+        final_expiry: _Optional[int] = ...,
+    ) -> None: ...
 
 class UpdateLightningFeeRequest(_message.Message):
     __slots__ = ("fee_percent", "fee_min_reserve")
@@ -314,7 +454,9 @@ class UpdateLightningFeeRequest(_message.Message):
     FEE_MIN_RESERVE_FIELD_NUMBER: _ClassVar[int]
     fee_percent: float
     fee_min_reserve: int
-    def __init__(self, fee_percent: _Optional[float] = ..., fee_min_reserve: _Optional[int] = ...) -> None: ...
+    def __init__(
+        self, fee_percent: _Optional[float] = ..., fee_min_reserve: _Optional[int] = ...
+    ) -> None: ...
 
 class UpdateAuthLimitsRequest(_message.Message):
     __slots__ = ("auth_rate_limit_per_minute", "auth_max_blind_tokens")
@@ -322,4 +464,8 @@ class UpdateAuthLimitsRequest(_message.Message):
     AUTH_MAX_BLIND_TOKENS_FIELD_NUMBER: _ClassVar[int]
     auth_rate_limit_per_minute: int
     auth_max_blind_tokens: int
-    def __init__(self, auth_rate_limit_per_minute: _Optional[int] = ..., auth_max_blind_tokens: _Optional[int] = ...) -> None: ...
+    def __init__(
+        self,
+        auth_rate_limit_per_minute: _Optional[int] = ...,
+        auth_max_blind_tokens: _Optional[int] = ...,
+    ) -> None: ...
