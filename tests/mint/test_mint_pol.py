@@ -1,5 +1,6 @@
 import datetime
 import hashlib
+import json
 from types import SimpleNamespace
 
 import httpx
@@ -710,4 +711,300 @@ async def test_pol_forget_probability_debug_feature(monkeypatch):
     # Both trees should have 1 active leaf because none were forgotten
     assert len(t_issued_kept.tree_levels[0]) == 1
     assert len(t_spent_kept.tree_levels[0]) == 1
+
+
+@pytest.mark.asyncio
+async def test_pol_cheat_value_probability_debug_feature(monkeypatch):
+    from cashu.mint.pol import build_trees_for_keyset_at_timestamp, _FALLBACK_MEM_CACHE
+    from cashu.core.settings import settings
+
+    # Ensure fallback cache is cleared for this test
+    _FALLBACK_MEM_CACHE.clear()
+
+    # Disable Redis cache to avoid caching interference
+    monkeypatch.setattr(settings, "mint_redis_cache_enabled", False)
+
+    # 1. Test with cheat probability = 1.0 (always cheat)
+    monkeypatch.setattr(settings, "mint_pol_cheat_value_probability", 1.0)
+    monkeypatch.setattr(settings, "mint_pol_forget_probability", 0.0)
+
+    async def mock_fetchall(query, params=None):
+        if "promises" in query:
+            return [{"amount": 100, "b_": "02b1a", "created": "2026-06-13 12:00:00"}]
+        if "proofs_used" in query:
+            return [{"amount": 50, "secret": "secret_1", "y": "02c2b", "created": "2026-06-13 12:00:00"}]
+        return []
+
+    mock_ledger = SimpleNamespace(
+        db=SimpleNamespace(fetchall=mock_fetchall, table_with_schema=lambda t: t)
+    )
+
+    t_issued_cheat, t_spent_cheat = await build_trees_for_keyset_at_timestamp(
+        mock_ledger, "cheat_keyset", epoch_index=30
+    )
+
+    # Both trees should have 1 active leaf, but their amounts must be changed (different from 100 and 50)
+    issued_val = list(t_issued_cheat.tree_levels[0].values())[0][1]
+    spent_val = list(t_spent_cheat.tree_levels[0].values())[0][1]
+
+    assert issued_val != 100
+    assert spent_val != 50
+
+    # 2. Test with cheat probability = 0.0 (never cheat)
+    _FALLBACK_MEM_CACHE.clear()
+    monkeypatch.setattr(settings, "mint_pol_cheat_value_probability", 0.0)
+
+    t_issued_normal, t_spent_normal = await build_trees_for_keyset_at_timestamp(
+        mock_ledger, "cheat_keyset", epoch_index=30
+    )
+
+    issued_val_normal = list(t_issued_normal.tree_levels[0].values())[0][1]
+    spent_val_normal = list(t_spent_normal.tree_levels[0].values())[0][1]
+
+    assert issued_val_normal == 100
+    assert spent_val_normal == 50
+
+
+@respx.mock
+def test_pol_wallet_audit_detects_value_cheating(monkeypatch):
+    keyset_id = "test_keyset_pol_cheat"
+    mock_keyset = SimpleNamespace(
+        id=keyset_id,
+        active=False,
+        private_keys={},
+        final_expiry=None,
+    )
+
+    async def mock_fetchone(query, values=None):
+        if "pol_epochs" in query:
+            return {
+                "keyset_id": keyset_id,
+                "epoch_index": 1,
+                "timestamp": datetime.datetime.now(datetime.timezone.utc),
+                "root_issued_hash": "00" * 32,
+                "root_spent_hash": "00" * 32,
+                "root_issued_sum": 300,
+                "root_spent_sum": 200,
+                "outstanding_balance": 100,
+                "ots_receipt": "010203",
+                "signature": "mock_sig",
+            }
+        return None
+
+    mock_db = SimpleNamespace(
+        fetchall=lambda q, v=None: [],
+        fetchone=mock_fetchone,
+        execute=lambda q, v=None: None,
+        table_with_schema=lambda t: t,
+    )
+
+    monkeypatch.setattr(
+        router_module,
+        "ledger",
+        SimpleNamespace(keysets={keyset_id: mock_keyset}, db=mock_db),
+    )
+
+    secret_unspent = "secret_unspent"
+    secret_spent = "secret_spent"
+    r_priv = PrivateKey(b"\x01" * 32)
+    B_unspent, _ = b_dhke.step1_alice(secret_unspent, r_priv)
+    B_spent, _ = b_dhke.step1_alice(secret_spent, r_priv)
+    
+    expected_b_unspent_hex = B_unspent.format().hex()
+    expected_b_spent_hex = B_spent.format().hex()
+    
+    expected_y_unspent_hex = hash_to_curve(secret_unspent.encode("utf-8")).format().hex()
+    expected_y_spent_hex = hash_to_curve(secret_spent.encode("utf-8")).format().hex()
+
+    respx.get(f"http://localhost:3337/v1/pol/{keyset_id}/manifest").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "keyset_id": keyset_id,
+                "epoch_index": 1,
+                "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                "signing_pubkey": "00" * 33,
+                "root_issued": {"hash": "00" * 32, "sum": 300},
+                "root_spent": {"hash": "00" * 32, "sum": 200},
+                "outstanding_balance": 100,
+                "ots_receipt": "010203",
+                "mint_signature": "mock_sig",
+            },
+        )
+    )
+
+    # 1. Test Spent Tree Cheat Detection (spent_inclusion_value)
+    # First query asks for [expected_y_unspent_hex] -> returns value 0 (unspent)
+    respx.post(f"http://localhost:3337/v1/pol/{keyset_id}/proofs/spent", json={"ys": [expected_y_unspent_hex]}).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "proofs": [
+                    {
+                        "item": expected_y_unspent_hex,
+                        "index": "00" * 32,
+                        "value": 0,
+                        "compact_mask": "0x0",
+                        "siblings": [],
+                    }
+                ]
+            },
+        )
+    )
+
+    # Second query asks for [expected_y_spent_hex] -> returns value 42 (Cheat!)
+    respx.post(f"http://localhost:3337/v1/pol/{keyset_id}/proofs/spent", json={"ys": [expected_y_spent_hex]}).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "proofs": [
+                    {
+                        "item": expected_y_spent_hex,
+                        "index": "00" * 32,
+                        "value": 42,  # Cheat!
+                        "compact_mask": "0x0",
+                        "siblings": [],
+                    }
+                ]
+            },
+        )
+    )
+
+    # Issued Tree returns valid values for both (100)
+    respx.post(f"http://localhost:3337/v1/pol/{keyset_id}/proofs/issued").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "proofs": [
+                    {
+                        "item": expected_b_unspent_hex,
+                        "index": "00" * 32,
+                        "value": 100,
+                        "compact_mask": "0x0",
+                        "siblings": [],
+                    },
+                    {
+                        "item": expected_b_spent_hex,
+                        "index": "00" * 32,
+                        "value": 100,
+                        "compact_mask": "0x0",
+                        "siblings": [],
+                    }
+                ]
+            },
+        )
+    )
+
+    mock_receipt = PolReceipt(target_epoch=1, signature="mock_receipt_sig")
+
+    async def mock_load_proofs(reload=True):
+        return None
+
+    async def mock_generate_determinstic_secret(counter, keyset_id):
+        if counter == 10:
+            return (b"secret_unspent", b"\x01" * 32, f"HMAC-SHA256:{keyset_id}:10")
+        if counter == 20:
+            return (b"secret_spent", b"\x01" * 32, f"HMAC-SHA256:{keyset_id}:20")
+        return (b"secret_other", b"\x01" * 32, f"HMAC-SHA256:{keyset_id}:{counter}")
+
+    mock_wallet = SimpleNamespace(
+        url="http://localhost:3337",
+        load_proofs=mock_load_proofs,
+        db=mock_db,
+        proofs=[
+            SimpleNamespace(
+                id=keyset_id,
+                amount=100,
+                secret="secret_unspent",
+                C="C_hex_unspent",
+                derivation_path=f"HMAC-SHA256:{keyset_id}:10",
+                pol_receipt=mock_receipt,
+            )
+        ],
+        generate_determinstic_secret=mock_generate_determinstic_secret,
+    )
+
+    # We mock the db.fetchall inside audit to return 1 spent proof
+    async def mock_fetchall_spent(query, values=None):
+        return [
+            {
+                "amount": 100,
+                "C": "C_hex_spent",
+                "secret": "secret_spent",
+                "id": keyset_id,
+                "derivation_path": f"HMAC-SHA256:{keyset_id}:20",
+                "pol_receipt": json.dumps(mock_receipt.model_dump()),
+            }
+        ]
+    mock_db.fetchall = mock_fetchall_spent
+
+    mock_wallet.verify_solvency = lambda k, e=None: Wallet.verify_solvency(
+        mock_wallet, k, e
+    )
+    mock_wallet._verify_ots_anchoring = lambda o: Wallet._verify_ots_anchoring(
+        mock_wallet, o
+    )
+
+    obj_ctx = {
+        "HOST": "http://localhost:3337",
+        "WALLET_NAME": "test_wallet",
+        "WALLET": mock_wallet,
+    }
+
+    runner = CliRunner()
+    result = runner.invoke(pol_group, ["audit", keyset_id], obj=obj_ctx)
+
+    assert result.exception is None
+    assert "spent_inclusion_value" in result.output
+    assert "Falsely registered spent amount as 42" in result.output
+
+    # 2. Test Issued Tree Cheat Detection (issued_inclusion_value)
+    # The spent proof matches value 100, but the issued promise returns value 42 instead of 100
+    respx.post(f"http://localhost:3337/v1/pol/{keyset_id}/proofs/spent", json={"ys": [expected_y_spent_hex]}).mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "proofs": [
+                    {
+                        "item": expected_y_spent_hex,
+                        "index": "00" * 32,
+                        "value": 100,  # Valid Spent Tree value
+                        "compact_mask": "0x0",
+                        "siblings": [],
+                    }
+                ]
+            },
+        )
+    )
+
+    respx.post(f"http://localhost:3337/v1/pol/{keyset_id}/proofs/issued").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "proofs": [
+                    {
+                        "item": expected_b_unspent_hex,
+                        "index": "00" * 32,
+                        "value": 42,  # Cheat!
+                        "compact_mask": "0x0",
+                        "siblings": [],
+                    },
+                    {
+                        "item": expected_b_spent_hex,
+                        "index": "00" * 32,
+                        "value": 100,
+                        "compact_mask": "0x0",
+                        "siblings": [],
+                    }
+                ]
+            },
+        )
+    )
+
+    result2 = runner.invoke(pol_group, ["audit", keyset_id], obj=obj_ctx)
+
+    assert result2.exception is None
+    assert "issued_inclusion_value" in result2.output
+    assert "Falsely registered issued amount as 42" in result2.output
+
 

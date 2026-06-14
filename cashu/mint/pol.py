@@ -313,6 +313,18 @@ async def build_trees_for_keyset_at_timestamp(
             )
             continue
 
+        # PoL Debug: Randomly cheat/alter the value of the promise
+        cheat_prob = getattr(settings, "mint_pol_cheat_value_probability", 0.0)
+        if cheat_prob > 0.0 and random.random() < cheat_prob:
+            original_amount = amount
+            diff = random.choice([-1, 1])
+            amount = max(0, amount + diff)
+            if amount == original_amount:
+                amount += 1
+            logger.warning(
+                f"PoL DEBUG: Cheating by changing promise value from {original_amount} to {amount} for b_hex={b_hex} in Issued Tree."
+            )
+
         h_b = hashlib.sha256(b_hex.encode("utf-8")).digest()
         idx_int = int.from_bytes(h_b, "big")
         issued_leaves[idx_int] = (h_b, amount)
@@ -342,6 +354,18 @@ async def build_trees_for_keyset_at_timestamp(
                 f"PoL DEBUG: Randomly forgetting to include spent proof with secret={secret} / y_hex={y_hex} in Spent Tree."
             )
             continue
+
+        # PoL Debug: Randomly cheat/alter the value of the spent proof
+        cheat_prob = getattr(settings, "mint_pol_cheat_value_probability", 0.0)
+        if cheat_prob > 0.0 and random.random() < cheat_prob:
+            original_amount = amount
+            diff = random.choice([-1, 1])
+            amount = max(0, amount + diff)
+            if amount == original_amount:
+                amount += 1
+            logger.warning(
+                f"PoL DEBUG: Cheating by changing spent proof value from {original_amount} to {amount} for secret={secret} / y_hex={y_hex} in Spent Tree."
+            )
 
         h_y = hashlib.sha256(y_hex.encode("utf-8")).digest()
         idx_int = int.from_bytes(h_y, "big")

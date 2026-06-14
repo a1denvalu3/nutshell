@@ -101,6 +101,12 @@ class MintSettings(CashuSettings):
         description="Probability (0.0 to 1.0) of randomly forgetting to include some proofs/promises in the Merkle-Sum Trees for testing and debugging.",
     )
 
+    mint_pol_cheat_value_probability: float = Field(
+        default=0.0,
+        title="PoL Cheat Value Probability",
+        description="Probability (0.0 to 1.0) of randomly altering (adding/subtracting) the value of included proofs/promises in the Merkle-Sum Trees for testing and debugging.",
+    )
+
     mint_retry_exponential_backoff_base_delay: int = Field(default=1)
     mint_retry_exponential_backoff_max_delay: int = Field(default=10)
 

@@ -2098,6 +2098,20 @@ class Wallet(
                 continue
 
             if value != orig_proof.amount:
+                challenges.append(
+                    {
+                        "keyset_id": keyset_id,
+                        "epoch_index": epoch_idx,
+                        "item_type": "issued_inclusion_value",
+                        "item": b_hex,
+                        "index": index_hex,
+                        "value": orig_proof.amount,
+                        "signature": orig_proof.C,
+                        "secret": orig_proof.secret,
+                        "pol_receipt": _get_receipt_dict(orig_proof),
+                        "error": f"Falsely registered issued amount as {value} instead of {orig_proof.amount}",
+                    }
+                )
                 continue
 
             try:
