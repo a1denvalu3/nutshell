@@ -1,6 +1,7 @@
 import datetime
 import hashlib
 import pickle
+import random
 import time
 from typing import Dict, List, Optional, Tuple
 
@@ -303,6 +304,15 @@ async def build_trees_for_keyset_at_timestamp(
 
         amount = int(row["amount"])
         b_hex = row["b_"]
+
+        # PoL Debug: Randomly forget to include with certain probability
+        forget_prob = getattr(settings, "mint_pol_forget_probability", 0.0)
+        if forget_prob > 0.0 and random.random() < forget_prob:
+            logger.warning(
+                f"PoL DEBUG: Randomly forgetting to include promise with b_hex={b_hex} in Issued Tree."
+            )
+            continue
+
         h_b = hashlib.sha256(b_hex.encode("utf-8")).digest()
         idx_int = int.from_bytes(h_b, "big")
         issued_leaves[idx_int] = (h_b, amount)
@@ -324,6 +334,14 @@ async def build_trees_for_keyset_at_timestamp(
         y_hex = row.get("y")
         if not y_hex:
             y_hex = hash_to_curve(secret.encode("utf-8")).format().hex()
+
+        # PoL Debug: Randomly forget to include with certain probability
+        forget_prob = getattr(settings, "mint_pol_forget_probability", 0.0)
+        if forget_prob > 0.0 and random.random() < forget_prob:
+            logger.warning(
+                f"PoL DEBUG: Randomly forgetting to include spent proof with secret={secret} / y_hex={y_hex} in Spent Tree."
+            )
+            continue
 
         h_y = hashlib.sha256(y_hex.encode("utf-8")).digest()
         idx_int = int.from_bytes(h_y, "big")

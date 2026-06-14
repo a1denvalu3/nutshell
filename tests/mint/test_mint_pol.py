@@ -664,3 +664,50 @@ async def test_build_trees_caching(monkeypatch):
     # Verify the values reconstructed from Redis match
     assert r1_issued.root == r2_issued.root
     assert r1_spent.root == r2_spent.root
+
+
+@pytest.mark.asyncio
+async def test_pol_forget_probability_debug_feature(monkeypatch):
+    from cashu.mint.pol import build_trees_for_keyset_at_timestamp, _FALLBACK_MEM_CACHE
+    from cashu.core.settings import settings
+
+    # Ensure fallback cache is cleared for this test
+    _FALLBACK_MEM_CACHE.clear()
+
+    # Disable Redis cache to avoid caching interference
+    monkeypatch.setattr(settings, "mint_redis_cache_enabled", False)
+
+    # 1. Test with forget probability = 1.0 (always forget)
+    monkeypatch.setattr(settings, "mint_pol_forget_probability", 1.0)
+
+    async def mock_fetchall(query, params=None):
+        if "promises" in query:
+            return [{"amount": 100, "b_": "02b1a", "created": "2026-06-13 12:00:00"}]
+        if "proofs_used" in query:
+            return [{"amount": 50, "secret": "secret_1", "y": "02c2b", "created": "2026-06-13 12:00:00"}]
+        return []
+
+    mock_ledger = SimpleNamespace(
+        db=SimpleNamespace(fetchall=mock_fetchall, table_with_schema=lambda t: t)
+    )
+
+    t_issued_forgot, t_spent_forgot = await build_trees_for_keyset_at_timestamp(
+        mock_ledger, "forget_keyset", epoch_index=20
+    )
+
+    # Both trees should have 0 active leaves because all were forgotten
+    assert len(t_issued_forgot.tree_levels[0]) == 0
+    assert len(t_spent_forgot.tree_levels[0]) == 0
+
+    # 2. Test with forget probability = 0.0 (never forget)
+    _FALLBACK_MEM_CACHE.clear()
+    monkeypatch.setattr(settings, "mint_pol_forget_probability", 0.0)
+
+    t_issued_kept, t_spent_kept = await build_trees_for_keyset_at_timestamp(
+        mock_ledger, "forget_keyset", epoch_index=20
+    )
+
+    # Both trees should have 1 active leaf because none were forgotten
+    assert len(t_issued_kept.tree_levels[0]) == 1
+    assert len(t_spent_kept.tree_levels[0]) == 1
+

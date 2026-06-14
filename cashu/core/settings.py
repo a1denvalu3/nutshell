@@ -95,6 +95,12 @@ class MintSettings(CashuSettings):
         description="If True, generate mock OTS receipts without making network requests.",
     )
 
+    mint_pol_forget_probability: float = Field(
+        default=0.0,
+        title="PoL Forget Probability",
+        description="Probability (0.0 to 1.0) of randomly forgetting to include some proofs/promises in the Merkle-Sum Trees for testing and debugging.",
+    )
+
     mint_retry_exponential_backoff_base_delay: int = Field(default=1)
     mint_retry_exponential_backoff_max_delay: int = Field(default=10)
 
