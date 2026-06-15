@@ -167,6 +167,19 @@ async def test_pol_receipt_generation(monkeypatch):
     assert receipt_out.target_epoch == 1
     assert receipt_out.signature is not None
     assert isinstance(receipt_out.signature, str)
+    assert len(receipt_out.signature) == 128  # 64 bytes hex-encoded
+
+    from coincurve import PublicKeyXOnly
+    priv_bytes_out = hashlib.sha256(
+        b"fallback_pol_seed_test_keyset_100"
+    ).digest()
+    pub_key_out = PrivateKey(priv_bytes_out).public_key
+    pub_key_xonly_out = PublicKeyXOnly(pub_key_out.format()[1:])
+    msg_out = "02b1a:1".encode("utf-8")
+    assert pub_key_xonly_out.verify(
+        bytes.fromhex(receipt_out.signature),
+        hashlib.sha256(msg_out).digest(),
+    )
 
     # 3. Test generate_spent_receipt for individual spent input
     receipt_in = await generate_spent_receipt(
@@ -175,6 +188,18 @@ async def test_pol_receipt_generation(monkeypatch):
     assert receipt_in.target_epoch == 1
     assert receipt_in.signature is not None
     assert isinstance(receipt_in.signature, str)
+    assert len(receipt_in.signature) == 128  # 64 bytes hex-encoded
+
+    priv_bytes_in = hashlib.sha256(
+        b"fallback_pol_seed_test_keyset_50"
+    ).digest()
+    pub_key_in = PrivateKey(priv_bytes_in).public_key
+    pub_key_xonly_in = PublicKeyXOnly(pub_key_in.format()[1:])
+    msg_in = "03c4f:1".encode("utf-8")
+    assert pub_key_xonly_in.verify(
+        bytes.fromhex(receipt_in.signature),
+        hashlib.sha256(msg_in).digest(),
+    )
 
 
 @respx.mock
@@ -584,8 +609,8 @@ def test_pol_audit_challenge_with_receipts(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_build_trees_caching(monkeypatch):
-    from cashu.mint.pol import build_trees_for_keyset_at_timestamp, _FALLBACK_MEM_CACHE
     from cashu.core.settings import settings
+    from cashu.mint.pol import _FALLBACK_MEM_CACHE, build_trees_for_keyset_at_timestamp
 
     # Ensure fallback cache is cleared for this test
     _FALLBACK_MEM_CACHE.clear()
@@ -669,8 +694,8 @@ async def test_build_trees_caching(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_pol_forget_probability_debug_feature(monkeypatch):
-    from cashu.mint.pol import build_trees_for_keyset_at_timestamp, _FALLBACK_MEM_CACHE
     from cashu.core.settings import settings
+    from cashu.mint.pol import _FALLBACK_MEM_CACHE, build_trees_for_keyset_at_timestamp
 
     # Ensure fallback cache is cleared for this test
     _FALLBACK_MEM_CACHE.clear()
@@ -715,8 +740,8 @@ async def test_pol_forget_probability_debug_feature(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_pol_cheat_value_probability_debug_feature(monkeypatch):
-    from cashu.mint.pol import build_trees_for_keyset_at_timestamp, _FALLBACK_MEM_CACHE
     from cashu.core.settings import settings
+    from cashu.mint.pol import _FALLBACK_MEM_CACHE, build_trees_for_keyset_at_timestamp
 
     # Ensure fallback cache is cleared for this test
     _FALLBACK_MEM_CACHE.clear()

@@ -13,7 +13,6 @@ from ..core.base import PolReceipt
 from ..core.crypto.b_dhke import hash_to_curve
 from ..core.settings import settings
 
-
 _FALLBACK_MEM_CACHE: Dict[str, Tuple["SparseMerkleSumTree", "SparseMerkleSumTree"]] = {}
 
 
@@ -159,7 +158,9 @@ async def generate_output_receipt(
         ).digest()
         private_key = PrivateKey(priv_bytes)
 
-    sig = private_key.sign(msg.encode("utf-8")).hex()
+    sig = private_key.sign_schnorr(
+        hashlib.sha256(msg.encode("utf-8")).digest()
+    ).hex()
     return PolReceipt(target_epoch=target_epoch, signature=sig)
 
 
@@ -179,7 +180,9 @@ async def generate_spent_receipt(
         ).digest()
         private_key = PrivateKey(priv_bytes)
 
-    sig = private_key.sign(msg.encode("utf-8")).hex()
+    sig = private_key.sign_schnorr(
+        hashlib.sha256(msg.encode("utf-8")).digest()
+    ).hex()
     return PolReceipt(target_epoch=target_epoch, signature=sig)
 
 
