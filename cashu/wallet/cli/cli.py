@@ -25,7 +25,6 @@ from ...core.base import (
     Method,
     MintQuote,
     MintQuoteState,
-    Proof,
     TokenV4,
     Unit,
 )
@@ -1656,10 +1655,8 @@ async def pol_audit_cmd(ctx: Context, keyset_id: Optional[str], epoch: Optional[
     await wallet.load_proofs(reload=True)
 
     try:
-        spent_rows = await wallet.db.fetchall(
-            f"SELECT amount, C, secret, id, derivation_path, mint_id, melt_id FROM {wallet.db.table_with_schema('proofs_used')}"
-        )
-        spent_proofs = [Proof.from_dict(dict(r)) for r in spent_rows]
+        from cashu.wallet.crud import get_proofs
+        spent_proofs = await get_proofs(db=wallet.db, table="proofs_used")
     except Exception:
         spent_proofs = []
 

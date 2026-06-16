@@ -450,6 +450,7 @@ def test_pol_audit_challenge_missing_and_invalid_proofs(monkeypatch):
     mock_wallet._verify_ots_anchoring = lambda o: Wallet._verify_ots_anchoring(
         mock_wallet, o
     )
+    mock_wallet._verify_pol_receipt = lambda p, b_or_y: True
 
     obj_ctx = {
         "HOST": "http://localhost:3337",
@@ -593,6 +594,7 @@ def test_pol_audit_challenge_with_receipts(monkeypatch):
     mock_wallet._verify_ots_anchoring = lambda o: Wallet._verify_ots_anchoring(
         mock_wallet, o
     )
+    mock_wallet._verify_pol_receipt = lambda p, b_or_y: True
 
     obj_ctx = {
         "HOST": "http://localhost:3337",
@@ -970,6 +972,7 @@ def test_pol_wallet_audit_detects_value_cheating(monkeypatch):
     mock_wallet._verify_ots_anchoring = lambda o: Wallet._verify_ots_anchoring(
         mock_wallet, o
     )
+    mock_wallet._verify_pol_receipt = lambda p, b_or_y: True
 
     obj_ctx = {
         "HOST": "http://localhost:3337",
@@ -1098,6 +1101,134 @@ def test_pol_endpoints_rate_limiting(monkeypatch):
     # Request 3 -> 429
     resp = client.get(f"/v1/pol/{keyset_id}/manifest", headers=headers)
     assert resp.status_code == 429
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_pol_endpoints_signature_verification_failure(monkeypatch):
+    keyset_id = "test_keyset_pol"
+    epoch_timestamp = datetime.datetime.now(datetime.timezone.utc)
+
+    from coincurve import PrivateKey as CoincurvePrivateKey
+    private_key_obj = CoincurvePrivateKey()
+    public_key_obj = private_key_obj.public_key
+
+    from cashu.core.base import WalletKeyset as RealWalletKeyset
+    mock_keyset = RealWalletKeyset(
+        id=keyset_id,
+        public_keys={100: public_key_obj},
+        unit="sat"
+    )
+
+    async def mock_fetchone(query, values=None):
+        if "pol_epochs" in query:
+            return {
+                "keyset_id": keyset_id,
+                "epoch_index": 1,
+                "timestamp": epoch_timestamp,
+                "root_issued_hash": "00" * 32,
+                "root_spent_hash": "00" * 32,
+                "root_issued_sum": 300,
+                "root_spent_sum": 200,
+                "outstanding_balance": 100,
+                "ots_receipt": "010203",
+                "signature": "mock_sig",
+            }
+        return None
+
+    mock_db = SimpleNamespace(
+        fetchone=mock_fetchone,
+        execute=lambda q, v=None: None,
+        table_with_schema=lambda t: t,
+    )
+
+    async def mock_load_proofs(reload=True):
+        return None
+
+    async def mock_generate_determinstic_secret(counter, kid):
+        return (b"secret_1", b"\x01" * 32, "HMAC-SHA256:test_keyset_pol:42")
+
+    mock_wallet = SimpleNamespace(
+        url="http://localhost:3337",
+        load_proofs=mock_load_proofs,
+        db=mock_db,
+        keysets={keyset_id: mock_keyset},
+        proofs=[
+            SimpleNamespace(
+                id=keyset_id,
+                amount=100,
+                secret="secret_1",
+                C="C_hex_1",
+                derivation_path="HMAC-SHA256:test_keyset_pol:42",
+                pol_receipt=PolReceipt(target_epoch=1, signature="bad_signature"),
+            )
+        ],
+        generate_determinstic_secret=mock_generate_determinstic_secret,
+    )
+
+    async def mock_verify_ots_anchoring(o):
+        return "OTS Attestation: Confirmed"
+
+    mock_wallet.verify_solvency = lambda k, e=None: Wallet.verify_solvency(
+        mock_wallet, k, e
+    )
+    mock_wallet._verify_ots_anchoring = mock_verify_ots_anchoring
+    mock_wallet._verify_pol_receipt = lambda p, b_or_y: Wallet._verify_pol_receipt(
+        mock_wallet, p, b_or_y
+    )
+
+    respx.get("http://localhost:3337/v1/pol/test_keyset_pol/manifest").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "keyset_id": keyset_id,
+                "epoch_index": 1,
+                "timestamp": epoch_timestamp.isoformat(),
+                "signing_pubkey": "00" * 33,
+                "root_issued": {"hash": "00" * 32, "sum": 300},
+                "root_spent": {"hash": "00" * 32, "sum": 200},
+                "outstanding_balance": 100,
+                "ots_receipt": "010203",
+                "mint_signature": "mock_sig",
+            },
+        )
+    )
+
+    respx.post("http://localhost:3337/v1/pol/test_keyset_pol/proofs/spent").mock(
+        return_value=httpx.Response(
+            200,
+            json={"proofs": []},
+        )
+    )
+
+    from cashu.core.crypto.secp import PrivateKey as SecpPrivateKey
+    B_, _ = b_dhke.step1_alice("secret_1", SecpPrivateKey(b"\x01" * 32))
+    expected_b_hex = B_.format().hex()
+
+    respx.post("http://localhost:3337/v1/pol/test_keyset_pol/proofs/issued").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "proofs": [
+                    {
+                        "item": expected_b_hex,
+                        "index": "00" * 32,
+                        "value": 100,
+                        "compact_mask": "0x0",
+                        "siblings": [],
+                    }
+                ]
+            },
+        )
+    )
+
+    success, challenges, skipped_no_path, skipped_error, status_msg = await mock_wallet.verify_solvency(keyset_id)
+
+    assert success is False
+    assert len(challenges) == 1
+    assert challenges[0]["item_type"] == "issued_receipt_signature_invalid"
+    assert "Invalid signature on issued pol_receipt" in challenges[0]["error"]
+
 
 
 

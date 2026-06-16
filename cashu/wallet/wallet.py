@@ -41,7 +41,7 @@ from ..core.models import (
     PostMeltQuoteResponse,
 )
 from ..core.nuts import nut20
-from ..core.p2pk import Secret
+from ..core.p2pk import Secret, verify_schnorr_signature
 from ..core.settings import settings
 from . import migrations
 from .compat import WalletCompat
@@ -949,6 +949,25 @@ class Wallet(
         )
         return await self.check_proof_state(proofs), subscriptions
 
+    def _verify_pol_receipt(self, proof: Proof, b_or_y_hex: str) -> bool:
+        """
+        Cryptographically verifies the BIP340 Schnorr signature on a PoL receipt.
+        If there is no receipt (legacy notes), returns True to skip failure.
+        """
+        receipt = getattr(proof, "pol_receipt", None)
+        if not receipt:
+            return True
+        try:
+            msg = f"{b_or_y_hex}:{receipt.target_epoch}"
+            keyset = self.keysets.get(proof.id)
+            if not keyset:
+                return False
+            pubkey = keyset.public_keys[proof.amount]
+            sig_bytes = bytes.fromhex(receipt.signature)
+            return verify_schnorr_signature(msg.encode("utf-8"), pubkey, sig_bytes)
+        except Exception:
+            return False
+
     # ---------- TOKEN MECHANICS ----------
 
     # ---------- DLEQ PROOFS ----------
@@ -1837,11 +1856,7 @@ class Wallet(
 
         # 2b. Check Inclusion of Spent Proofs in Spent Tree (Spent/Burn Integrity Audits)
         try:
-            spent_rows = await self.db.fetchall(
-                f"SELECT amount, C, secret, id, derivation_path, mint_id, melt_id FROM {self.db.table_with_schema('proofs_used')} WHERE id = :keyset_id",
-                {"keyset_id": keyset_id},
-            )
-            spent_proofs = [Proof.from_dict(dict(r)) for r in spent_rows]
+            spent_proofs = await get_proofs(db=self.db, id=keyset_id, table="proofs_used")
         except Exception:
             spent_proofs = []
 
@@ -1884,6 +1899,24 @@ class Wallet(
                     continue
 
                 secret = orig_spent_proof.secret
+
+                if not self._verify_pol_receipt(orig_spent_proof, y_hex):
+                    challenges.append(
+                        {
+                            "keyset_id": keyset_id,
+                            "epoch_index": epoch_idx,
+                            "item_type": "spent_receipt_signature_invalid",
+                            "item": secret,
+                            "index": index_hex,
+                            "value": orig_spent_proof.amount,
+                            "signature": orig_spent_proof.C,
+                            "amount": orig_spent_proof.amount,
+                            "pol_receipt": _get_receipt_dict(orig_spent_proof),
+                            "error": f"Invalid signature on spent pol_receipt for secret {secret}",
+                        }
+                    )
+                    continue
+
                 if value != orig_spent_proof.amount:
                     challenges.append(
                         {
@@ -2095,6 +2128,23 @@ class Wallet(
 
             orig_proof = proof_by_b_hex.get(b_hex)
             if not orig_proof:
+                continue
+
+            if not self._verify_pol_receipt(orig_proof, b_hex):
+                challenges.append(
+                    {
+                        "keyset_id": keyset_id,
+                        "epoch_index": epoch_idx,
+                        "item_type": "issued_receipt_signature_invalid",
+                        "item": b_hex,
+                        "index": index_hex,
+                        "value": orig_proof.amount,
+                        "signature": orig_proof.C,
+                        "secret": orig_proof.secret,
+                        "pol_receipt": _get_receipt_dict(orig_proof),
+                        "error": f"Invalid signature on issued pol_receipt for blinded message {b_hex}",
+                    }
+                )
                 continue
 
             if value != orig_proof.amount:
