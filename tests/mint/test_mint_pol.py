@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from cashu.core.base import PolReceipt
 from cashu.core.crypto import b_dhke
 from cashu.core.crypto.b_dhke import hash_to_curve
+from cashu.core.settings import settings
 from cashu.mint import app as app_module
 from cashu.mint import middleware as middleware_module
 from cashu.mint import router as router_module
@@ -1031,5 +1032,72 @@ def test_pol_wallet_audit_detects_value_cheating(monkeypatch):
     assert result2.exception is None
     assert "issued_inclusion_value" in result2.output
     assert "Falsely registered issued amount as 42" in result2.output
+
+
+def test_pol_endpoints_rate_limiting(monkeypatch):
+    keyset_id = "test_keyset_pol"
+    mock_keyset = SimpleNamespace(
+        id=keyset_id,
+        active=False,
+        private_keys={},
+        final_expiry=None,
+    )
+    epoch_timestamp = datetime.datetime.now(datetime.timezone.utc)
+
+    async def mock_fetchone(query, values=None):
+        if "pol_epochs" in query:
+            return {
+                "keyset_id": keyset_id,
+                "epoch_index": 1,
+                "timestamp": epoch_timestamp,
+                "root_issued_hash": hashlib.sha256(b"issued").hexdigest(),
+                "root_issued_sum": 300,
+                "root_spent_hash": hashlib.sha256(b"spent").hexdigest(),
+                "root_spent_sum": 200,
+                "outstanding_balance": 100,
+                "ots_receipt": "010203",
+                "signature": "mock_sig",
+            }
+        return None
+
+    mock_db = SimpleNamespace(
+        fetchone=mock_fetchone,
+        execute=lambda q, v=None: None,
+        table_with_schema=lambda t: t,
+    )
+    mock_ledger = SimpleNamespace(keysets={keyset_id: mock_keyset}, db=mock_db)
+    monkeypatch.setattr(router_module, "ledger", mock_ledger)
+
+    # Set rate limits
+    monkeypatch.setattr(settings, "mint_rate_limit", True)
+    monkeypatch.setattr(settings, "mint_rate_limit_proxy_trust", True)
+
+    hits = 0
+    original_hit = router_module.limiter._limiter.hit
+    def mock_hit(*args, **kwargs):
+        nonlocal hits
+        hits += 1
+        if hits > 2:
+            return False
+        return original_hit(*args, **kwargs)
+    monkeypatch.setattr(router_module.limiter._limiter, "hit", mock_hit)
+
+    app = _build_router_app()
+    client = TestClient(app)
+
+    headers = {"CF-Connecting-IP": "203.0.113.10"}
+
+    # Request 1 -> 200
+    resp = client.get(f"/v1/pol/{keyset_id}/manifest", headers=headers)
+    assert resp.status_code == 200
+
+    # Request 2 -> 200
+    resp = client.get(f"/v1/pol/{keyset_id}/manifest", headers=headers)
+    assert resp.status_code == 200
+
+    # Request 3 -> 429
+    resp = client.get(f"/v1/pol/{keyset_id}/manifest", headers=headers)
+    assert resp.status_code == 429
+
 
 

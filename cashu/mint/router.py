@@ -558,7 +558,9 @@ class PolManifestResponse(BaseModel):
     summary="Get the PoL manifest including MS-SMT roots, OTS receipt, and signature for a specific epoch (defaults to latest).",
     response_model=PolManifestResponse,
 )
+@limiter.limit(f"{settings.mint_transaction_rate_limit_per_minute}/minute")
 async def pol_manifest(
+    request: Request,
     keyset_id: str,
     epoch_index: Optional[int] = None,
 ) -> PolManifestResponse:
@@ -610,7 +612,9 @@ async def pol_manifest(
     summary="Get MS-SMT inclusion proofs for a list of blinded messages relative to the last-tree.",
     response_model=PolProofsResponse,
 )
+@limiter.limit(f"{settings.mint_transaction_rate_limit_per_minute}/minute")
 async def pol_proofs_issued(
+    request: Request,
     keyset_id: str,
     payload: PolIssuedRequest,
     epoch_index: Optional[int] = None,
@@ -667,7 +671,9 @@ async def pol_proofs_issued(
     summary="Get MS-SMT inclusion proofs for a list of spent secrets relative to the last-tree.",
     response_model=PolProofsResponse,
 )
+@limiter.limit(f"{settings.mint_transaction_rate_limit_per_minute}/minute")
 async def pol_proofs_spent(
+    request: Request,
     keyset_id: str,
     payload: PolSpentRequest,
     epoch_index: Optional[int] = None,
