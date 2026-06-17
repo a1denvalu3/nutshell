@@ -519,7 +519,9 @@ async def update_pol_manifests(ledger) -> None:
         timestamp_str = current_time.isoformat()
         # Formatted details to sign
         data_to_sign = f"{kid}:{next_epoch_index}:{timestamp_str}:{ri_hash.hex()}:{ri_sum}:{rs_hash.hex()}:{rs_sum}:{outstanding_balance}:{ots_receipt_hex}"
-        signature = signing_key.sign(data_to_sign.encode("utf-8")).hex()
+        signature = signing_key.sign_schnorr(
+            hashlib.sha256(data_to_sign.encode("utf-8")).digest()
+        ).hex()
 
         # Save to SQLite table
         await ledger.db.execute(

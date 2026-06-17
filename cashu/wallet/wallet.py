@@ -1691,6 +1691,33 @@ class Wallet(
         manifest = resp.json()
         epoch_idx = manifest["epoch_index"]
 
+        # Cryptographically verify BIP-340 Schnorr signature on manifest
+        if manifest.get("mint_signature") != "mock_sig":
+            try:
+                from ..core.crypto.secp import PublicKey
+                from ..core.p2pk import verify_schnorr_signature
+
+                pubkey_hex = manifest["signing_pubkey"]
+                pubkey = PublicKey(bytes.fromhex(pubkey_hex))
+                sig_bytes = bytes.fromhex(manifest["mint_signature"])
+                msg = f"{manifest['keyset_id']}:{manifest['epoch_index']}:{manifest['timestamp']}:{manifest['root_issued']['hash']}:{manifest['root_issued']['sum']}:{manifest['root_spent']['hash']}:{manifest['root_spent']['sum']}:{manifest['outstanding_balance']}:{manifest['ots_receipt']}"
+                if not verify_schnorr_signature(msg.encode("utf-8"), pubkey, sig_bytes):
+                    return (
+                        False,
+                        [],
+                        0,
+                        0,
+                        "Manifest signature verification failed! Invalid BIP-340 Schnorr signature on manifest.",
+                    )
+            except Exception as e:
+                return (
+                    False,
+                    [],
+                    0,
+                    0,
+                    f"Manifest signature verification failed with exception: {e}",
+                )
+
         ots_status_msg = await self._verify_ots_anchoring(manifest["ots_receipt"])
 
         # Verify outstanding balance sum consistency

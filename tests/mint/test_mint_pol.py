@@ -1230,5 +1230,157 @@ async def test_pol_endpoints_signature_verification_failure(monkeypatch):
     assert "Invalid signature on issued pol_receipt" in challenges[0]["error"]
 
 
+@pytest.mark.asyncio
+@respx.mock
+async def test_pol_manifest_schnorr_signature_verification_success_and_failure(monkeypatch):
+    from coincurve import PrivateKey
+    from cashu.core.p2pk import verify_schnorr_signature
+    from cashu.core.crypto.secp import PublicKey
+
+    keyset_id = "test_keyset_pol"
+    epoch_timestamp = datetime.datetime.now(datetime.timezone.utc)
+    timestamp_str = epoch_timestamp.isoformat()
+
+    # Create dummy keys for signing
+    priv_bytes = hashlib.sha256(b"manifest_test_key_seed").digest()
+    priv_key = PrivateKey(priv_bytes)
+    pub_key_hex = priv_key.public_key.format().hex()
+
+    # 1. Build the valid manifest data
+    keyset_id = "test_keyset_pol"
+    epoch_index = 1
+    root_issued_hash = "00" * 32
+    root_issued_sum = 300
+    root_spent_hash = "00" * 32
+    root_spent_sum = 200
+    outstanding_balance = 100
+    ots_receipt = "010203"
+
+    msg = f"{keyset_id}:{epoch_index}:{timestamp_str}:{root_issued_hash}:{root_issued_sum}:{root_spent_hash}:{root_spent_sum}:{outstanding_balance}:{ots_receipt}"
+    valid_sig = priv_key.sign_schnorr(hashlib.sha256(msg.encode("utf-8")).digest()).hex()
+
+    # Mock wallet setup
+    from cashu.core.base import WalletKeyset as RealWalletKeyset
+    mock_keyset = RealWalletKeyset(
+        id=keyset_id,
+        public_keys={100: priv_key.public_key},
+        unit="sat"
+    )
+
+    async def mock_fetchone(query, values=None):
+        return None
+
+    mock_db = SimpleNamespace(
+        fetchall=lambda q, v=None: [],
+        fetchone=mock_fetchone,
+        execute=lambda q, v=None: None,
+        table_with_schema=lambda t: t,
+    )
+
+    async def mock_load_proofs(reload=True):
+        return None
+
+    async def mock_generate_determinstic_secret(counter, kid):
+        return (b"secret_1", b"\x01" * 32, "HMAC-SHA256:test_keyset_pol:42")
+
+    mock_wallet = SimpleNamespace(
+        url="http://localhost:3337",
+        load_proofs=mock_load_proofs,
+        db=mock_db,
+        keysets={keyset_id: mock_keyset},
+        proofs=[
+            SimpleNamespace(
+                id=keyset_id,
+                amount=100,
+                secret="secret_1",
+                C="C_hex_1",
+                derivation_path="HMAC-SHA256:test_keyset_pol:42",
+                pol_receipt=PolReceipt(target_epoch=1, signature="bad_signature"),
+            )
+        ],
+        generate_determinstic_secret=mock_generate_determinstic_secret,
+    )
+
+    async def mock_verify_ots_anchoring(o):
+        return "OTS Attestation: Confirmed"
+
+    mock_wallet.verify_solvency = lambda k, e=None: Wallet.verify_solvency(
+        mock_wallet, k, e
+    )
+    mock_wallet._verify_ots_anchoring = mock_verify_ots_anchoring
+    mock_wallet._verify_pol_receipt = lambda p, b_or_y: True
+
+    # Mock responses
+    respx.post("http://localhost:3337/v1/pol/test_keyset_pol/proofs/spent").mock(
+        return_value=httpx.Response(200, json={"proofs": []})
+    )
+
+    from cashu.core.crypto.secp import PrivateKey as SecpPrivateKey
+    B_, _ = b_dhke.step1_alice("secret_1", SecpPrivateKey(b"\x01" * 32))
+    expected_b_hex = B_.format().hex()
+
+    respx.post("http://localhost:3337/v1/pol/test_keyset_pol/proofs/issued").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "proofs": [
+                    {
+                        "item": expected_b_hex,
+                        "index": "00" * 32,
+                        "value": 100,
+                        "compact_mask": "0x0",
+                        "siblings": [],
+                    }
+                ]
+            },
+        )
+    )
+
+    # Mock A: Return VALID manifest signature
+    respx.get("http://localhost:3337/v1/pol/test_keyset_pol/manifest").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "keyset_id": keyset_id,
+                "epoch_index": epoch_index,
+                "timestamp": timestamp_str,
+                "signing_pubkey": pub_key_hex,
+                "root_issued": {"hash": root_issued_hash, "sum": root_issued_sum},
+                "root_spent": {"hash": root_spent_hash, "sum": root_spent_sum},
+                "outstanding_balance": outstanding_balance,
+                "ots_receipt": ots_receipt,
+                "mint_signature": valid_sig,
+            },
+        )
+    )
+
+    # Should run with signature verified (fails only on the bad signature on individual receipt, NOT manifest signature!)
+    success, challenges, skipped_no_path, skipped_error, status_msg = await mock_wallet.verify_solvency(keyset_id)
+    assert "Manifest signature verification failed" not in status_msg
+
+    # Mock B: Return INVALID manifest signature
+    respx.get("http://localhost:3337/v1/pol/test_keyset_pol/manifest").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "keyset_id": keyset_id,
+                "epoch_index": epoch_index,
+                "timestamp": timestamp_str,
+                "signing_pubkey": pub_key_hex,
+                "root_issued": {"hash": root_issued_hash, "sum": root_issued_sum},
+                "root_spent": {"hash": root_spent_hash, "sum": root_spent_sum},
+                "outstanding_balance": outstanding_balance,
+                "ots_receipt": ots_receipt,
+                "mint_signature": "00" * 64, # Bad signature
+            },
+        )
+    )
+
+    success2, challenges2, skipped_no_path2, skipped_error2, status_msg2 = await mock_wallet.verify_solvency(keyset_id)
+    assert success2 is False
+    assert "Manifest signature verification failed" in status_msg2
+
+
+
 
 

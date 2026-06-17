@@ -84,7 +84,7 @@ To prevent split-view attacks, the mint commits to states at discrete boundaries
 3. **OpenTimestamps Attestation:** The mint computes the `SHA256` hash of this global commitment and submits it to public OpenTimestamps (OTS) calendar servers to obtain an immutable blockchain anchoring proof.
 4. **Manifest Publication:** For each keyset, the mint constructs and signs the **Epoch PoL Manifest** string:
    `"{keyset_id}:{epoch_index}:{timestamp}:{root_issued_hash}:{root_issued_sum}:{root_spent_hash}:{root_spent_sum}:{outstanding_balance}:{ots_receipt}"`
-   The signature is produced using the mint's master NUT-06 private key.
+   The signature is a BIP-340 Schnorr signature produced using the mint's master NUT-06 private key signing the SHA256 digest of this serialized manifest string.
 
 ---
 
