@@ -163,7 +163,7 @@ async def test_pol_receipt_generation(monkeypatch):
 
     # 2. Test generate_output_receipt for individual output
     receipt_out = await generate_output_receipt(
-        mock_ledger, keyset_id="test_keyset", amount=100, b_hex="02b1a"
+        mock_ledger, keyset_id="test_keyset", amount=100, b_hex="02b1a03e1b10a23429fa221087e53f19001b97ad89498a44b93b3f23a851121df4"
     )
     assert receipt_out.target_epoch == 1
     assert receipt_out.signature is not None
@@ -176,7 +176,7 @@ async def test_pol_receipt_generation(monkeypatch):
     ).digest()
     pub_key_out = PrivateKey(priv_bytes_out).public_key
     pub_key_xonly_out = PublicKeyXOnly(pub_key_out.format()[1:])
-    msg_out = "02b1a:1".encode("utf-8")
+    msg_out = "02b1a03e1b10a23429fa221087e53f19001b97ad89498a44b93b3f23a851121df4:1".encode("utf-8")
     assert pub_key_xonly_out.verify(
         bytes.fromhex(receipt_out.signature),
         hashlib.sha256(msg_out).digest(),
@@ -184,7 +184,7 @@ async def test_pol_receipt_generation(monkeypatch):
 
     # 3. Test generate_spent_receipt for individual spent input
     receipt_in = await generate_spent_receipt(
-        mock_ledger, keyset_id="test_keyset", amount=50, y_hex="03c4f"
+        mock_ledger, keyset_id="test_keyset", amount=50, y_hex="02c3a50646bc1a1fef3da21973b064eb6897de58231c5f3e2730bf18361592394a"
     )
     assert receipt_in.target_epoch == 1
     assert receipt_in.signature is not None
@@ -196,7 +196,7 @@ async def test_pol_receipt_generation(monkeypatch):
     ).digest()
     pub_key_in = PrivateKey(priv_bytes_in).public_key
     pub_key_xonly_in = PublicKeyXOnly(pub_key_in.format()[1:])
-    msg_in = "03c4f:1".encode("utf-8")
+    msg_in = "02c3a50646bc1a1fef3da21973b064eb6897de58231c5f3e2730bf18361592394a:1".encode("utf-8")
     assert pub_key_xonly_in.verify(
         bytes.fromhex(receipt_in.signature),
         hashlib.sha256(msg_in).digest(),
@@ -221,8 +221,8 @@ def test_pol_endpoints_and_mock_ledger(monkeypatch):
     async def mock_fetchall(query, values=None):
         if "promises" in query:
             return [
-                {"amount": 100, "b_": "B_hex_1", "created": epoch_timestamp},
-                {"amount": 200, "b_": "B_hex_2", "created": epoch_timestamp},
+                {"amount": 100, "b_": "02b1a03e1b10a23429fa221087e53f19001b97ad89498a44b93b3f23a851121df4", "created": epoch_timestamp},
+                {"amount": 200, "b_": "02c3a50646bc1a1fef3da21973b064eb6897de58231c5f3e2730bf18361592394a", "created": epoch_timestamp},
             ]
         elif "proofs_used" in query:
             return [
@@ -285,7 +285,7 @@ def test_pol_endpoints_and_mock_ledger(monkeypatch):
     # Test POST /v1/pol/{keyset_id}/proofs/issued
     resp = client.post(
         f"/v1/pol/{keyset_id}/proofs/issued",
-        json={"blinded_messages": ["B_hex_1", "B_hex_non_existent"]},
+        json={"blinded_messages": ["02b1a03e1b10a23429fa221087e53f19001b97ad89498a44b93b3f23a851121df4", "03c0029b38423f03b6d203a55e2d6778035740e40dd3d888301b3b47aede737b6f"]},
     )
     assert resp.status_code == 200
     data = resp.json()
@@ -294,13 +294,13 @@ def test_pol_endpoints_and_mock_ledger(monkeypatch):
 
     # Check item 1 (active leaf, value 100)
     item1 = data["proofs"][0]
-    assert item1["item"] == "B_hex_1"
+    assert item1["item"] == "02b1a03e1b10a23429fa221087e53f19001b97ad89498a44b93b3f23a851121df4"
     assert item1["value"] == 100
     assert len(item1["siblings"]) < 256
 
     # Check item 2 (non-existent, value 0)
     item2 = data["proofs"][1]
-    assert item2["item"] == "B_hex_non_existent"
+    assert item2["item"] == "03c0029b38423f03b6d203a55e2d6778035740e40dd3d888301b3b47aede737b6f"
     assert item2["value"] == 0
     assert len(item2["siblings"]) < 256
 
@@ -627,7 +627,7 @@ async def test_build_trees_caching(monkeypatch):
         nonlocal db_calls
         db_calls += 1
         if "promises" in query:
-            return [{"amount": 100, "b_": "02b1a", "created": "2026-06-13 12:00:00"}]
+            return [{"amount": 100, "b_": "02b1a03e1b10a23429fa221087e53f19001b97ad89498a44b93b3f23a851121df4", "created": "2026-06-13 12:00:00"}]
         return []
 
     mock_ledger = SimpleNamespace(
@@ -711,9 +711,9 @@ async def test_pol_forget_probability_debug_feature(monkeypatch):
 
     async def mock_fetchall(query, params=None):
         if "promises" in query:
-            return [{"amount": 100, "b_": "02b1a", "created": "2026-06-13 12:00:00"}]
+            return [{"amount": 100, "b_": "02b1a03e1b10a23429fa221087e53f19001b97ad89498a44b93b3f23a851121df4", "created": "2026-06-13 12:00:00"}]
         if "proofs_used" in query:
-            return [{"amount": 50, "secret": "secret_1", "y": "02c2b", "created": "2026-06-13 12:00:00"}]
+            return [{"amount": 50, "secret": "secret_1", "y": "02c3a50646bc1a1fef3da21973b064eb6897de58231c5f3e2730bf18361592394a", "created": "2026-06-13 12:00:00"}]
         return []
 
     mock_ledger = SimpleNamespace(
@@ -758,9 +758,9 @@ async def test_pol_cheat_value_probability_debug_feature(monkeypatch):
 
     async def mock_fetchall(query, params=None):
         if "promises" in query:
-            return [{"amount": 100, "b_": "02b1a", "created": "2026-06-13 12:00:00"}]
+            return [{"amount": 100, "b_": "02b1a03e1b10a23429fa221087e53f19001b97ad89498a44b93b3f23a851121df4", "created": "2026-06-13 12:00:00"}]
         if "proofs_used" in query:
-            return [{"amount": 50, "secret": "secret_1", "y": "02c2b", "created": "2026-06-13 12:00:00"}]
+            return [{"amount": 50, "secret": "secret_1", "y": "02c3a50646bc1a1fef3da21973b064eb6897de58231c5f3e2730bf18361592394a", "created": "2026-06-13 12:00:00"}]
         return []
 
     mock_ledger = SimpleNamespace(
@@ -1234,8 +1234,7 @@ async def test_pol_endpoints_signature_verification_failure(monkeypatch):
 @respx.mock
 async def test_pol_manifest_schnorr_signature_verification_success_and_failure(monkeypatch):
     from coincurve import PrivateKey
-    from cashu.core.p2pk import verify_schnorr_signature
-    from cashu.core.crypto.secp import PublicKey
+
 
     keyset_id = "test_keyset_pol"
     epoch_timestamp = datetime.datetime.now(datetime.timezone.utc)

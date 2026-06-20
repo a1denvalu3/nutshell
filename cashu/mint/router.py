@@ -642,7 +642,7 @@ async def pol_proofs_issued(
 
     proof_items = []
     for b_hex in payload.blinded_messages:
-        h_b = hashlib.sha256(b_hex.encode("utf-8")).digest()
+        h_b = hashlib.sha256(bytes.fromhex(b_hex)).digest()
         idx_int = int.from_bytes(h_b, "big")
 
         # Check if active leaf
@@ -701,7 +701,7 @@ async def pol_proofs_spent(
 
     proof_items = []
     for y_hex in payload.ys:
-        h_y = hashlib.sha256(y_hex.encode("utf-8")).digest()
+        h_y = hashlib.sha256(bytes.fromhex(y_hex)).digest()
         idx_int = int.from_bytes(h_y, "big")
 
         # Check if active leaf

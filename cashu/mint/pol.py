@@ -328,7 +328,7 @@ async def build_trees_for_keyset_at_timestamp(
                 f"PoL DEBUG: Cheating by changing promise value from {original_amount} to {amount} for b_hex={b_hex} in Issued Tree."
             )
 
-        h_b = hashlib.sha256(b_hex.encode("utf-8")).digest()
+        h_b = hashlib.sha256(bytes.fromhex(b_hex)).digest()
         idx_int = int.from_bytes(h_b, "big")
         issued_leaves[idx_int] = (h_b, amount)
 
@@ -370,7 +370,7 @@ async def build_trees_for_keyset_at_timestamp(
                 f"PoL DEBUG: Cheating by changing spent proof value from {original_amount} to {amount} for secret={secret} / y_hex={y_hex} in Spent Tree."
             )
 
-        h_y = hashlib.sha256(y_hex.encode("utf-8")).digest()
+        h_y = hashlib.sha256(bytes.fromhex(y_hex)).digest()
         idx_int = int.from_bytes(h_y, "big")
         spent_leaves[idx_int] = (h_y, amount)
 
