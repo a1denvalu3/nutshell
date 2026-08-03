@@ -14,7 +14,7 @@ from cashu.core.base import (
     Proof,
     Unit,
 )
-from cashu.core.crypto.b_dhke import step1_alice
+from cashu.core.crypto.b_dhke import hash_to_curve, step1_alice
 from cashu.core.crypto.secp import PrivateKey
 from cashu.core.errors import (
     InvalidProofsError,
@@ -23,6 +23,7 @@ from cashu.core.errors import (
     OutputsAlreadySignedError,
     OutputsArePendingError,
     ProofsAlreadySpentError,
+    ProofsArePendingError,
     SecretTooLongError,
     TransactionDuplicateInputsError,
     TransactionDuplicateOutputsError,
@@ -407,6 +408,50 @@ def test_verify_proof_bdhke_rejects_invalid_token(ledger: Ledger):
         C="02" + "de" * 32,
     )
     assert ledger._verify_proof_bdhke(p) is False
+
+
+def legacy_nullifier_aliases(ledger: Ledger) -> tuple[Proof, Proof]:
+    current_secret = "alias-241138080"
+    legacy_alias = bytes.fromhex(
+        "6562185f066132377f76642849e397bc001026704b1006521775301235c68f7d" "01000000"
+    ).decode("utf-8")
+    amount = 8
+    private_key = ledger.keyset.private_keys[amount]
+    C = (hash_to_curve(current_secret.encode()) * private_key).format().hex()  # type: ignore
+    current_proof = Proof(
+        id=ledger.keyset.id, amount=amount, secret=current_secret, C=C
+    )
+    alias_proof = Proof(id=ledger.keyset.id, amount=amount, secret=legacy_alias, C=C)
+    assert alias_proof.legacy_Y == current_proof.Y
+    return current_proof, alias_proof
+
+
+@pytest.mark.asyncio
+async def test_legacy_nullifier_alias_is_detected_as_spent(ledger: Ledger):
+    current_proof, alias_proof = legacy_nullifier_aliases(ledger)
+    await ledger.crud.invalidate_proof(db=ledger.db, proof=current_proof)
+
+    with pytest.raises(ProofsAlreadySpentError):
+        await ledger.db_read._verify_proofs_spendable([alias_proof])
+    states = await ledger.db_read.get_proofs_states_for_proofs([alias_proof])
+    assert states[0].spent
+
+
+@pytest.mark.asyncio
+async def test_legacy_nullifier_alias_is_detected_as_pending(ledger: Ledger):
+    current_proof, alias_proof = legacy_nullifier_aliases(ledger)
+    await ledger.crud.set_proof_pending(db=ledger.db, proof=current_proof)
+
+    with pytest.raises(ProofsArePendingError):
+        await ledger.db_write._validate_proofs_pending([alias_proof])
+    states = await ledger.db_read.get_proofs_states_for_proofs([alias_proof])
+    assert states[0].pending
+
+
+def test_legacy_nullifier_aliases_are_duplicate_inputs(ledger: Ledger):
+    current_proof, alias_proof = legacy_nullifier_aliases(ledger)
+
+    assert ledger._verify_no_duplicate_proofs([current_proof, alias_proof]) is False
 
 
 def test_verify_proof_bdhke_asserts_unknown_keyset(ledger: Ledger):

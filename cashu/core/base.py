@@ -18,7 +18,7 @@ from cashu.core.json_rpc.base import JSONRPCSubscriptionKinds
 
 from ..mint.events.event_model import LedgerEvent
 from .crypto.aes import AESCipher
-from .crypto.b_dhke import hash_to_curve
+from .crypto.b_dhke import hash_to_curve, hash_to_curve_deprecated
 from .crypto.keys import (
     derive_keys,
     derive_keys_deprecated_pre_0_15,
@@ -148,6 +148,16 @@ class Proof(BaseModel):
     def __init__(self, **data):
         super().__init__(**data)
         self.Y = hash_to_curve(self.secret.encode("utf-8")).format().hex()
+
+    @property
+    def legacy_Y(self) -> str:
+        """Nullifier produced by the pre-0.15.1 hash-to-curve mapping."""
+        return hash_to_curve_deprecated(self.secret.encode("utf-8")).format().hex()
+
+    @property
+    def Ys(self) -> List[str]:
+        """All nullifiers under which this proof may have been stored."""
+        return list(dict.fromkeys((self.Y, self.legacy_Y)))
 
     @classmethod
     def from_dict(cls, proof_dict: dict):

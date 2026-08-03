@@ -146,8 +146,9 @@ class DbWriteHelper:
             Exception: At least one of the proofs is in the pending table.
         """
         logger.trace("crud: validating proofs pending")
+        Ys = [Y for proof in proofs for Y in proof.Ys]
         pending_proofs = await self.crud.get_proofs_pending(
-            Ys=[p.Y for p in proofs], db=self.db, conn=conn
+            Ys=Ys, db=self.db, conn=conn
         )
         if pending_proofs:
             raise ProofsArePendingError()
@@ -195,7 +196,11 @@ class DbWriteHelper:
         # Sort quote_ids to ensure consistent locking order
         sorted_quote_ids = sorted(quote_ids)
         lock_parameters = {f"quote_{i}": q for i, q in enumerate(sorted_quote_ids)}
-        lock_select_statement = "quote IN (" + ", ".join([f":quote_{i}" for i in range(len(sorted_quote_ids))]) + ")"
+        lock_select_statement = (
+            "quote IN ("
+            + ", ".join([f":quote_{i}" for i in range(len(sorted_quote_ids))])
+            + ")"
+        )
 
         async with self.db.get_connection(
             lock_table="mint_quotes",
@@ -214,7 +219,7 @@ class DbWriteHelper:
                     raise TransactionError(f"Mint quote {quote_id} is already issued.")
                 if not quote.paid:
                     raise TransactionError(f"Mint quote {quote_id} is not paid yet.")
-                
+
                 # set the quote as pending
                 self._set_mint_quote_state(quote, MintQuoteState.pending)
                 logger.trace(f"crud: setting quote {quote_id} as PENDING")
@@ -271,7 +276,11 @@ class DbWriteHelper:
 
         quotes: List[MintQuote] = []
         lock_parameters = {f"quote_{i}": q for i, q in enumerate(quote_ids)}
-        lock_select_statement = "quote IN (" + ", ".join([f":quote_{i}" for i in range(len(quote_ids))]) + ")"
+        lock_select_statement = (
+            "quote IN ("
+            + ", ".join([f":quote_{i}" for i in range(len(quote_ids))])
+            + ")"
+        )
 
         async with self.db.get_connection(
             lock_table="mint_quotes",
@@ -356,7 +365,7 @@ class DbWriteHelper:
             lock_table="melt_quotes",
             lock_select_statement="quote = :quote",
             lock_parameters={"quote": quote.quote},
-            conn=conn
+            conn=conn,
         ) as conn:
             # get melt quote from db and check if it is pending
             quote_db = await self.crud.get_melt_quote(

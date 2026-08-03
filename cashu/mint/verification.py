@@ -123,7 +123,6 @@ class LedgerVerification(
         expected_unit: Optional[Unit] = None,
         conn: Optional[Connection] = None,
     ):
-
         """Verify that the outputs are valid."""
         logger.trace(f"Verifying {len(outputs)} outputs.")
         if not outputs:
@@ -251,6 +250,9 @@ class LedgerVerification(
     def _verify_no_duplicate_proofs(self, proofs: List[Proof]) -> bool:
         secrets = [p.secret for p in proofs]
         if len(secrets) != len(list(set(secrets))):
+            return False
+        nullifiers = [Y for proof in proofs for Y in proof.Ys]
+        if len(nullifiers) != len(set(nullifiers)):
             return False
         return True
 

@@ -24,7 +24,7 @@ class DbReadHelper:
             proofs_pending = await self.crud.get_proofs_pending(
                 Ys=Ys, db=self.db, conn=conn
             )
-        proofs_pending_dict = {p.Y: p for p in proofs_pending}
+        proofs_pending_dict = {Y: p for p in proofs_pending for Y in p.Ys}
         return proofs_pending_dict
 
     async def _get_proofs_spent(
@@ -37,7 +37,7 @@ class DbReadHelper:
         # check used secrets in database
         async with self.db.get_connection(conn) as conn:
             spent_proofs = await self.crud.get_proofs_used(db=self.db, Ys=Ys, conn=conn)
-        proofs_spent_dict = {p.Y: p for p in spent_proofs}
+        proofs_spent_dict = {Y: p for p in spent_proofs for Y in p.Ys}
         return proofs_spent_dict
 
     async def get_proofs_states(
@@ -76,6 +76,36 @@ class DbReadHelper:
                     )
         return states
 
+    async def get_proofs_states_for_proofs(
+        self, proofs: List[Proof], conn: Optional[Connection] = None
+    ) -> List[ProofState]:
+        """Resolve proof states using both current and legacy nullifiers."""
+        Ys = [Y for proof in proofs for Y in proof.Ys]
+        states = await self.get_proofs_states(Ys, conn)
+        states_by_Y = {state.Y: state for state in states}
+
+        resolved_states: List[ProofState] = []
+        for proof in proofs:
+            proof_states = [states_by_Y[Y] for Y in proof.Ys]
+            spent_state = next((state for state in proof_states if state.spent), None)
+            if spent_state:
+                resolved_states.append(
+                    ProofState(
+                        Y=proof.Y,
+                        state=ProofSpentState.spent,
+                        witness=spent_state.witness,
+                    )
+                )
+            elif any(state.pending for state in proof_states):
+                resolved_states.append(
+                    ProofState(Y=proof.Y, state=ProofSpentState.pending)
+                )
+            else:
+                resolved_states.append(
+                    ProofState(Y=proof.Y, state=ProofSpentState.unspent)
+                )
+        return resolved_states
+
     async def _verify_proofs_spendable(
         self, proofs: List[Proof], conn: Optional[Connection] = None
     ):
@@ -89,5 +119,6 @@ class DbReadHelper:
             ProofsAlreadySpentError: If any of the proofs are already spent
         """
         async with self.db.get_connection(conn) as conn:
-            if not len(await self._get_proofs_spent([p.Y for p in proofs], conn)) == 0:
+            Ys = [Y for proof in proofs for Y in proof.Ys]
+            if not len(await self._get_proofs_spent(Ys, conn)) == 0:
                 raise ProofsAlreadySpentError()
