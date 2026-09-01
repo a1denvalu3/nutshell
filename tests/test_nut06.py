@@ -86,11 +86,44 @@ def test_mint_info_signature_vector():
     key = derive_mint_identity_key(SEED)
     payload = canonicalize_mint_info(INFO)
     assert hashlib.sha256(payload).hexdigest() == (
-        "99eb9a083e7deb7e79c73ee6601690acfbe23766759dd836848cfd49087994ec"
+        "49808f80be11c8f94debc9cfa21b8d5b215cf85759c8ad570c35110017b6694f"
     )
     signature = sign_mint_info(INFO, key, bytes(32))
     assert signature.hex() == (
-        "d1ae4c576e3ffa667df795b06655a5400e590653ae1f60f2a256c01e794a7032"
-        "8fee6fc8f4139c86458d12c0d4f04781581a5890a9ee83b9f7c72c78a641add0"
+        "256c3fc7773edf908d8d86bf0b1efe5cecbca0e152dfcc4e3d9cb9e5d3e643da"
+        "a67f62aeb23c640783d46538a601d7907afed9b7db19f7dbdaccfc6dc8d8a227"
     )
-    assert verify_mint_info_signature(INFO, signature, key.public_key.format())
+    assert verify_mint_info_signature(
+        INFO, signature, key.public_key.format(), verifier_time=INFO["time"]
+    )
+
+
+def test_mint_info_signature_enforces_time_window():
+    key = derive_mint_identity_key(SEED)
+    signature = sign_mint_info(INFO, key, bytes(32))
+    pubkey = key.public_key.format()
+
+    assert verify_mint_info_signature(
+        INFO, signature, pubkey, verifier_time=INFO["time"] - 3600
+    )
+    assert verify_mint_info_signature(
+        INFO, signature, pubkey, verifier_time=INFO["time"] + 3600
+    )
+    assert not verify_mint_info_signature(
+        INFO, signature, pubkey, verifier_time=INFO["time"] - 3601
+    )
+    assert not verify_mint_info_signature(
+        INFO, signature, pubkey, verifier_time=INFO["time"] + 3601
+    )
+
+
+def test_mint_info_signature_rejects_missing_or_malformed_time():
+    key = derive_mint_identity_key(SEED)
+    pubkey = key.public_key.format()
+
+    for invalid_time in (None, 1725304480.0, "1725304480", True):
+        info = {**INFO, "time": invalid_time}
+        signature = sign_mint_info(info, key, bytes(32))
+        assert not verify_mint_info_signature(
+            info, signature, pubkey, verifier_time=INFO["time"]
+        )

@@ -2,6 +2,7 @@ import hashlib
 import hmac
 import json
 import os
+import time
 from typing import Any, Mapping, Optional
 
 import rfc8785
@@ -9,6 +10,7 @@ from coincurve import PrivateKey, PublicKeyXOnly
 
 SECP256K1_ORDER = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141
 MINT_IDENTITY_DOMAIN_SEPARATOR = b"Cashu_Mint_Identity_v1"
+MINT_INFO_TIME_WINDOW = 3600
 
 
 def derive_mint_identity_key(seed: bytes) -> PrivateKey:
@@ -24,10 +26,9 @@ def derive_mint_identity_key(seed: bytes) -> PrivateKey:
 
 
 def canonicalize_mint_info(info: Mapping[str, Any]) -> bytes:
-    """Return the RFC 8785 payload, excluding the NUT-06 unsigned fields."""
+    """Return the RFC 8785 payload, excluding only the NUT-06 signature."""
     payload = dict(info)
     payload.pop("signature", None)
-    payload.pop("time", None)
     normalized = json.loads(json.dumps(payload))
     return rfc8785.dumps(normalized)
 
@@ -44,7 +45,21 @@ def sign_mint_info(
 
 
 def verify_mint_info_signature(
-    info: Mapping[str, Any], signature: bytes, pubkey: bytes
+    info: Mapping[str, Any],
+    signature: bytes,
+    pubkey: bytes,
+    verifier_time: Optional[int] = None,
 ) -> bool:
+    if len(signature) != 64 or len(pubkey) != 33 or pubkey[0] not in (2, 3):
+        return False
+    mint_time = info.get("time")
+    if isinstance(mint_time, bool) or not isinstance(mint_time, int):
+        return False
+    now = int(time.time()) if verifier_time is None else verifier_time
+    if abs(mint_time - now) > MINT_INFO_TIME_WINDOW:
+        return False
     message_hash = hashlib.sha256(canonicalize_mint_info(info)).digest()
-    return PublicKeyXOnly(pubkey[1:]).verify(signature, message_hash)
+    try:
+        return PublicKeyXOnly(pubkey[1:]).verify(signature, message_hash)
+    except ValueError:
+        return False
