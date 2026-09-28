@@ -32,6 +32,7 @@ Transfer:
 """
 
 import hashlib
+import hmac
 import os
 from dataclasses import dataclass
 from typing import List, Mapping, Optional, Tuple
@@ -450,3 +451,192 @@ def verify_presentation_keysets(
     if pres.keyset_id not in keysets:
         return False
     return verify_presentation(keysets[pres.keyset_id], pres)
+
+
+# --- Hidden-h private transfers -------------------------------------------
+#
+# A private presentation never reveals the asset hash. Instead of checking
+# e(u', Y_h2^h) the verifier checks e(U_h, Y_h2) with the witness
+# U_h = h * u', and a Chaum-Pedersen proof ties h to that base. Re-issuance
+# is blind: the mint derives a fresh base u2 deterministically from the
+# nullifier, the owner shows W_h = h * u2 with a dlog-eq proof that the
+# same h sits in U_h and W_h, and the mint computes
+# v2 = u2^x * W_h^{y_h} * S_new^{k2 * y_s} without ever learning h.
+#
+# Privacy scope: h leaves the owner's wallet in no message. The mint still
+# learns *that* a transfer happened and can correlate the old and new
+# owner commitments; a mint that shadows its registry can still reverse
+# the lookup. This is honest-but-curious privacy for the asset id, not
+# full KVAC anonymity.
+
+PS_PRIVATE_DST = b"Cashu_PS_Private_v1"
+PS_BLIND_DST = b"Cashu_PS_Blind_v1"
+PS_K2_DST = b"Cashu_PS_TransferK2_v1"
+
+
+def blind_base_for_nullifier(
+    mint_key: MintPrivateKeyPS, nullifier: bytes
+) -> Tuple[int, PublicKey]:
+    """Deterministic fresh base u2 = g1^k2 for one nullifier, so the
+    two-round blind transfer is stateless: begin and complete derive the
+    same u2 and the user cannot substitute another base."""
+    k2 = 0
+    counter = 0
+    while not 0 < k2 < curve_order:
+        k2 = (
+            int.from_bytes(
+                hmac.new(
+                    mint_key.x.private_key,
+                    PS_K2_DST + counter.to_bytes(4, "big") + nullifier,
+                    hashlib.sha256,
+                ).digest(),
+                "big",
+            )
+            % curve_order
+        )
+        counter += 1
+    return k2, G1 * k2
+
+
+@dataclass
+class PrivatePresentation:
+    """A randomized credential presentation that keeps h hidden."""
+
+    u: PublicKey
+    v: PublicKey
+    u_h: PublicKey  # h * u
+    u_s: PublicKey  # s * u
+    owner_commitment: PublicKey  # S = g1^s
+    nullifier: PublicKey  # N = G_NULL^s
+    proof_h: DlogEqProof
+    proof_s: DlogEqProof
+    keyset_id: str = ""
+
+    def to_bytes(self) -> bytes:
+        return (
+            _keyset_id_to_bytes(self.keyset_id)
+            + self.u.format()
+            + self.v.format()
+            + self.u_h.format()
+            + self.u_s.format()
+            + self.owner_commitment.format()
+            + self.nullifier.format()
+            + self.proof_h.to_bytes()
+            + self.proof_s.to_bytes()
+        )
+
+    @classmethod
+    def from_bytes(cls, raw: bytes) -> "PrivatePresentation":
+        if len(raw) != 424:
+            raise ValueError("PrivatePresentation is 424 bytes")
+        return cls(
+            keyset_id=_keyset_id_from_bytes(raw[:8]),
+            u=_g1_from_bytes(raw[8:56]),
+            v=_g1_from_bytes(raw[56:104]),
+            u_h=_g1_from_bytes(raw[104:152]),
+            u_s=_g1_from_bytes(raw[152:200]),
+            owner_commitment=_g1_from_bytes(raw[200:248]),
+            nullifier=_g1_from_bytes(raw[248:296]),
+            proof_h=DlogEqProof.from_bytes(raw[296:360]),
+            proof_s=DlogEqProof.from_bytes(raw[360:]),
+        )
+
+
+def present_private(cred: Credential, rho: Optional[int] = None) -> PrivatePresentation:
+    if not 0 < cred.h < curve_order:
+        raise ValueError("h must be in Fr* for a private presentation")
+    if not 0 < cred.s < curve_order:
+        raise ValueError("owner secret must be in Fr*")
+    rho = rho or _random_scalar()
+    if not 0 < rho < curve_order:
+        raise ValueError("rho must be in Fr*")
+    u_r = cred.u * rho
+    v_r = cred.v * rho
+    u_h = u_r * cred.h
+    u_s = u_r * cred.s
+    S = G1 * cred.s
+    N = G_NULL * cred.s
+    proof_h = prove_dlog_eq([u_r], [u_h], cred.h, PS_PRIVATE_DST)
+    proof_s = prove_dlog_eq([G1, G_NULL, u_r], [S, N, u_s], cred.s, PS_PRESENT_DST)
+    return PrivatePresentation(
+        u=u_r,
+        v=v_r,
+        u_h=u_h,
+        u_s=u_s,
+        owner_commitment=S,
+        nullifier=N,
+        proof_h=proof_h,
+        proof_s=proof_s,
+        keyset_id=cred.keyset_id,
+    )
+
+
+def verify_private_presentation(
+    mint_public: MintPublicKeyPS, pres: PrivatePresentation
+) -> bool:
+    for p in (
+        pres.u,
+        pres.v,
+        pres.u_h,
+        pres.u_s,
+        pres.owner_commitment,
+        pres.nullifier,
+    ):
+        if p.is_infinity():
+            return False
+    if not verify_dlog_eq([pres.u], [pres.u_h], pres.proof_h, PS_PRIVATE_DST):
+        return False
+    if not verify_dlog_eq(
+        [G1, G_NULL, pres.u],
+        [pres.owner_commitment, pres.nullifier, pres.u_s],
+        pres.proof_s,
+        PS_PRESENT_DST,
+    ):
+        return False
+    miller = pyblst.miller_loop(-pres.v.point, G2)
+    miller = miller * pyblst.miller_loop(pres.u.point, mint_public.X2.point)
+    miller = miller * pyblst.miller_loop(pres.u_h.point, mint_public.Y_h2.point)
+    miller = miller * pyblst.miller_loop(pres.u_s.point, mint_public.Y_s2.point)
+    return pyblst.final_verify(miller, pyblst.BlstFP12Element())
+
+
+def blind_transfer_witness(
+    cred: Credential, u_r: PublicKey, u2: PublicKey
+) -> Tuple[PublicKey, DlogEqProof]:
+    """Owner side of blind re-issuance: W_h = h * u2 and a proof that the
+    same h sits in the presentation's U_h (base u') and W_h (base u2)."""
+    if u2.is_infinity():
+        raise ValueError("u2 must not be the point at infinity")
+    w_h = u2 * cred.h
+    proof = prove_dlog_eq([u_r, u2], [u_r * cred.h, w_h], cred.h, PS_BLIND_DST)
+    return w_h, proof
+
+
+def verify_blind_transfer(
+    mint_public: MintPublicKeyPS,
+    pres: PrivatePresentation,
+    w_h: PublicKey,
+    proof: DlogEqProof,
+    u2: PublicKey,
+) -> bool:
+    if u2.is_infinity() or w_h.is_infinity():
+        return False
+    if not verify_private_presentation(mint_public, pres):
+        return False
+    return verify_dlog_eq([pres.u, u2], [pres.u_h, w_h], proof, PS_BLIND_DST)
+
+
+def issue_blind(
+    mint_key: MintPrivateKeyPS, k2: int, u2: PublicKey, w_h: PublicKey, S_new: PublicKey
+) -> PublicKey:
+    """v2 = u2^{x + y_h * h + y_s * s_new}, computed without learning h:
+    u2^{y_h * h} = W_h^{y_h}."""
+    if not 0 < k2 < curve_order:
+        raise ValueError("k2 must be in Fr*")
+    for p in (u2, w_h, S_new):
+        if p.is_infinity():
+            raise ValueError("points must not be the point at infinity")
+    return _add_p1(
+        _add_p1(u2 * mint_key.x.scalar, w_h * mint_key.y_h.scalar),
+        S_new * ((k2 * mint_key.y_s.scalar) % curve_order),
+    )

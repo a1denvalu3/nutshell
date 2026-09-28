@@ -19,6 +19,7 @@ from ..core.crypto.bls import PublicKey, curve_order
 from ..core.crypto.ps import (
     DlogEqProof,
     Presentation,
+    PrivatePresentation,
     verify_presentation,
 )
 from .ledger import (
@@ -48,6 +49,18 @@ class TransferRequest(BaseModel):
 
 class SpendRequest(BaseModel):
     presentation: str
+
+
+class PrivateTransferBeginRequest(BaseModel):
+    nullifier: str  # 48-byte compressed G1 point, hex
+
+
+class PrivateTransferRequest(BaseModel):
+    presentation: str  # 424-byte PrivatePresentation, hex
+    w_h: str  # 48-byte compressed G1 point, hex
+    proof: str  # 64-byte DlogEqProof, hex
+    new_owner_commitment: str
+    new_proof: str
 
 
 class IssueResponse(BaseModel):
@@ -148,6 +161,32 @@ def create_app(ledger: PSLedger) -> FastAPI:
         except NFTError as e:
             raise _http_error(e)
         return {"status": "burned"}
+
+    @app.post("/v1/transfer/private/begin")
+    async def transfer_private_begin(req: PrivateTransferBeginRequest):
+        try:
+            u2 = await ledger.transfer_private_begin(bytes.fromhex(req.nullifier))
+        except NFTError as e:
+            raise _http_error(e)
+        return {"u": u2.format().hex()}
+
+    @app.post("/v1/transfer/private", response_model=IssueResponse)
+    async def transfer_private(req: PrivateTransferRequest):
+        try:
+            u2, v2 = await ledger.transfer_private(
+                pres=PrivatePresentation.from_bytes(bytes.fromhex(req.presentation)),
+                w_h=_parse_g1(req.w_h),
+                proof=_parse_proof(req.proof),
+                S_new=_parse_g1(req.new_owner_commitment),
+                pok_new=_parse_proof(req.new_proof),
+            )
+        except ValueError:
+            raise HTTPException(400, "invalid presentation encoding")
+        except NFTError as e:
+            raise _http_error(e)
+        return IssueResponse(
+            u=u2.format().hex(), v=v2.format().hex(), keyset_id=ledger.keyset.keyset_id
+        )
 
     @app.post("/v1/verify")
     async def verify(req: SpendRequest):

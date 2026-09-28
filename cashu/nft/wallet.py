@@ -23,8 +23,10 @@ from ..core.crypto.ps import (
     Credential,
     DlogEqProof,
     Presentation,
+    blind_transfer_witness,
     hash_asset,
     present,
+    present_private,
     prove_owner_secret,
     verify_presentation,
 )
@@ -303,3 +305,39 @@ class NFTClient:
             int(entry["epoch"]),
             bytes.fromhex(entry["signature"]),
         )
+
+    def transfer_private(
+        self, wallet: NFTWallet, h: int, new_owner_commitment: bytes, new_proof: bytes
+    ) -> Tuple[PublicKey, PublicKey]:
+        """Hidden-h variant of transfer: the mint never sees the asset
+        hash. Returns the blind-issued new credential for the receiver."""
+        cred = wallet.get_credential(h)
+        pres = present_private(cred)
+        begin = self._checked(
+            self.http.post(
+                "/v1/transfer/private/begin",
+                json={"nullifier": pres.nullifier.format().hex()},
+            )
+        ).json()
+        u2 = self._g1(begin["u"])
+        w_h, proof = blind_transfer_witness(cred, pres.u, u2)
+        resp = self._checked(
+            self.http.post(
+                "/v1/transfer/private",
+                json={
+                    "presentation": pres.to_bytes().hex(),
+                    "w_h": w_h.format().hex(),
+                    "proof": proof.to_bytes().hex(),
+                    "new_owner_commitment": new_owner_commitment.hex(),
+                    "new_proof": new_proof.hex(),
+                },
+            )
+        ).json()
+        return self._g1(resp["u"]), self._g1(resp["v"])
+
+    def transfer_private_to_self(self, wallet: NFTWallet, h: int) -> Credential:
+        ticket = wallet.prepare_receive()
+        u, v = self.transfer_private(
+            wallet, h, ticket.commitment.format(), ticket.proof.to_bytes()
+        )
+        return wallet.store_credential(ticket, u, v, h, self.keyset_id)

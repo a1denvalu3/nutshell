@@ -23,7 +23,11 @@ from ..core.crypto.ps import (
     MintPrivateKeyPS,
     MintPublicKeyPS,
     Presentation,
+    PrivatePresentation,
+    blind_base_for_nullifier,
     issue,
+    issue_blind,
+    verify_blind_transfer,
     verify_owner_secret,
     verify_presentation,
 )
@@ -241,3 +245,59 @@ class PSLedger:
                 "UPDATE ps_assets SET status = 'burned' WHERE h = :h",
                 {"h": _h_hex(pres.h)},
             )
+
+    async def transfer_private_begin(self, nullifier: bytes) -> PublicKey:
+        """Round 1 of a hidden-h transfer: hand out the deterministic
+        blind base u2 for this nullifier. Stateless."""
+        if len(nullifier) != 48:
+            raise InvalidProofError("nullifier must be a compressed G1 point")
+        _, u2 = blind_base_for_nullifier(self.mint_key, nullifier)
+        return u2
+
+    async def transfer_private(
+        self,
+        pres: PrivatePresentation,
+        w_h: PublicKey,
+        proof: DlogEqProof,
+        S_new: PublicKey,
+        pok_new: DlogEqProof,
+        conn: Optional[Connection] = None,
+    ) -> Tuple[PublicKey, PublicKey]:
+        """Atomically spend a hidden-h presentation and blindly re-issue
+        the same asset to S_new. The asset hash never reaches the mint;
+        the registry row is located by the old owner commitment, which
+        must be unique among active assets."""
+        if not verify_owner_secret(S_new, pok_new):
+            raise InvalidProofError("invalid new owner secret proof")
+        if pres.keyset_id and pres.keyset_id != self.keyset.keyset_id:
+            raise InvalidProofError("unknown keyset")
+        k2, u2 = blind_base_for_nullifier(self.mint_key, pres.nullifier.format())
+        if not verify_blind_transfer(self.keyset, pres, w_h, proof, u2):
+            raise InvalidProofError("invalid private transfer proof")
+        async with self.db.get_connection(
+            conn, locks=[LockOptions(table="ps_nullifiers")]
+        ) as c:
+            if await c.fetchone(
+                "SELECT 1 AS x FROM ps_nullifiers WHERE nullifier = :n",
+                {"n": pres.nullifier.format()},
+            ):
+                raise AlreadySpentError("credential already spent")
+            await c.execute(
+                """
+                INSERT INTO ps_nullifiers (nullifier, h, spent)
+                VALUES (:n, '', :spent)
+                """,
+                {"n": pres.nullifier.format(), "spent": self.db.timestamp_now_str()},
+            )
+            result = await c.execute(
+                """
+                UPDATE ps_assets SET owner = :owner, epoch = epoch + 1
+                WHERE owner = :old_owner AND status = 'active'
+                """,
+                {"owner": S_new.format(), "old_owner": pres.owner_commitment.format()},
+            )
+            if result.rowcount != 1:
+                raise UnknownAssetError(
+                    "no unique active asset for this owner commitment"
+                )
+        return u2, issue_blind(self.mint_key, k2, u2, w_h, S_new)
