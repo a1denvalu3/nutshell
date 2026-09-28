@@ -40,6 +40,7 @@ from typing import List, Mapping, Optional, Tuple
 import pyblst
 
 from .bls import G2, PrivateKey, PublicKey, curve_order
+from .keys import derive_keyset_id_psnft
 
 # BLS12-381 G1 generator, compressed
 _G1_HEX = "97f1d3a73197d7942695638c4fa9ac0fc3688c4f9774b905a14e3a3f171bac586c55e83ff97a1aeffb3af00adb22c6bb"
@@ -260,16 +261,25 @@ class MintPublicKeyPS:
 
     @property
     def keyset_id(self) -> str:
-        """16-hex-char identifier of this parameter set, cashu keyset style.
+        """Version-03 identifier of this parameter set, derived the same
+        way as v3 ecash keysets: a full 32-byte SHA-256 hash behind a
+        version byte, committing to a length-framed preimage of the three
+        G2 points (see keys.derive_keyset_id_psnft).
 
         Credentials and presentations carry it so verifiers can select the
         right parameters across key rotations."""
-        return hashlib.sha256(self.to_bytes()).hexdigest()[:16]
+        return derive_keyset_id_psnft(
+            self.X2.format(), self.Y_h2.format(), self.Y_s2.format()
+        )
+
+
+# keyset ids on the wire: 33 raw bytes (2-hex version byte + 32-byte hash)
+KEYSET_ID_BYTES = 33
 
 
 def _keyset_id_from_bytes(raw: bytes) -> str:
-    if len(raw) != 8:
-        raise ValueError("keyset id is 8 bytes")
+    if len(raw) != KEYSET_ID_BYTES:
+        raise ValueError(f"keyset id is {KEYSET_ID_BYTES} bytes")
     return raw.hex()
 
 
@@ -278,8 +288,8 @@ def _keyset_id_to_bytes(keyset_id: str) -> bytes:
         raw = bytes.fromhex(keyset_id)
     except ValueError:
         raise ValueError("keyset id must be hex")
-    if len(raw) != 8:
-        raise ValueError("keyset id must be 16 hex chars")
+    if len(raw) != KEYSET_ID_BYTES:
+        raise ValueError(f"keyset id must be {2 * KEYSET_ID_BYTES} hex chars")
     return raw
 
 
@@ -304,14 +314,14 @@ class Credential:
 
     @classmethod
     def from_bytes(cls, raw: bytes) -> "Credential":
-        if len(raw) != 168:
-            raise ValueError("Credential is 168 bytes")
+        if len(raw) != 193:
+            raise ValueError("Credential is 193 bytes")
         return cls(
-            u=_g1_from_bytes(raw[8:56]),
-            v=_g1_from_bytes(raw[56:104]),
-            h=_scalar_from_bytes(raw[104:136]),
-            s=_scalar_from_bytes(raw[136:]),
-            keyset_id=_keyset_id_from_bytes(raw[:8]),
+            u=_g1_from_bytes(raw[33:81]),
+            v=_g1_from_bytes(raw[81:129]),
+            h=_scalar_from_bytes(raw[129:161]),
+            s=_scalar_from_bytes(raw[161:]),
+            keyset_id=_keyset_id_from_bytes(raw[:33]),
         )
 
 
@@ -342,17 +352,17 @@ class Presentation:
 
     @classmethod
     def from_bytes(cls, raw: bytes) -> "Presentation":
-        if len(raw) != 344:
-            raise ValueError("Presentation is 344 bytes")
+        if len(raw) != 369:
+            raise ValueError("Presentation is 369 bytes")
         return cls(
-            keyset_id=_keyset_id_from_bytes(raw[:8]),
-            h=_scalar_from_bytes(raw[8:40]),
-            u=_g1_from_bytes(raw[40:88]),
-            v=_g1_from_bytes(raw[88:136]),
-            u_s=_g1_from_bytes(raw[136:184]),
-            owner_commitment=_g1_from_bytes(raw[184:232]),
-            nullifier=_g1_from_bytes(raw[232:280]),
-            proof=DlogEqProof.from_bytes(raw[280:]),
+            keyset_id=_keyset_id_from_bytes(raw[:33]),
+            h=_scalar_from_bytes(raw[33:65]),
+            u=_g1_from_bytes(raw[65:113]),
+            v=_g1_from_bytes(raw[113:161]),
+            u_s=_g1_from_bytes(raw[161:209]),
+            owner_commitment=_g1_from_bytes(raw[209:257]),
+            nullifier=_g1_from_bytes(raw[257:305]),
+            proof=DlogEqProof.from_bytes(raw[305:]),
         )
 
 
@@ -527,18 +537,18 @@ class PrivatePresentation:
 
     @classmethod
     def from_bytes(cls, raw: bytes) -> "PrivatePresentation":
-        if len(raw) != 424:
-            raise ValueError("PrivatePresentation is 424 bytes")
+        if len(raw) != 449:
+            raise ValueError("PrivatePresentation is 449 bytes")
         return cls(
-            keyset_id=_keyset_id_from_bytes(raw[:8]),
-            u=_g1_from_bytes(raw[8:56]),
-            v=_g1_from_bytes(raw[56:104]),
-            u_h=_g1_from_bytes(raw[104:152]),
-            u_s=_g1_from_bytes(raw[152:200]),
-            owner_commitment=_g1_from_bytes(raw[200:248]),
-            nullifier=_g1_from_bytes(raw[248:296]),
-            proof_h=DlogEqProof.from_bytes(raw[296:360]),
-            proof_s=DlogEqProof.from_bytes(raw[360:]),
+            keyset_id=_keyset_id_from_bytes(raw[:33]),
+            u=_g1_from_bytes(raw[33:81]),
+            v=_g1_from_bytes(raw[81:129]),
+            u_h=_g1_from_bytes(raw[129:177]),
+            u_s=_g1_from_bytes(raw[177:225]),
+            owner_commitment=_g1_from_bytes(raw[225:273]),
+            nullifier=_g1_from_bytes(raw[273:321]),
+            proof_h=DlogEqProof.from_bytes(raw[321:385]),
+            proof_s=DlogEqProof.from_bytes(raw[385:]),
         )
 
 

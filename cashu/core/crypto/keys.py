@@ -204,7 +204,9 @@ def is_supported_keyset_version(keyset_id: str) -> bool:
         if version == "base64":
             return True
         # If the version prefix is not a 2-hex-digit string, it represents a legacy keyset ID.
-        is_hex_version = len(version) == 2 and all(c in "0123456789abcdefABCDEF" for c in version)
+        is_hex_version = len(version) == 2 and all(
+            c in "0123456789abcdefABCDEF" for c in version
+        )
         if not is_hex_version:
             return True
         return version in ("00", "01", "02")
@@ -248,11 +250,15 @@ def generate_uuid_v7() -> str:
     )
     return str(uuid.UUID(int=uuid_int))
 
+
 def random_hash() -> str:
     """Returns a base64-urlsafe encoded random hash."""
     return base64.urlsafe_b64encode(secrets.token_bytes(30)).decode()
 
-def derive_keys_v3(mnemonic: str, derivation_path: str, amounts: List[int]) -> Dict[int, BlsPrivateKey]:
+
+def derive_keys_v3(
+    mnemonic: str, derivation_path: str, amounts: List[int]
+) -> Dict[int, BlsPrivateKey]:
     """
     Deterministic derivation of BLS12-381 keys for 2^n values.
     Uses rejection sampling to ensure private keys are uniformly distributed in [1, r-1]
@@ -272,9 +278,10 @@ def derive_keys_v3(mnemonic: str, derivation_path: str, amounts: List[int]) -> D
             attempt += 1
     return keys
 
+
 def derive_keyset_id_v3(
-    keys: Dict[int, BlsPublicKey], 
-    unit: str, 
+    keys: Dict[int, BlsPublicKey],
+    unit: str,
     input_fee_ppk: int = 0,
 ) -> str:
     """
@@ -306,3 +313,23 @@ def derive_keyset_id_v3(
     keyset_id = "02" + hashlib.sha256(preimage).hexdigest()
     logger.trace(f"Derived v3 keyset_id: {keyset_id} from {len(keys)} keys")
     return keyset_id
+
+
+def derive_keyset_id_psnft(X2: bytes, Y_h2: bytes, Y_s2: bytes) -> str:
+    """Deterministic derivation of the PS-NFT keyset id (version 03).
+
+    Follows the v3 convention: a length-framed preimage and a full
+    32-byte SHA-256 hash behind a version byte. The PS parameter set is
+    exactly three G2 points; there is no amount map, unit, or fee to
+    commit to, so the preimage is the three framed points plus a scheme
+    tag to domain-separate it from ecash keysets.
+    """
+
+    def framed(b: bytes) -> bytes:
+        return len(b).to_bytes(4, "big") + b
+
+    for point in (X2, Y_h2, Y_s2):
+        if len(point) != 96:
+            raise ValueError("PS-NFT public parameters are 96-byte G2 points")
+    preimage = framed(X2) + framed(Y_h2) + framed(Y_s2) + framed(b"psnft")
+    return "03" + hashlib.sha256(preimage).hexdigest()

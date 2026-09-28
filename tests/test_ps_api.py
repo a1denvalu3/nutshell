@@ -82,7 +82,7 @@ def test_info(client):
     resp = c.get("/v1/nft/info")
     assert resp.status_code == 200
     body = resp.json()
-    assert len(body["keyset_id"]) == 16
+    assert len(body["keyset_id"]) == 66 and body["keyset_id"].startswith("03")
     assert body["payment_required"] is True
     assert len(body["public_key"]) == 576
 
@@ -91,7 +91,9 @@ def test_mint_and_verify_and_registry(client):
     c, verifier = client
     cred = mint_via_api(c, verifier, b"jpeg", 111)
 
-    verify = c.post("/v1/nft/verify", json={"presentation": present(cred).to_bytes().hex()})
+    verify = c.post(
+        "/v1/nft/verify", json={"presentation": present(cred).to_bytes().hex()}
+    )
     assert verify.json() == {"valid": True, "registered": True, "owner_matches": True}
 
     reg = c.get(f"/v1/nft/registry/{cred.h.to_bytes(32, 'big').hex()}")
@@ -157,8 +159,12 @@ def test_burn(client):
     cred = mint_via_api(c, verifier, b"jpeg", 111)
     resp = c.post("/v1/nft/burn", json={"presentation": present(cred).to_bytes().hex()})
     assert resp.json() == {"status": "burned"}
-    assert c.get(f"/v1/nft/registry/{cred.h.to_bytes(32, 'big').hex()}").status_code == 404
-    verify = c.post("/v1/nft/verify", json={"presentation": present(cred).to_bytes().hex()})
+    assert (
+        c.get(f"/v1/nft/registry/{cred.h.to_bytes(32, 'big').hex()}").status_code == 404
+    )
+    verify = c.post(
+        "/v1/nft/verify", json={"presentation": present(cred).to_bytes().hex()}
+    )
     # the crypto still verifies, but the asset is gone from the registry
     assert verify.json() == {"valid": True, "registered": False, "owner_matches": False}
 

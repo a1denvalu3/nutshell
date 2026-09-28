@@ -72,7 +72,7 @@ def test_public_key_roundtrip_and_keyset_id():
     restored = MintPublicKeyPS.from_bytes(pub.to_bytes())
     assert restored.to_bytes() == pub.to_bytes()
     assert restored.keyset_id == pub.keyset_id
-    assert len(pub.keyset_id) == 16
+    assert len(pub.keyset_id) == 66 and pub.keyset_id.startswith("03")
     with pytest.raises(ValueError):
         MintPublicKeyPS.from_bytes(pub.to_bytes()[:-1])
 

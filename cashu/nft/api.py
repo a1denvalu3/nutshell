@@ -42,7 +42,7 @@ class MintRequest(BaseModel):
 
 
 class TransferRequest(BaseModel):
-    presentation: str  # 344-byte Presentation, hex
+    presentation: str  # 369-byte Presentation, hex
     new_owner_commitment: str
     new_proof: str
 
@@ -56,7 +56,7 @@ class PrivateTransferBeginRequest(BaseModel):
 
 
 class PrivateTransferRequest(BaseModel):
-    presentation: str  # 424-byte PrivatePresentation, hex
+    presentation: str  # 449-byte PrivatePresentation, hex
     w_h: str  # 48-byte compressed G1 point, hex
     proof: str  # 64-byte DlogEqProof, hex
     new_owner_commitment: str
