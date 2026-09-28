@@ -640,3 +640,72 @@ def issue_blind(
         _add_p1(u2 * mint_key.x.scalar, w_h * mint_key.y_h.scalar),
         S_new * ((k2 * mint_key.y_s.scalar) % curve_order),
     )
+
+
+PS_BATCH_DST = b"Cashu_PS_Batch_v1"
+
+
+def _derive_batch_scalars(presentations: List[Presentation]) -> List[int]:
+    transcript = PS_BATCH_DST
+    for pres in presentations:
+        transcript += pres.to_bytes()
+    seed = hashlib.sha256(transcript).digest()
+    scalars = []
+    for i in range(len(presentations)):
+        counter = 0
+        while True:
+            digest = hashlib.sha256(
+                seed + i.to_bytes(4, "big") + counter.to_bytes(4, "big")
+            ).digest()
+            scalar = int.from_bytes(digest, "big")
+            if 0 < scalar < curve_order:
+                scalars.append(scalar)
+                break
+            counter += 1
+    return scalars
+
+
+def batch_verify_presentations(
+    mint_public: MintPublicKeyPS, presentations: List[Presentation]
+) -> bool:
+    """Verify many same-keyset presentations with one combined pairing.
+
+    The dlog-eq proofs are checked individually (cheap); the pairing
+    equations are folded into a random linear combination:
+
+        e(sum r_i v_i, g2) == e(sum r_i u_i, X2)
+                            * e(sum r_i h_i u_i, Y_h2)
+                            * e(sum r_i u_s_i, Y_s2)
+    """
+    if not presentations:
+        return True
+    for pres in presentations:
+        if not 0 <= pres.h < curve_order:
+            return False
+        for p in (pres.u, pres.v, pres.u_s, pres.owner_commitment, pres.nullifier):
+            if p.is_infinity():
+                return False
+        if not verify_dlog_eq(
+            [G1, G_NULL, pres.u],
+            [pres.owner_commitment, pres.nullifier, pres.u_s],
+            pres.proof,
+            PS_PRESENT_DST,
+        ):
+            return False
+    rs = _derive_batch_scalars(presentations)
+    sum_v = presentations[0].v.point.scalar_mul(rs[0])
+    sum_u = presentations[0].u.point.scalar_mul(rs[0])
+    sum_hu = presentations[0].u.point.scalar_mul(
+        (rs[0] * presentations[0].h) % curve_order
+    )
+    sum_us = presentations[0].u_s.point.scalar_mul(rs[0])
+    for pres, r in zip(presentations[1:], rs[1:]):
+        sum_v = sum_v + pres.v.point.scalar_mul(r)
+        sum_u = sum_u + pres.u.point.scalar_mul(r)
+        sum_hu = sum_hu + pres.u.point.scalar_mul((r * pres.h) % curve_order)
+        sum_us = sum_us + pres.u_s.point.scalar_mul(r)
+    miller = pyblst.miller_loop(-sum_v, G2)
+    miller = miller * pyblst.miller_loop(sum_u, mint_public.X2.point)
+    miller = miller * pyblst.miller_loop(sum_hu, mint_public.Y_h2.point)
+    miller = miller * pyblst.miller_loop(sum_us, mint_public.Y_s2.point)
+    return pyblst.final_verify(miller, pyblst.BlstFP12Element())
