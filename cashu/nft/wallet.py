@@ -31,6 +31,7 @@ from ..core.crypto.ps import (
 from ..core.crypto.ps import (
     MintPublicKeyPS as MintPublicKeyPS,
 )
+from .registry import verify_registry_entry
 
 WALLET_SECRET_DST = b"Cashu_PS_Wallet_v1"
 
@@ -276,4 +277,29 @@ class NFTClient:
         """Offline verification against the keyset fetched from the mint."""
         return pres.keyset_id in ("", self.keyset_id) and verify_presentation(
             self.keyset, pres
+        )
+
+    def registry_entry(self, h: int) -> dict:
+        resp = self.http.get(f"/v1/registry/{h.to_bytes(32, 'big').hex()}")
+        if resp.status_code == 404:
+            raise ValueError("unknown or burned asset")
+        return self._checked(resp).json()
+
+    def verify_registered_owner(self, pres: Presentation, entry: dict) -> bool:
+        """Offline check that a presentation comes from the currently
+        registered owner: the registry entry must carry a valid mint
+        signature over (h, owner, epoch) and name the presentation's
+        owner commitment. Callers comparing entries across time should
+        take the one with the highest epoch."""
+        owner = bytes.fromhex(entry["owner"])
+        if owner != pres.owner_commitment.format():
+            return False
+        if int(entry["asset_hash"], 16) != pres.h:
+            return False
+        return verify_registry_entry(
+            self.keyset,
+            pres.h,
+            owner,
+            int(entry["epoch"]),
+            bytes.fromhex(entry["signature"]),
         )

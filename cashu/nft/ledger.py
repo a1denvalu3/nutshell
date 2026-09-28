@@ -28,6 +28,7 @@ from ..core.crypto.ps import (
     verify_presentation,
 )
 from ..core.db import Connection, Database, LockOptions
+from .registry import sign_registry_entry
 
 
 class NFTError(Exception):
@@ -91,6 +92,7 @@ class PSLedger:
                     h TEXT PRIMARY KEY,
                     owner BLOB NOT NULL,
                     status TEXT NOT NULL DEFAULT 'active',
+                    epoch INTEGER NOT NULL DEFAULT 0,
                     created TEXT NOT NULL
                 )
                 """
@@ -153,6 +155,20 @@ class PSLedger:
         )
         return row is not None
 
+    async def registry_entry(self, h: int) -> Optional[Tuple[bytes, int, bytes]]:
+        """Signed registry entry (owner, epoch, signature) for an active
+        asset, verifiable offline against the keyset's X2."""
+        row = await self.db.fetchone(
+            "SELECT owner, epoch FROM ps_assets WHERE h = :h AND status = 'active'",
+            {"h": _h_hex(h)},
+        )
+        if row is None:
+            return None
+        owner = bytes(row["owner"])
+        epoch = int(row["epoch"])
+        sig = sign_registry_entry(self.mint_key, h, owner, epoch)
+        return owner, epoch, sig.format()
+
     async def _spend(
         self,
         pres: Presentation,
@@ -210,7 +226,7 @@ class PSLedger:
         ) as c:
             await self._spend(pres, c)
             await c.execute(
-                "UPDATE ps_assets SET owner = :owner WHERE h = :h",
+                "UPDATE ps_assets SET owner = :owner, epoch = epoch + 1 WHERE h = :h",
                 {"owner": S_new.format(), "h": _h_hex(pres.h)},
             )
         return issue(self.mint_key, pres.h, S_new)

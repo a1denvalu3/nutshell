@@ -167,9 +167,16 @@ def create_app(ledger: PSLedger) -> FastAPI:
     @app.get("/v1/registry/{asset_hash}")
     async def registry(asset_hash: str):
         h = _parse_scalar(asset_hash)
-        owner = await ledger.get_owner(h)
-        if owner is None:
+        entry = await ledger.registry_entry(h)
+        if entry is None:
             raise HTTPException(404, "unknown or burned asset")
-        return {"asset_hash": asset_hash, "owner": owner.hex(), "status": "active"}
+        owner, epoch, signature = entry
+        return {
+            "asset_hash": asset_hash,
+            "owner": owner.hex(),
+            "status": "active",
+            "epoch": epoch,
+            "signature": signature.hex(),
+        }
 
     return app
