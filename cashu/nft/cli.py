@@ -16,6 +16,7 @@ Typical flow:
     cashu nft burn <h>                   # retire the asset
 """
 
+import functools
 import json
 import os
 import secrets
@@ -31,6 +32,28 @@ from .payment import DevPaymentVerifier
 from .wallet import NFTClient, NFTWallet
 
 DEFAULT_MINT_URL = "http://127.0.0.1:8338"
+
+
+def _cli_errors(func):
+    """Turn connection and mint errors into clean CLI messages instead of
+    tracebacks."""
+
+    @functools.wraps(func)
+    def wrapper(*args, **kwargs):
+        try:
+            return func(*args, **kwargs)
+        except click.ClickException:
+            raise
+        except httpx.ConnectError as e:
+            raise click.ClickException(
+                f"cannot reach the NFT mint ({e.request.url}) -- is it running? "
+                "Start it with `poetry run python -m cashu.nft` "
+                "or point --mint-url elsewhere."
+            )
+        except (httpx.HTTPError, RuntimeError, ValueError, KeyError) as e:
+            raise click.ClickException(str(e))
+
+    return wrapper
 
 
 def _default_wallet_path() -> str:
@@ -92,6 +115,7 @@ def nft(ctx: click.Context, mint_url: str, wallet_db: Optional[str]):
 @nft.command("init", help="Create the NFT wallet and print its seed.")
 @click.option("--seed", "seed_hex", default=None, help="Restore from a hex seed.")
 @click.pass_context
+@_cli_errors
 def nft_init(ctx: click.Context, seed_hex: Optional[str]):
     path = ctx.obj["NFT_WALLET_DB"]
     if os.path.exists(path):
@@ -104,6 +128,7 @@ def nft_init(ctx: click.Context, seed_hex: Optional[str]):
 
 @nft.command("info", help="Show mint keyset information.")
 @click.pass_context
+@_cli_errors
 def nft_info(ctx: click.Context):
     client = _make_client(ctx.obj["NFT_MINT_URL"])
     print(f"mint:             {ctx.obj['NFT_MINT_URL']}")
@@ -116,6 +141,7 @@ def nft_info(ctx: click.Context):
 @click.option("--payment", "payment_hex", default=None, help="Payment ticket (hex).")
 @click.option("--description", "-d", default="", help="Asset description.")
 @click.pass_context
+@_cli_errors
 def nft_mint(
     ctx: click.Context, file: str, payment_hex: Optional[str], description: str
 ):
@@ -136,6 +162,7 @@ def nft_mint(
 
 @nft.command("list", help="List owned NFTs.")
 @click.pass_context
+@_cli_errors
 def nft_list(ctx: click.Context):
     wallet = _open_wallet(ctx.obj["NFT_WALLET_DB"])
     assets = wallet.assets()
@@ -148,6 +175,7 @@ def nft_list(ctx: click.Context):
 
 @nft.command("ticket", help="Print a receive ticket for an incoming transfer.")
 @click.pass_context
+@_cli_errors
 def nft_ticket(ctx: click.Context):
     wallet = _open_wallet(ctx.obj["NFT_WALLET_DB"])
     ticket = wallet.prepare_receive()
@@ -172,6 +200,7 @@ def nft_ticket(ctx: click.Context):
     help="Hide the asset hash from the mint.",
 )
 @click.pass_context
+@_cli_errors
 def nft_send(ctx: click.Context, asset_hash: str, ticket_json: str, private: bool):
     client = _make_client(ctx.obj["NFT_MINT_URL"])
     wallet = _open_wallet(ctx.obj["NFT_WALLET_DB"])
@@ -202,6 +231,7 @@ def nft_send(ctx: click.Context, asset_hash: str, ticket_json: str, private: boo
 @click.argument("package_json", type=str)
 @click.option("--description", "-d", default="", help="Asset description.")
 @click.pass_context
+@_cli_errors
 def nft_claim(ctx: click.Context, package_json: str, description: str):
     wallet = _open_wallet(ctx.obj["NFT_WALLET_DB"])
     package = json.loads(package_json)
@@ -219,6 +249,7 @@ def nft_claim(ctx: click.Context, package_json: str, description: str):
 @nft.command("verify", help="Verify ownership of an NFT offline.")
 @click.argument("asset_hash", type=str)
 @click.pass_context
+@_cli_errors
 def nft_verify(ctx: click.Context, asset_hash: str):
     client = _make_client(ctx.obj["NFT_MINT_URL"])
     wallet = _open_wallet(ctx.obj["NFT_WALLET_DB"])
@@ -236,6 +267,7 @@ def nft_verify(ctx: click.Context, asset_hash: str):
 @nft.command("registry", help="Show the mint-signed registry entry for an asset.")
 @click.argument("asset_hash", type=str)
 @click.pass_context
+@_cli_errors
 def nft_registry(ctx: click.Context, asset_hash: str):
     client = _make_client(ctx.obj["NFT_MINT_URL"])
     wallet = _open_wallet(ctx.obj["NFT_WALLET_DB"])
@@ -247,6 +279,7 @@ def nft_registry(ctx: click.Context, asset_hash: str):
 @nft.command("burn", help="Retire an NFT.")
 @click.argument("asset_hash", type=str)
 @click.pass_context
+@_cli_errors
 def nft_burn(ctx: click.Context, asset_hash: str):
     client = _make_client(ctx.obj["NFT_MINT_URL"])
     wallet = _open_wallet(ctx.obj["NFT_WALLET_DB"])
@@ -264,6 +297,7 @@ def nft_burn(ctx: click.Context, asset_hash: str):
     required=True,
     help="Operator payment secret (or NFT_PAYMENT_SECRET).",
 )
+@_cli_errors
 def nft_pay_ticket(file: str, secret: str):
     with open(file, "rb") as f:
         asset = f.read()
