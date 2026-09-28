@@ -34,6 +34,7 @@ from ...core.logging import configure_logger
 from ...core.models import PostMintQuoteResponse
 from ...core.nuts.nut18 import deserialize as deserialize_payment_request
 from ...core.settings import settings
+from ...nft.cli import nft as nft_group
 from ...tor.tor import TorProxy
 from ...wallet.crud import (
     get_bolt11_melt_quotes,
@@ -175,6 +176,11 @@ async def cli(
     yes: bool,
     verbose: bool,
 ):
+    # the experimental NFT commands manage their own wallet and mint
+    # connection; skip the ecash wallet, Tor, and mint setup entirely
+    if ctx.invoked_subcommand == "nft":
+        ctx.ensure_object(dict)
+        return
     if settings.debug:
         configure_logger()
     if settings.tor and not TorProxy().check_platform():
@@ -249,6 +255,9 @@ async def cli(
         ctx
     )  # select a specific wallet by CLI input
     await init_wallet(ctx.obj["WALLET"], load_proofs=False)
+
+
+cli.add_command(nft_group)
 
 
 @cli.command("pay", help="Pay Lightning invoice.")

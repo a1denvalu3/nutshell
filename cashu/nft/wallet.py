@@ -98,6 +98,14 @@ class NFTWallet:
             )
             """
         )
+        self.db.execute(
+            """
+            CREATE TABLE IF NOT EXISTS pending (
+                commitment TEXT PRIMARY KEY,
+                secret_index INTEGER NOT NULL
+            )
+            """
+        )
         if seed is not None:
             if len(seed) < 16:
                 raise ValueError("seed must be at least 16 bytes")
@@ -132,10 +140,30 @@ class NFTWallet:
 
     def prepare_receive(self) -> ReceiveTicket:
         """Generate a fresh owner secret and its commitment for a mint or
-        transfer request."""
+        transfer request. The ticket is persisted as pending until
+        store_credential consumes it, so CLI commands can span multiple
+        invocations."""
         index, s = self._next_secret()
         S, pok = prove_owner_secret(s)
+        self.db.execute(
+            "INSERT OR REPLACE INTO pending (commitment, secret_index) VALUES (?, ?)",
+            (S.format().hex(), index),
+        )
+        self.db.commit()
         return ReceiveTicket(index=index, commitment=S, proof=pok)
+
+    def pop_pending(self, commitment: bytes) -> int:
+        """Consume a pending ticket by commitment, returning its secret
+        index. Raises if no such ticket exists."""
+        row = self.db.execute(
+            "SELECT secret_index FROM pending WHERE commitment = ?",
+            (commitment.hex(),),
+        ).fetchone()
+        if row is None:
+            raise ValueError("no pending receive ticket for this commitment")
+        self.db.execute("DELETE FROM pending WHERE commitment = ?", (commitment.hex(),))
+        self.db.commit()
+        return int(row[0])
 
     def store_credential(
         self,
@@ -157,6 +185,43 @@ class NFTWallet:
             "INSERT OR REPLACE INTO assets (h, secret_index, credential, description)"
             " VALUES (?, ?, ?, ?)",
             (h.to_bytes(32, "big").hex(), ticket.index, cred.to_bytes(), description),
+        )
+        self.db.execute(
+            "DELETE FROM pending WHERE commitment = ?",
+            (ticket.commitment.format().hex(),),
+        )
+        self.db.commit()
+        return cred
+
+    def delete_asset(self, h: int) -> None:
+        self.db.execute(
+            "DELETE FROM assets WHERE h = ?", (h.to_bytes(32, "big").hex(),)
+        )
+        self.db.commit()
+
+    def claim_credential(
+        self,
+        commitment: bytes,
+        u: PublicKey,
+        v: PublicKey,
+        h: int,
+        keyset_id: str,
+        description: str = "",
+    ) -> Credential:
+        """Receiver side of a transfer: consume the pending ticket that
+        commitment belongs to and store the credential."""
+        index = self.pop_pending(commitment)
+        cred = Credential(
+            u=u,
+            v=v,
+            h=h,
+            s=_derive_owner_secret(self._seed, index),
+            keyset_id=keyset_id,
+        )
+        self.db.execute(
+            "INSERT OR REPLACE INTO assets (h, secret_index, credential, description)"
+            " VALUES (?, ?, ?, ?)",
+            (h.to_bytes(32, "big").hex(), index, cred.to_bytes(), description),
         )
         self.db.commit()
         return cred
@@ -270,10 +335,7 @@ class NFTClient:
                 "/v1/burn", json={"presentation": wallet.present(h).to_bytes().hex()}
             )
         )
-        wallet.db.execute(
-            "DELETE FROM assets WHERE h = ?", (h.to_bytes(32, "big").hex(),)
-        )
-        wallet.db.commit()
+        wallet.delete_asset(h)
 
     def verify(self, pres: Presentation) -> bool:
         """Offline verification against the keyset fetched from the mint."""
