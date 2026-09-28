@@ -6,6 +6,11 @@ NFT endpoints. The NFT mint key derives from NFT_MINT_SEED if set, else
 from the mint's own MINT_PRIVATE_KEY, so the existing mint backup
 covers it; the NFT tables live in a separate nft.sqlite3 next to the
 mint database.
+
+Payment: with NFT_MINT_PRICE_SATS > 0 (default 21), minting an NFT
+requires a quote backed by a real BOLT11 mint quote on the hosting
+mint's own ledger, payable with any Lightning wallet. Set
+NFT_MINT_PRICE_SATS=0 for free minting.
 """
 
 import os
@@ -19,7 +24,7 @@ from ..core.db import Database
 from ..core.settings import settings
 from .api import create_router
 from .ledger import PSLedger
-from .payment import DevPaymentVerifier
+from .quotes import DEFAULT_PRICE_SATS, EcashQuoteBackend
 
 
 def build_ledger() -> PSLedger:
@@ -32,10 +37,16 @@ def build_ledger() -> PSLedger:
             "using a random ephemeral key"
         )
         mint_key = MintPrivateKeyPS()
-    payment_secret = os.environ.get("NFT_PAYMENT_SECRET")
-    verifier = DevPaymentVerifier(payment_secret.encode()) if payment_secret else None
+    price = int(os.environ.get("NFT_MINT_PRICE_SATS", str(DEFAULT_PRICE_SATS)))
+    backend = None
+    if price > 0:
+        # the hosting mint's own ledger provides real BOLT11 quotes
+        from ..mint.startup import ledger as mint_ledger
+
+        backend = EcashQuoteBackend(mint_ledger, price_sats=price)
+        logger.info(f"NFT module: minting requires a {price} sat quote")
     return PSLedger(
-        Database("nft", settings.mint_database), mint_key, payment_verifier=verifier
+        Database("nft", settings.mint_database), mint_key, quote_backend=backend
     )
 
 

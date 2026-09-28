@@ -12,25 +12,33 @@ from cashu.core.crypto.ps import (
 from cashu.core.db import Database
 from cashu.nft.api import create_app
 from cashu.nft.ledger import PSLedger
-from cashu.nft.payment import DevPaymentVerifier
+from cashu.nft.quotes import DevQuoteBackend
 
 
 @pytest.fixture(scope="function")
 def client(tmp_path):
-    verifier = DevPaymentVerifier(b"operator secret!!")
+    backend = DevQuoteBackend(b"operator secret!!")
     ledger = PSLedger(
         Database("test_nft_api", str(tmp_path)),
         MintPrivateKeyPS.from_seed(b"test seed 012345"),
-        payment_verifier=verifier,
+        quote_backend=backend,
     )
     import asyncio
 
     asyncio.run(ledger.migrate())
-    return TestClient(create_app(ledger)), verifier
+    return TestClient(create_app(ledger)), backend
 
 
-def mint_via_api(client, verifier, asset: bytes, s: int) -> Credential:
+def mint_via_api(client, backend, asset: bytes, s: int) -> Credential:
     h = hash_asset(asset)
+    quote = client.post(
+        "/v1/nft/mint/quote", json={"asset_hash": h.to_bytes(32, "big").hex()}
+    ).json()
+    pay = client.post(
+        f"/v1/nft/mint/quote/{quote['quote']}/pay",
+        json={"ticket": backend.issue_dev_ticket(quote["quote"]).hex()},
+    )
+    assert pay.json()["state"] == "paid"
     S, pok = prove_owner_secret(s)
     resp = client.post(
         "/v1/nft/mint",
@@ -38,7 +46,7 @@ def mint_via_api(client, verifier, asset: bytes, s: int) -> Credential:
             "asset_hash": h.to_bytes(32, "big").hex(),
             "owner_commitment": S.format().hex(),
             "proof": pok.to_bytes().hex(),
-            "payment": verifier.issue_ticket(h).hex(),
+            "quote": quote["quote"],
         },
     )
     assert resp.status_code == 200, resp.text
@@ -88,8 +96,8 @@ def test_info(client):
 
 
 def test_mint_and_verify_and_registry(client):
-    c, verifier = client
-    cred = mint_via_api(c, verifier, b"jpeg", 111)
+    c, backend = client
+    cred = mint_via_api(c, backend, b"jpeg", 111)
 
     verify = c.post(
         "/v1/nft/verify", json={"presentation": present(cred).to_bytes().hex()}
@@ -116,25 +124,32 @@ def test_mint_without_payment_is_402(client):
 
 
 def test_double_mint_is_409(client):
-    c, verifier = client
-    mint_via_api(c, verifier, b"jpeg", 111)
+    c, backend = client
+    mint_via_api(c, backend, b"jpeg", 111)
     h = hash_asset(b"jpeg")
     S, pok = prove_owner_secret(222)
+    quote = c.post(
+        "/v1/nft/mint/quote", json={"asset_hash": h.to_bytes(32, "big").hex()}
+    ).json()
+    c.post(
+        f"/v1/nft/mint/quote/{quote['quote']}/pay",
+        json={"ticket": backend.issue_dev_ticket(quote["quote"]).hex()},
+    )
     resp = c.post(
         "/v1/nft/mint",
         json={
             "asset_hash": h.to_bytes(32, "big").hex(),
             "owner_commitment": S.format().hex(),
             "proof": pok.to_bytes().hex(),
-            "payment": verifier.issue_ticket(h).hex(),
+            "quote": quote["quote"],
         },
     )
     assert resp.status_code == 409
 
 
 def test_transfer_and_replay_is_409(client):
-    c, verifier = client
-    cred = mint_via_api(c, verifier, b"jpeg", 111)
+    c, backend = client
+    cred = mint_via_api(c, backend, b"jpeg", 111)
     cred2 = transfer_via_api(c, cred, 222)
     verify = c.post(
         "/v1/nft/verify", json={"presentation": present(cred2).to_bytes().hex()}
@@ -155,8 +170,8 @@ def test_transfer_and_replay_is_409(client):
 
 
 def test_burn(client):
-    c, verifier = client
-    cred = mint_via_api(c, verifier, b"jpeg", 111)
+    c, backend = client
+    cred = mint_via_api(c, backend, b"jpeg", 111)
     resp = c.post("/v1/nft/burn", json={"presentation": present(cred).to_bytes().hex()})
     assert resp.json() == {"status": "burned"}
     assert (

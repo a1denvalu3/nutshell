@@ -5,17 +5,17 @@ from cashu.core.crypto.ps import MintPrivateKeyPS, hash_asset, present
 from cashu.core.db import Database
 from cashu.nft.api import create_app
 from cashu.nft.ledger import PSLedger
-from cashu.nft.payment import DevPaymentVerifier
+from cashu.nft.quotes import DevQuoteBackend
 from cashu.nft.wallet import NFTClient, NFTWallet
 
 
 @pytest.fixture(scope="function")
 def service(tmp_path):
-    verifier = DevPaymentVerifier(b"operator secret!!")
+    verifier = DevQuoteBackend(b"operator secret!!")
     ledger = PSLedger(
         Database("test_nft_wallet", str(tmp_path / "mint")),
         MintPrivateKeyPS.from_seed(b"test seed 012345"),
-        payment_verifier=verifier,
+        quote_backend=verifier,
     )
     import asyncio
 
@@ -23,12 +23,20 @@ def service(tmp_path):
     return NFTClient(TestClient(create_app(ledger))), verifier
 
 
+def paid_mint(client, wallet, asset, description=""):
+    quote = client.mint_quote(asset)
+    client.dev_pay_quote(
+        quote["quote"],
+        DevQuoteBackend(b"operator secret!!").issue_dev_ticket(quote["quote"]),
+    )
+    return client.mint(wallet, asset, quote=quote["quote"], description=description)
+
+
 def test_mint_with_wallet(service, tmp_path):
     client, verifier = service
     wallet = NFTWallet(str(tmp_path / "alice.sqlite3"), seed=b"alice seed 00001")
     asset = b"jpeg bytes"
-    ticket_payment = verifier.issue_ticket(hash_asset(asset))
-    cred = client.mint(wallet, asset, payment=ticket_payment, description="my nft")
+    cred = paid_mint(client, wallet, asset, description="my nft")
     assert client.verify(wallet.present(cred.h))
     assert [(a.h, a.description) for a in wallet.assets()] == [(cred.h, "my nft")]
 
@@ -38,7 +46,7 @@ def test_wallet_restore_from_seed(service, tmp_path):
     path = str(tmp_path / "alice.sqlite3")
     wallet = NFTWallet(path, seed=b"alice seed 00001")
     asset = b"jpeg bytes"
-    cred = client.mint(wallet, asset, payment=verifier.issue_ticket(hash_asset(asset)))
+    cred = paid_mint(client, wallet, asset)
 
     restored = NFTWallet(str(tmp_path / "restored.sqlite3"), seed=b"alice seed 00001")
     ticket = restored.prepare_receive()  # index 0 == alice's first secret
@@ -61,7 +69,7 @@ def test_transfer_between_wallets(service, tmp_path):
     bob = NFTWallet(str(tmp_path / "bob.sqlite3"), seed=b"bob seed 0000001")
     asset = b"jpeg bytes"
     h = hash_asset(asset)
-    client.mint(alice, asset, payment=verifier.issue_ticket(h))
+    paid_mint(client, alice, asset)
 
     ticket = bob.prepare_receive()
     u, v = client.transfer(
@@ -80,7 +88,7 @@ def test_transfer_to_self_and_burn(service, tmp_path):
     wallet = NFTWallet(str(tmp_path / "alice.sqlite3"), seed=b"alice seed 00001")
     asset = b"jpeg bytes"
     h = hash_asset(asset)
-    client.mint(wallet, asset, payment=verifier.issue_ticket(h))
+    paid_mint(client, wallet, asset)
 
     cred2 = client.transfer_to_self(wallet, h)
     assert client.verify(wallet.present(cred2.h))
@@ -96,8 +104,7 @@ def test_offline_verification_uses_fetched_keyset(service, tmp_path):
     client, verifier = service
     wallet = NFTWallet(str(tmp_path / "alice.sqlite3"), seed=b"alice seed 00001")
     asset = b"jpeg bytes"
-    h = hash_asset(asset)
-    cred = client.mint(wallet, asset, payment=verifier.issue_ticket(h))
+    cred = paid_mint(client, wallet, asset)
     pres = present(cred)
     assert client.verify(pres)
     pres.h = hash_asset(b"tampered")
@@ -110,7 +117,7 @@ def test_token_send_receive(service, tmp_path):
     bob = NFTWallet(str(tmp_path / "bob.sqlite3"), seed=b"bob seed 0000001")
     asset = b"jpeg bytes"
     h = hash_asset(asset)
-    client.mint(alice, asset, payment=verifier.issue_ticket(h))
+    paid_mint(client, alice, asset)
 
     token = client.send_token(alice, h)
     assert token.startswith("psnft1")
@@ -131,7 +138,7 @@ def test_receive_private(service, tmp_path):
     bob = NFTWallet(str(tmp_path / "bob.sqlite3"), seed=b"bob seed 0000001")
     asset = b"jpeg bytes"
     h = hash_asset(asset)
-    client.mint(alice, asset, payment=verifier.issue_ticket(h))
+    paid_mint(client, alice, asset)
     token = client.send_token(alice, h)
     cred = client.receive(bob, token, private=True)
     assert cred.h == h

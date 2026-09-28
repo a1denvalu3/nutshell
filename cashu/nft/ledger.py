@@ -3,6 +3,7 @@
 State:
     ps_assets     -- one row per minted asset: h -> current owner commitment
     ps_nullifiers -- spent presentation nullifiers (double-spend prevention)
+    ps_quotes     -- mint quotes: h -> settlement state (one NFT per quote)
 
 Invariants enforced here, on top of the cryptography in
 cashu/core/crypto/ps.py:
@@ -11,9 +12,12 @@ cashu/core/crypto/ps.py:
       nullifier inside the same transaction that moves ownership
     * transfers are atomic: proof checks, nullifier claim, ownership move
       and re-issuance either all commit or all roll back
+    * a paid quote mints exactly one NFT, enforced by consuming the quote
+      in the same transaction that inserts the asset
 """
 
-from typing import Optional, Protocol, Tuple
+import uuid
+from typing import Optional, Tuple
 
 from sqlalchemy.exc import IntegrityError
 
@@ -32,6 +36,7 @@ from ..core.crypto.ps import (
     verify_presentation,
 )
 from ..core.db import Connection, Database, LockOptions
+from .quotes import QuoteBackend
 from .registry import sign_registry_entry
 
 
@@ -44,6 +49,10 @@ class AlreadyMintedError(NFTError):
 
 
 class UnknownAssetError(NFTError):
+    pass
+
+
+class UnknownQuoteError(NFTError):
     pass
 
 
@@ -63,10 +72,6 @@ class PaymentError(NFTError):
     pass
 
 
-class PaymentVerifierProtocol(Protocol):
-    async def verify_payment(self, payment: Optional[bytes], h: int) -> None: ...
-
-
 def _h_hex(h: int) -> str:
     return h.to_bytes(32, "big").hex()
 
@@ -76,13 +81,13 @@ class PSLedger:
         self,
         db: Database,
         mint_key: MintPrivateKeyPS,
-        payment_verifier: Optional[PaymentVerifierProtocol] = None,
+        quote_backend: Optional[QuoteBackend] = None,
     ):
         self.db = db
         self.mint_key = mint_key
-        # Optional pluggable payment gate, see cashu/nft/payment.py. When
-        # set, issue_nft requires a payment token the verifier accepts.
-        self.payment_verifier = payment_verifier
+        # Optional pluggable payment gate, see cashu/nft/quotes.py. When
+        # set, issue_nft requires a settled quote.
+        self.quote_backend = quote_backend
 
     @property
     def keyset(self) -> MintPublicKeyPS:
@@ -110,23 +115,127 @@ class PSLedger:
                 )
                 """
             )
+            await conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS ps_quotes (
+                    quote TEXT PRIMARY KEY,
+                    h TEXT NOT NULL,
+                    amount INTEGER NOT NULL,
+                    request TEXT NOT NULL DEFAULT '',
+                    external_quote TEXT NOT NULL DEFAULT '',
+                    state TEXT NOT NULL DEFAULT 'unpaid',
+                    created TEXT NOT NULL
+                )
+                """
+            )
+
+    async def create_quote(self, h: int) -> dict:
+        """Create a mint quote for asset hash h. Settle it out of band,
+        then mint with the quote id."""
+        if self.quote_backend is None:
+            raise PaymentError("this mint does not require quotes")
+        quote_id = uuid.uuid4().hex
+        amount, request, external = await self.quote_backend.create_quote(quote_id, h)
+        async with self.db.get_connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO ps_quotes (quote, h, amount, request, external_quote, state, created)
+                VALUES (:quote, :h, :amount, :request, :external, 'unpaid', :created)
+                """,
+                {
+                    "quote": quote_id,
+                    "h": _h_hex(h),
+                    "amount": amount,
+                    "request": request,
+                    "external": external,
+                    "created": self.db.timestamp_now_str(),
+                },
+            )
+        return {
+            "quote": quote_id,
+            "asset_hash": _h_hex(h),
+            "amount": amount,
+            "request": request,
+            "state": "unpaid",
+        }
+
+    async def _sync_quote(self, conn: Connection, quote_id: str) -> dict:
+        row = await conn.fetchone(
+            "SELECT * FROM ps_quotes WHERE quote = :quote", {"quote": quote_id}
+        )
+        if row is None:
+            raise UnknownQuoteError("unknown quote")
+        if (
+            row["state"] == "unpaid"
+            and self.quote_backend is not None
+            and await self.quote_backend.is_paid(quote_id, row["external_quote"])
+        ):
+            await conn.execute(
+                "UPDATE ps_quotes SET state = 'paid' WHERE quote = :quote",
+                {"quote": quote_id},
+            )
+            row = dict(row)
+            row["state"] = "paid"
+        return row
+
+    async def get_quote(self, quote_id: str) -> dict:
+        async with self.db.get_connection() as conn:
+            row = await self._sync_quote(conn, quote_id)
+        return {
+            "quote": quote_id,
+            "asset_hash": row["h"],
+            "amount": row["amount"],
+            "request": row["request"],
+            "state": row["state"],
+        }
+
+    async def dev_pay_quote(self, quote_id: str, ticket: bytes) -> None:
+        """Settle a quote with a dev ticket (dev backends only)."""
+        if self.quote_backend is None:
+            raise PaymentError("this mint does not require quotes")
+        try:
+            valid = self.quote_backend.dev_pay_ticket(quote_id, ticket)
+        except NotImplementedError:
+            raise PaymentError("this backend does not take dev tickets")
+        if not valid:
+            raise PaymentError("invalid payment ticket")
+        async with self.db.get_connection() as conn:
+            result = await conn.execute(
+                "UPDATE ps_quotes SET state = 'paid' WHERE quote = :quote AND state = 'unpaid'",
+                {"quote": quote_id},
+            )
+            if result.rowcount != 1:
+                raise UnknownQuoteError("unknown or already settled quote")
 
     async def issue_nft(
         self,
         h: int,
         S: PublicKey,
         pok: DlogEqProof,
-        payment: Optional[bytes] = None,
+        quote: Optional[str] = None,
         conn: Optional[Connection] = None,
     ) -> Tuple[PublicKey, PublicKey]:
-        """Mint the credential for asset hash h to owner commitment S."""
+        """Mint the credential for asset hash h to owner commitment S,
+        consuming a settled quote when the mint requires payment."""
         if not verify_owner_secret(S, pok):
             raise InvalidProofError("invalid owner secret proof")
-        if self.payment_verifier is not None:
-            await self.payment_verifier.verify_payment(payment, h)
         async with self.db.get_connection(
             conn, locks=[LockOptions(table="ps_assets")]
         ) as c:
+            if self.quote_backend is not None:
+                if not quote:
+                    raise PaymentError("mint quote required")
+                row = await self._sync_quote(c, quote)
+                if row["h"] != _h_hex(h):
+                    raise PaymentError("quote is for a different asset")
+                if row["state"] == "unpaid":
+                    raise PaymentError("quote is not paid")
+                result = await c.execute(
+                    "UPDATE ps_quotes SET state = 'used' WHERE quote = :quote AND state = 'paid'",
+                    {"quote": quote},
+                )
+                if result.rowcount != 1:
+                    raise AlreadySpentError("quote was already used")
             try:
                 await c.execute(
                     """

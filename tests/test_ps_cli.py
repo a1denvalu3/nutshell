@@ -6,7 +6,7 @@ from click.testing import CliRunner
 from fastapi.testclient import TestClient
 
 import cashu.nft.cli as nft_cli
-from cashu.core.crypto.ps import MintPrivateKeyPS, hash_asset
+from cashu.core.crypto.ps import MintPrivateKeyPS
 from cashu.core.db import Database
 from cashu.nft.api import create_app
 from cashu.nft.ledger import PSLedger
@@ -113,20 +113,43 @@ def test_cli_wallet_not_initialized(runner, tmp_path):
     assert "nft init" in result.output
 
 
-def test_cli_pay_ticket(runner, tmp_path, monkeypatch):
+def test_cli_quote_flow(runner, tmp_path, monkeypatch):
+    from cashu.nft.quotes import DevQuoteBackend
+
+    backend = DevQuoteBackend(b"operator secret!!")
+    ledger = PSLedger(
+        Database("test_nft_cli_paid", str(tmp_path / "paidmint")),
+        MintPrivateKeyPS.from_seed(b"test seed 012345"),
+        quote_backend=backend,
+    )
+    asyncio.run(ledger.migrate())
+    monkeypatch.setattr(
+        nft_cli, "_make_client", lambda url: NFTClient(TestClient(create_app(ledger)))
+    )
+    r, _ = runner
     asset = tmp_path / "art.jpg"
     asset.write_bytes(b"\xff\xd8 fake jpeg")
-    r, _ = runner
-    result = r.invoke(
-        cli,
-        ["nft", "pay-ticket", str(asset), "--secret", "operator secret!!"],
-        catch_exceptions=False,
-    )
-    assert result.exit_code == 0, result.output
-    ticket = result.output.strip()
-    assert len(ticket) == 64
-    # ticket matches the dev verifier's expectation
-    from cashu.nft.payment import DevPaymentVerifier
+    wallet = str(tmp_path / "payer.sqlite3")
+    invoke(runner, "init", wallet=wallet)
 
-    verifier = DevPaymentVerifier(b"operator secret!!")
-    assert ticket == verifier.issue_ticket(hash_asset(asset.read_bytes())).hex()
+    # minting without a quote is refused with a helpful message
+    result = r.invoke(cli, ["nft", "--wallet-db", wallet, "mint", str(asset)])
+    assert result.exit_code != 0
+    assert "nft quote" in result.output
+
+    out = invoke(runner, "quote", str(asset), wallet=wallet)
+    quote_id = out.split("quote:  ")[1].splitlines()[0].strip()
+    assert "amount: 21 sat" in out
+
+    # still unpaid: the mint rejects it
+    result = r.invoke(
+        cli, ["nft", "--wallet-db", wallet, "mint", str(asset), "--quote", quote_id]
+    )
+    assert result.exit_code != 0
+
+    out = invoke(
+        runner, "dev-pay", quote_id, "--secret", "operator secret!!", wallet=wallet
+    )
+    assert "state: paid" in out
+    out = invoke(runner, "mint", str(asset), "--quote", quote_id, wallet=wallet)
+    assert "minted: " in out

@@ -16,18 +16,24 @@ from cashu.core.crypto.ps import (
 from cashu.core.db import Database
 from cashu.nft.api import create_app
 from cashu.nft.ledger import PSLedger
-from cashu.nft.payment import DevPaymentVerifier
+from cashu.nft.quotes import DevQuoteBackend
 from cashu.nft.wallet import NFTClient, NFTWallet
 
 MINT_SEED = b"mint seed for integ"
 
 
+def paid_mint(client, wallet, asset, backend, description=""):
+    quote = client.mint_quote(asset)
+    client.dev_pay_quote(quote["quote"], backend.issue_dev_ticket(quote["quote"]))
+    return client.mint(wallet, asset, quote=quote["quote"], description=description)
+
+
 def make_service(path):
-    verifier = DevPaymentVerifier(b"operator secret!!")
+    verifier = DevQuoteBackend(b"operator secret!!")
     ledger = PSLedger(
         Database("test_nft_integ", str(path)),
         MintPrivateKeyPS.from_seed(MINT_SEED),
-        payment_verifier=verifier,
+        quote_backend=verifier,
     )
     asyncio.run(ledger.migrate())
     return NFTClient(TestClient(create_app(ledger))), verifier
@@ -41,10 +47,8 @@ def test_full_nft_lifecycle(tmp_path):
     # --- paid minting of two assets by alice
     art1, art2 = b"first jpeg", b"second jpeg"
     h1, h2 = hash_asset(art1), hash_asset(art2)
-    cred1 = client.mint(
-        alice, art1, payment=verifier.issue_ticket(h1), description="first"
-    )
-    cred2 = client.mint(alice, art2, payment=verifier.issue_ticket(h2))
+    cred1 = paid_mint(client, alice, art1, verifier, description="first")
+    cred2 = paid_mint(client, alice, art2, verifier)
     assert cred1.h == h1 and cred2.h == h2
 
     # --- service restart: everything survives

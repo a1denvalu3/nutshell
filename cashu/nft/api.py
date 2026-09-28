@@ -31,6 +31,7 @@ from .ledger import (
     PaymentError,
     PSLedger,
     UnknownAssetError,
+    UnknownQuoteError,
 )
 
 
@@ -38,7 +39,15 @@ class MintRequest(BaseModel):
     asset_hash: str  # 64 hex chars, hash_asset output
     owner_commitment: str  # 48-byte compressed G1 point, hex
     proof: str  # 64-byte DlogEqProof, hex
-    payment: Optional[str] = None  # hex ticket
+    quote: Optional[str] = None  # mint quote id, if the mint requires payment
+
+
+class MintQuoteRequest(BaseModel):
+    asset_hash: str
+
+
+class DevPayRequest(BaseModel):
+    ticket: str  # hex dev ticket
 
 
 class TransferRequest(BaseModel):
@@ -107,7 +116,7 @@ def _http_error(e: NFTError) -> HTTPException:
         return HTTPException(409, str(e))
     if isinstance(e, AlreadySpentError):
         return HTTPException(409, str(e))
-    if isinstance(e, UnknownAssetError):
+    if isinstance(e, (UnknownAssetError, UnknownQuoteError)):
         return HTTPException(404, str(e))
     if isinstance(e, (NotOwnerError, InvalidProofError)):
         return HTTPException(403, str(e))
@@ -122,8 +131,35 @@ def create_router(ledger: PSLedger) -> APIRouter:
         return {
             "keyset_id": ledger.keyset.keyset_id,
             "public_key": ledger.keyset.to_bytes().hex(),
-            "payment_required": ledger.payment_verifier is not None,
+            "payment_required": ledger.quote_backend is not None,
+            "mint_price_sats": ledger.quote_backend.price_sats
+            if ledger.quote_backend
+            else 0,
         }
+
+    @router.post("/mint/quote")
+    async def mint_quote(req: MintQuoteRequest):
+        try:
+            return await ledger.create_quote(_parse_scalar(req.asset_hash))
+        except NFTError as e:
+            raise _http_error(e)
+
+    @router.get("/mint/quote/{quote_id}")
+    async def mint_quote_state(quote_id: str):
+        try:
+            return await ledger.get_quote(quote_id)
+        except NFTError as e:
+            raise _http_error(e)
+
+    @router.post("/mint/quote/{quote_id}/pay")
+    async def mint_quote_dev_pay(quote_id: str, req: DevPayRequest):
+        try:
+            await ledger.dev_pay_quote(quote_id, bytes.fromhex(req.ticket))
+        except ValueError:
+            raise HTTPException(400, "invalid ticket encoding")
+        except NFTError as e:
+            raise _http_error(e)
+        return await ledger.get_quote(quote_id)
 
     @router.post("/mint", response_model=IssueResponse)
     async def mint(req: MintRequest):
@@ -132,7 +168,7 @@ def create_router(ledger: PSLedger) -> APIRouter:
                 h=_parse_scalar(req.asset_hash),
                 S=_parse_g1(req.owner_commitment),
                 pok=_parse_proof(req.proof),
-                payment=bytes.fromhex(req.payment) if req.payment else None,
+                quote=req.quote,
             )
         except NFTError as e:
             raise _http_error(e)

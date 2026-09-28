@@ -21,7 +21,7 @@ from ..core.db import Database
 from ..core.settings import settings
 from .api import create_app
 from .ledger import PSLedger
-from .payment import DevPaymentVerifier
+from .quotes import DevQuoteBackend
 
 
 def main() -> None:
@@ -33,14 +33,14 @@ def main() -> None:
         logger.warning("NFT_MINT_SEED unset: using a random ephemeral mint key")
         mint_key = MintPrivateKeyPS()
     payment_secret = os.environ.get("NFT_PAYMENT_SECRET")
-    verifier = DevPaymentVerifier(payment_secret.encode()) if payment_secret else None
-    ledger = PSLedger(Database("nft", db_dir), mint_key, payment_verifier=verifier)
+    backend = DevQuoteBackend(payment_secret.encode()) if payment_secret else None
+    ledger = PSLedger(Database("nft", db_dir), mint_key, quote_backend=backend)
     asyncio.run(ledger.migrate())
     port = int(os.environ.get("NFT_PORT", str(settings.mint_listen_port)))
     logger.info(
         f"PS-NFT service on :{port}, "
         f"keyset {ledger.keyset.keyset_id}, "
-        f"payment {'required' if verifier else 'not required'}"
+        f"payment {'required' if backend else 'not required'}"
     )
     uvicorn.run(create_app(ledger), host=settings.mint_listen_host, port=port)
 

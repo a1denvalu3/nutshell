@@ -27,9 +27,8 @@ from typing import Optional
 import click
 import httpx
 
-from ..core.crypto.ps import hash_asset
 from ..core.settings import settings
-from .payment import DevPaymentVerifier
+from .quotes import DevQuoteBackend
 from .wallet import NFTClient, NFTWallet
 
 # same default the rest of the cashu CLI uses (settings.mint_url, i.e.
@@ -137,27 +136,62 @@ def nft_info(ctx: click.Context):
     print(f"mint:             {ctx.obj['NFT_MINT_URL']}")
     print(f"keyset id:        {client.keyset_id}")
     print(f"payment required: {client.payment_required}")
+    if client.payment_required:
+        print(f"mint price:       {client.mint_price_sats} sat")
+
+
+@nft.command("quote", help="Request a mint quote for a file.")
+@click.argument("file", type=click.Path(exists=True, dir_okay=False))
+@click.pass_context
+@_cli_errors
+def nft_quote(ctx: click.Context, file: str):
+    client = _make_client(ctx.obj["NFT_MINT_URL"])
+    with open(file, "rb") as f:
+        asset = f.read()
+    quote = client.mint_quote(asset)
+    print(f"quote:  {quote['quote']}")
+    print(f"amount: {quote['amount']} sat")
+    print(f"state:  {quote['state']}")
+    print(f"request: {quote['request']}")
+
+
+@nft.command("dev-pay", help="Dev only: settle a mint quote with the operator secret.")
+@click.argument("quote_id", type=str)
+@click.option(
+    "--secret",
+    "secret",
+    envvar="NFT_PAYMENT_SECRET",
+    required=True,
+    help="Operator payment secret (or NFT_PAYMENT_SECRET).",
+)
+@click.pass_context
+@_cli_errors
+def nft_dev_pay(ctx: click.Context, quote_id: str, secret: str):
+    client = _make_client(ctx.obj["NFT_MINT_URL"])
+    backend = DevQuoteBackend(secret.encode())
+    client.dev_pay_quote(quote_id, backend.issue_dev_ticket(quote_id))
+    print(f"paid: {quote_id} (state: {client.quote_state(quote_id)})")
 
 
 @nft.command("mint", help="Mint an NFT for a file.")
 @click.argument("file", type=click.Path(exists=True, dir_okay=False))
-@click.option("--payment", "payment_hex", default=None, help="Payment ticket (hex).")
+@click.option("--quote", "quote_id", default=None, help="Settled mint quote id.")
 @click.option("--description", "-d", default="", help="Asset description.")
 @click.pass_context
 @_cli_errors
-def nft_mint(
-    ctx: click.Context, file: str, payment_hex: Optional[str], description: str
-):
+def nft_mint(ctx: click.Context, file: str, quote_id: Optional[str], description: str):
     client = _make_client(ctx.obj["NFT_MINT_URL"])
     wallet = _open_wallet(ctx.obj["NFT_WALLET_DB"])
-    if client.payment_required and not payment_hex:
-        raise click.UsageError("this mint requires a payment ticket (--payment <hex>)")
+    if client.payment_required and not quote_id:
+        raise click.UsageError(
+            "this mint requires a paid quote -- run `cashu nft quote <file>` first"
+        )
     with open(file, "rb") as f:
         asset = f.read()
     cred = client.mint(
         wallet,
         asset,
-        payment=bytes.fromhex(payment_hex) if payment_hex else None,
+        quote=quote_id,
         description=description or os.path.basename(file),
     )
     print(f"minted: {cred.h.to_bytes(32, 'big').hex()}")
@@ -248,20 +282,3 @@ def nft_burn(ctx: click.Context, asset_hash: str):
     h = _resolve_h(wallet, asset_hash)
     client.burn(wallet, h)
     print(f"burned: {h.to_bytes(32, 'big').hex()}")
-
-
-@nft.command("pay-ticket", help="Dev only: issue a payment ticket for a file.")
-@click.argument("file", type=click.Path(exists=True, dir_okay=False))
-@click.option(
-    "--secret",
-    "secret",
-    envvar="NFT_PAYMENT_SECRET",
-    required=True,
-    help="Operator payment secret (or NFT_PAYMENT_SECRET).",
-)
-@_cli_errors
-def nft_pay_ticket(file: str, secret: str):
-    with open(file, "rb") as f:
-        asset = f.read()
-    ticket = DevPaymentVerifier(secret.encode()).issue_ticket(hash_asset(asset))
-    print(ticket.hex())

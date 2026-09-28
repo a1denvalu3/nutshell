@@ -247,6 +247,7 @@ class NFTClient:
             self.keyset = MintPublicKeyPS.from_bytes(bytes.fromhex(info["public_key"]))
             self.keyset_id = info["keyset_id"]
             self.payment_required = bool(info["payment_required"])
+            self.mint_price_sats = int(info.get("mint_price_sats", 0))
         except (KeyError, ValueError):
             raise RuntimeError(
                 "the service at this URL does not look like a PS-NFT mint "
@@ -262,11 +263,34 @@ class NFTClient:
     def _g1(self, raw: str) -> PublicKey:
         return PublicKey(compressed=bytes.fromhex(raw), group="G1")
 
+    def mint_quote(self, asset: bytes) -> dict:
+        """Request a mint quote for an asset. Settle it (pay the invoice,
+        or dev-pay), then call mint with the quote id."""
+        h = hash_asset(asset)
+        return self._checked(
+            self.http.post(
+                f"{NFT_API_PREFIX}/mint/quote",
+                json={"asset_hash": h.to_bytes(32, "big").hex()},
+            )
+        ).json()
+
+    def quote_state(self, quote_id: str) -> str:
+        resp = self._checked(self.http.get(f"{NFT_API_PREFIX}/mint/quote/{quote_id}"))
+        return resp.json()["state"]
+
+    def dev_pay_quote(self, quote_id: str, ticket: bytes) -> None:
+        self._checked(
+            self.http.post(
+                f"{NFT_API_PREFIX}/mint/quote/{quote_id}/pay",
+                json={"ticket": ticket.hex()},
+            )
+        )
+
     def mint(
         self,
         wallet: NFTWallet,
         asset: bytes,
-        payment: Optional[bytes] = None,
+        quote: Optional[str] = None,
         description: str = "",
     ) -> Credential:
         h = hash_asset(asset)
@@ -278,7 +302,7 @@ class NFTClient:
                     "asset_hash": h.to_bytes(32, "big").hex(),
                     "owner_commitment": ticket.commitment.format().hex(),
                     "proof": ticket.proof.to_bytes().hex(),
-                    **({"payment": payment.hex()} if payment else {}),
+                    **({"quote": quote} if quote else {}),
                 },
             )
         ).json()
