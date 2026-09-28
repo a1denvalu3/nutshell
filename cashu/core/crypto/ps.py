@@ -34,7 +34,7 @@ Transfer:
 import hashlib
 import os
 from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from typing import List, Mapping, Optional, Tuple
 
 import pyblst
 
@@ -88,6 +88,38 @@ def _challenge(transcript: bytes) -> int:
     return int.from_bytes(hashlib.sha256(transcript).digest(), "big") % curve_order
 
 
+def _g1_from_bytes(compressed: bytes) -> PublicKey:
+    try:
+        return PublicKey(compressed=compressed, group="G1")
+    except ValueError:
+        raise ValueError("invalid G1 point encoding")
+
+
+def _g2_from_bytes(compressed: bytes) -> PublicKey:
+    try:
+        return PublicKey(compressed=compressed, group="G2")
+    except ValueError:
+        raise ValueError("invalid G2 point encoding")
+
+
+def _scalar_from_bytes(raw: bytes) -> int:
+    if len(raw) != 32:
+        raise ValueError("scalars are 32 bytes")
+    scalar = int.from_bytes(raw, "big")
+    if scalar >= curve_order:
+        raise ValueError("scalar out of range")
+    return scalar
+
+
+def hash_asset_parts(parts: List[bytes]) -> int:
+    """Streaming variant of hash_asset for large assets: SHA-256 over
+    length-prefixed chunks under the same domain separator."""
+    hasher = hashlib.sha256(PS_ASSET_DST)
+    for chunk in parts:
+        hasher.update(len(chunk).to_bytes(8, "big") + chunk)
+    return int.from_bytes(hasher.digest(), "big") % curve_order
+
+
 @dataclass
 class DlogEqProof:
     """Chaum-Pedersen proof that one scalar is the discrete log of n points
@@ -95,6 +127,18 @@ class DlogEqProof:
 
     challenge: int
     response: int
+
+    def to_bytes(self) -> bytes:
+        return _scalar_bytes(self.challenge) + _scalar_bytes(self.response)
+
+    @classmethod
+    def from_bytes(cls, raw: bytes) -> "DlogEqProof":
+        if len(raw) != 64:
+            raise ValueError("DlogEqProof is 64 bytes")
+        return cls(
+            challenge=_scalar_from_bytes(raw[:32]),
+            response=_scalar_from_bytes(raw[32:]),
+        )
 
 
 def _dlog_eq_transcript(
@@ -140,6 +184,26 @@ def verify_dlog_eq(
     return expected == proof.challenge
 
 
+PS_KEY_DST = b"Cashu_PS_Key_v1"
+
+
+def _derive_scalar(seed: bytes, label: bytes) -> int:
+    scalar = 0
+    counter = 0
+    while not 0 < scalar < curve_order:
+        scalar = (
+            int.from_bytes(
+                hashlib.sha256(
+                    PS_KEY_DST + label + counter.to_bytes(4, "big") + seed
+                ).digest(),
+                "big",
+            )
+            % curve_order
+        )
+        counter += 1
+    return scalar
+
+
 class MintPrivateKeyPS:
     def __init__(
         self,
@@ -150,6 +214,18 @@ class MintPrivateKeyPS:
         self.x = x or PrivateKey()
         self.y_h = y_h or PrivateKey()
         self.y_s = y_s or PrivateKey()
+
+    @classmethod
+    def from_seed(cls, seed: bytes) -> "MintPrivateKeyPS":
+        """Deterministically derive a mint key from at least 16 bytes of
+        seed entropy, so mint keys can be backed up and restored."""
+        if len(seed) < 16:
+            raise ValueError("seed must be at least 16 bytes")
+        return cls(
+            x=PrivateKey(scalar=_derive_scalar(seed, b"x")),
+            y_h=PrivateKey(scalar=_derive_scalar(seed, b"y_h")),
+            y_s=PrivateKey(scalar=_derive_scalar(seed, b"y_s")),
+        )
 
     @property
     def public_key(self) -> "MintPublicKeyPS":
@@ -168,6 +244,43 @@ class MintPublicKeyPS:
         self.Y_h2 = Y_h2
         self.Y_s2 = Y_s2
 
+    def to_bytes(self) -> bytes:
+        return self.X2.format() + self.Y_h2.format() + self.Y_s2.format()
+
+    @classmethod
+    def from_bytes(cls, raw: bytes) -> "MintPublicKeyPS":
+        if len(raw) != 288:
+            raise ValueError("MintPublicKeyPS is 288 bytes")
+        return cls(
+            X2=_g2_from_bytes(raw[:96]),
+            Y_h2=_g2_from_bytes(raw[96:192]),
+            Y_s2=_g2_from_bytes(raw[192:]),
+        )
+
+    @property
+    def keyset_id(self) -> str:
+        """16-hex-char identifier of this parameter set, cashu keyset style.
+
+        Credentials and presentations carry it so verifiers can select the
+        right parameters across key rotations."""
+        return hashlib.sha256(self.to_bytes()).hexdigest()[:16]
+
+
+def _keyset_id_from_bytes(raw: bytes) -> str:
+    if len(raw) != 8:
+        raise ValueError("keyset id is 8 bytes")
+    return raw.hex()
+
+
+def _keyset_id_to_bytes(keyset_id: str) -> bytes:
+    try:
+        raw = bytes.fromhex(keyset_id)
+    except ValueError:
+        raise ValueError("keyset id must be hex")
+    if len(raw) != 8:
+        raise ValueError("keyset id must be 16 hex chars")
+    return raw
+
 
 @dataclass
 class Credential:
@@ -177,6 +290,28 @@ class Credential:
     v: PublicKey
     h: int
     s: int
+    keyset_id: str = ""
+
+    def to_bytes(self) -> bytes:
+        return (
+            _keyset_id_to_bytes(self.keyset_id)
+            + self.u.format()
+            + self.v.format()
+            + _scalar_bytes(self.h)
+            + _scalar_bytes(self.s)
+        )
+
+    @classmethod
+    def from_bytes(cls, raw: bytes) -> "Credential":
+        if len(raw) != 168:
+            raise ValueError("Credential is 168 bytes")
+        return cls(
+            u=_g1_from_bytes(raw[8:56]),
+            v=_g1_from_bytes(raw[56:104]),
+            h=_scalar_from_bytes(raw[104:136]),
+            s=_scalar_from_bytes(raw[136:]),
+            keyset_id=_keyset_id_from_bytes(raw[:8]),
+        )
 
 
 @dataclass
@@ -190,6 +325,34 @@ class Presentation:
     owner_commitment: PublicKey  # S = g1^s
     nullifier: PublicKey  # N = G_NULL^s
     proof: DlogEqProof
+    keyset_id: str = ""
+
+    def to_bytes(self) -> bytes:
+        return (
+            _keyset_id_to_bytes(self.keyset_id)
+            + _scalar_bytes(self.h)
+            + self.u.format()
+            + self.v.format()
+            + self.u_s.format()
+            + self.owner_commitment.format()
+            + self.nullifier.format()
+            + self.proof.to_bytes()
+        )
+
+    @classmethod
+    def from_bytes(cls, raw: bytes) -> "Presentation":
+        if len(raw) != 344:
+            raise ValueError("Presentation is 344 bytes")
+        return cls(
+            keyset_id=_keyset_id_from_bytes(raw[:8]),
+            h=_scalar_from_bytes(raw[8:40]),
+            u=_g1_from_bytes(raw[40:88]),
+            v=_g1_from_bytes(raw[88:136]),
+            u_s=_g1_from_bytes(raw[136:184]),
+            owner_commitment=_g1_from_bytes(raw[184:232]),
+            nullifier=_g1_from_bytes(raw[232:280]),
+            proof=DlogEqProof.from_bytes(raw[280:]),
+        )
 
 
 def prove_owner_secret(s: int) -> Tuple[PublicKey, DlogEqProof]:
@@ -238,7 +401,14 @@ def present(cred: Credential, rho: Optional[int] = None) -> Presentation:
     N = G_NULL * cred.s
     proof = prove_dlog_eq([G1, G_NULL, u_r], [S, N, u_s], cred.s, PS_PRESENT_DST)
     return Presentation(
-        h=cred.h, u=u_r, v=v_r, u_s=u_s, owner_commitment=S, nullifier=N, proof=proof
+        h=cred.h,
+        u=u_r,
+        v=v_r,
+        u_s=u_s,
+        owner_commitment=S,
+        nullifier=N,
+        proof=proof,
+        keyset_id=cred.keyset_id,
     )
 
 
@@ -270,3 +440,13 @@ def verify_presentation(mint_public: MintPublicKeyPS, pres: Presentation) -> boo
     miller = miller * pyblst.miller_loop(pres.u.point, base_h.point)
     miller = miller * pyblst.miller_loop(pres.u_s.point, mint_public.Y_s2.point)
     return pyblst.final_verify(miller, pyblst.BlstFP12Element())
+
+
+def verify_presentation_keysets(
+    keysets: Mapping[str, MintPublicKeyPS], pres: Presentation
+) -> bool:
+    """Verify a presentation against the keyset it names, so verifiers can
+    hold parameters for every key generation a mint has ever used."""
+    if pres.keyset_id not in keysets:
+        return False
+    return verify_presentation(keysets[pres.keyset_id], pres)
