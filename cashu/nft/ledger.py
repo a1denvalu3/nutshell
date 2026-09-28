@@ -13,7 +13,7 @@ cashu/core/crypto/ps.py:
       and re-issuance either all commit or all roll back
 """
 
-from typing import Optional, Tuple
+from typing import Optional, Protocol, Tuple
 
 from sqlalchemy.exc import IntegrityError
 
@@ -58,17 +58,26 @@ class PaymentError(NFTError):
     pass
 
 
+class PaymentVerifierProtocol(Protocol):
+    async def verify_payment(self, payment: Optional[bytes], h: int) -> None: ...
+
+
 def _h_hex(h: int) -> str:
     return h.to_bytes(32, "big").hex()
 
 
 class PSLedger:
-    def __init__(self, db: Database, mint_key: MintPrivateKeyPS):
+    def __init__(
+        self,
+        db: Database,
+        mint_key: MintPrivateKeyPS,
+        payment_verifier: Optional[PaymentVerifierProtocol] = None,
+    ):
         self.db = db
         self.mint_key = mint_key
         # Optional pluggable payment gate, see cashu/nft/payment.py. When
         # set, issue_nft requires a payment token the verifier accepts.
-        self.payment_verifier = None
+        self.payment_verifier = payment_verifier
 
     @property
     def keyset(self) -> MintPublicKeyPS:
