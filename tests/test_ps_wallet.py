@@ -102,3 +102,45 @@ def test_offline_verification_uses_fetched_keyset(service, tmp_path):
     assert client.verify(pres)
     pres.h = hash_asset(b"tampered")
     assert not client.verify(pres)
+
+
+def test_token_send_receive(service, tmp_path):
+    client, verifier = service
+    alice = NFTWallet(str(tmp_path / "alice.sqlite3"), seed=b"alice seed 00001")
+    bob = NFTWallet(str(tmp_path / "bob.sqlite3"), seed=b"bob seed 0000001")
+    asset = b"jpeg bytes"
+    h = hash_asset(asset)
+    client.mint(alice, asset, payment=verifier.issue_ticket(h))
+
+    token = client.send_token(alice, h)
+    assert token.startswith("psnft1")
+    assert alice.assets() == []
+
+    cred = client.receive(bob, token, description="gift")
+    assert cred.h == h
+    assert client.verify(bob.present(h))
+
+    # double receive: the nullifier is already spent
+    with pytest.raises(RuntimeError, match="409"):
+        client.receive(alice, token)
+
+
+def test_receive_private(service, tmp_path):
+    client, verifier = service
+    alice = NFTWallet(str(tmp_path / "alice.sqlite3"), seed=b"alice seed 00001")
+    bob = NFTWallet(str(tmp_path / "bob.sqlite3"), seed=b"bob seed 0000001")
+    asset = b"jpeg bytes"
+    h = hash_asset(asset)
+    client.mint(alice, asset, payment=verifier.issue_ticket(h))
+    token = client.send_token(alice, h)
+    cred = client.receive(bob, token, private=True)
+    assert cred.h == h
+    assert client.verify(bob.present(h))
+
+
+def test_decode_token_garbage(service):
+    client, _ = service
+    with pytest.raises(ValueError, match="invalid NFT token"):
+        client.decode_token("psnft1deadbeef")
+    with pytest.raises(ValueError, match="invalid NFT token"):
+        client.decode_token("cashuA123")

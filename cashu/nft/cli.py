@@ -5,13 +5,12 @@ lives in a local sqlite wallet (default: <cashu_dir>/nft.sqlite3) and on
 the NFT service (default http://127.0.0.1:8338, override with --mint-url
 or NFT_MINT_URL).
 
-Typical flow:
+Typical flow (cashu-style, sending is offline):
     cashu nft init                       # create wallet, prints the seed
     cashu nft mint my.jpg                # mint an NFT for a file
     cashu nft list                       # show owned assets
-    cashu nft ticket                     # receiver: print a receive ticket
-    cashu nft send <h> --ticket '<json>' # sender: transfer, prints a package
-    cashu nft claim '<package>'          # receiver: store the credential
+    cashu nft send <h>                   # print a bearer token for the receiver
+    cashu nft receive <token>            # receiver: swap the token at the mint
     cashu nft verify <h>                 # offline ownership check
     cashu nft burn <h>                   # retire the asset
 
@@ -28,7 +27,6 @@ from typing import Optional
 import click
 import httpx
 
-from ..core.crypto.bls import PublicKey
 from ..core.crypto.ps import hash_asset
 from ..core.settings import settings
 from .payment import DevPaymentVerifier
@@ -178,77 +176,36 @@ def nft_list(ctx: click.Context):
         print(f"{a.h.to_bytes(32, 'big').hex()}  {a.description}")
 
 
-@nft.command("ticket", help="Print a receive ticket for an incoming transfer.")
+@nft.command("send", help="Send an NFT offline as a bearer token.")
+@click.argument("asset_hash", type=str)
 @click.pass_context
 @_cli_errors
-def nft_ticket(ctx: click.Context):
+def nft_send(ctx: click.Context, asset_hash: str):
+    client = _make_client(ctx.obj["NFT_MINT_URL"])
     wallet = _open_wallet(ctx.obj["NFT_WALLET_DB"])
-    ticket = wallet.prepare_receive()
-    print(
-        json.dumps(
-            {
-                "commitment": ticket.commitment.format().hex(),
-                "proof": ticket.proof.to_bytes().hex(),
-            }
-        )
-    )
+    h = _resolve_h(wallet, asset_hash)
+    token = client.send_token(wallet, h)
+    print("send this token to the receiver (bearer instrument, keep it safe):")
+    print(token)
 
 
-@nft.command("send", help="Transfer an NFT to a receive ticket.")
-@click.argument("asset_hash", type=str)
-@click.option("--ticket", "ticket_json", required=True, help="Receive ticket JSON.")
+@nft.command("receive", help="Swap a received token at the mint.")
+@click.argument("token", type=str)
+@click.option("--description", "-d", default="", help="Asset description.")
 @click.option(
     "--private",
     "private",
     is_flag=True,
     default=False,
-    help="Hide the asset hash from the mint.",
+    help="Hide the asset hash from the mint during the swap.",
 )
 @click.pass_context
 @_cli_errors
-def nft_send(ctx: click.Context, asset_hash: str, ticket_json: str, private: bool):
+def nft_receive(ctx: click.Context, token: str, description: str, private: bool):
     client = _make_client(ctx.obj["NFT_MINT_URL"])
     wallet = _open_wallet(ctx.obj["NFT_WALLET_DB"])
-    h = _resolve_h(wallet, asset_hash)
-    ticket = json.loads(ticket_json)
-    commitment = bytes.fromhex(ticket["commitment"])
-    proof = bytes.fromhex(ticket["proof"])
-    if private:
-        u, v = client.transfer_private(wallet, h, commitment, proof)
-    else:
-        u, v = client.transfer(wallet, h, commitment, proof)
-    wallet.delete_asset(h)
-    print("transferred. give this package to the receiver:")
-    print(
-        json.dumps(
-            {
-                "h": h.to_bytes(32, "big").hex(),
-                "u": u.format().hex(),
-                "v": v.format().hex(),
-                "commitment": commitment.hex(),
-                "keyset_id": client.keyset_id,
-            }
-        )
-    )
-
-
-@nft.command("claim", help="Store a credential received via `nft send`.")
-@click.argument("package_json", type=str)
-@click.option("--description", "-d", default="", help="Asset description.")
-@click.pass_context
-@_cli_errors
-def nft_claim(ctx: click.Context, package_json: str, description: str):
-    wallet = _open_wallet(ctx.obj["NFT_WALLET_DB"])
-    package = json.loads(package_json)
-    cred = wallet.claim_credential(
-        commitment=bytes.fromhex(package["commitment"]),
-        u=PublicKey(compressed=bytes.fromhex(package["u"]), group="G1"),
-        v=PublicKey(compressed=bytes.fromhex(package["v"]), group="G1"),
-        h=int(package["h"], 16),
-        keyset_id=package["keyset_id"],
-        description=description,
-    )
-    print(f"claimed: {cred.h.to_bytes(32, 'big').hex()}")
+    cred = client.receive(wallet, token, description=description, private=private)
+    print(f"received: {cred.h.to_bytes(32, 'big').hex()}")
 
 
 @nft.command("verify", help="Verify ownership of an NFT offline.")

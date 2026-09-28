@@ -69,15 +69,14 @@ def test_cli_full_flow(runner, tmp_path):
     result = r.invoke(cli, ["nft", "--wallet-db", alice, "mint", str(asset)])
     assert result.exit_code != 0
 
-    # transfer alice -> bob via ticket/package, using a hash prefix
-    ticket = invoke(runner, "ticket", wallet=bob).strip()
-    out = invoke(runner, "send", h_full[:12], "--ticket", ticket, wallet=alice)
-    package = out.strip().splitlines()[-1]
-    assert json.loads(package)["h"] == h_full
-
-    out = invoke(runner, "claim", package, "-d", "art.jpg", wallet=bob)
-    assert f"claimed: {h_full}" in out
+    # offline send alice -> bob, then bob swaps the token at the mint
+    out = invoke(runner, "send", h_full[:12], wallet=alice)
+    token = out.strip().splitlines()[-1]
+    assert token.startswith("psnft1")
     assert "no assets" in invoke(runner, "list", wallet=alice)
+
+    out = invoke(runner, "receive", token, "-d", "art.jpg", wallet=bob)
+    assert f"received: {h_full}" in out
 
     out = invoke(runner, "verify", h_full[:12], wallet=bob)
     assert "credential valid: True" in out
@@ -87,13 +86,13 @@ def test_cli_full_flow(runner, tmp_path):
     out = invoke(runner, "registry", h_full[:12], wallet=bob)
     assert json.loads(out)["epoch"] == 1
 
-    # private transfer bob -> alice
-    ticket2 = invoke(runner, "ticket", wallet=alice).strip()
-    out = invoke(
-        runner, "send", h_full[:12], "--ticket", ticket2, "--private", wallet=bob
-    )
-    package2 = out.strip().splitlines()[-1]
-    invoke(runner, "claim", package2, wallet=alice)
+    # receiving the same token twice fails: the nullifier is spent
+    result = r.invoke(cli, ["nft", "--wallet-db", alice, "receive", token])
+    assert result.exit_code != 0
+
+    # private receive: bob sends offline, alice swaps with h hidden
+    token2 = invoke(runner, "send", h_full[:12], wallet=bob).strip().splitlines()[-1]
+    invoke(runner, "receive", token2, "--private", wallet=alice)
     out = invoke(runner, "verify", h_full[:12], wallet=alice)
     assert "registry epoch:   2" in out
 

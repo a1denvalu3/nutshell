@@ -38,6 +38,9 @@ from .registry import verify_registry_entry
 
 WALLET_SECRET_DST = b"Cashu_PS_Wallet_v1"
 
+# bearer token prefix, cashu-style ("cashuA..." analog)
+TOKEN_PREFIX = "psnft1"
+
 
 def _derive_owner_secret(seed: bytes, index: int) -> int:
     s = 0
@@ -200,33 +203,6 @@ class NFTWallet:
         )
         self.db.commit()
 
-    def claim_credential(
-        self,
-        commitment: bytes,
-        u: PublicKey,
-        v: PublicKey,
-        h: int,
-        keyset_id: str,
-        description: str = "",
-    ) -> Credential:
-        """Receiver side of a transfer: consume the pending ticket that
-        commitment belongs to and store the credential."""
-        index = self.pop_pending(commitment)
-        cred = Credential(
-            u=u,
-            v=v,
-            h=h,
-            s=_derive_owner_secret(self._seed, index),
-            keyset_id=keyset_id,
-        )
-        self.db.execute(
-            "INSERT OR REPLACE INTO assets (h, secret_index, credential, description)"
-            " VALUES (?, ?, ?, ?)",
-            (h.to_bytes(32, "big").hex(), index, cred.to_bytes(), description),
-        )
-        self.db.commit()
-        return cred
-
     def assets(self) -> List[WalletAsset]:
         rows = self.db.execute(
             "SELECT h, credential, description FROM assets ORDER BY rowid"
@@ -315,6 +291,24 @@ class NFTClient:
             description,
         )
 
+    def _transfer_cred(
+        self, cred: Credential, new_owner_commitment: bytes, new_proof: bytes
+    ) -> Tuple[PublicKey, PublicKey]:
+        """Swap a credential at the mint toward a receiver's commitment.
+        The presentation proves the MAC; the mint re-issues on the same h.
+        Returns the raw new credential for the receiver to finalize."""
+        resp = self._checked(
+            self.http.post(
+                f"{NFT_API_PREFIX}/transfer",
+                json={
+                    "presentation": present(cred).to_bytes().hex(),
+                    "new_owner_commitment": new_owner_commitment.hex(),
+                    "new_proof": new_proof.hex(),
+                },
+            )
+        ).json()
+        return self._g1(resp["u"]), self._g1(resp["v"])
+
     def transfer(
         self,
         wallet: NFTWallet,
@@ -323,19 +317,10 @@ class NFTClient:
         new_proof: bytes,
     ) -> Tuple[PublicKey, PublicKey]:
         """Spend the wallet's credential for h toward a receiver's
-        commitment. Returns the raw new credential for the receiver to
-        finalize."""
-        resp = self._checked(
-            self.http.post(
-                f"{NFT_API_PREFIX}/transfer",
-                json={
-                    "presentation": wallet.present(h).to_bytes().hex(),
-                    "new_owner_commitment": new_owner_commitment.hex(),
-                    "new_proof": new_proof.hex(),
-                },
-            )
-        ).json()
-        return self._g1(resp["u"]), self._g1(resp["v"])
+        commitment."""
+        return self._transfer_cred(
+            wallet.get_credential(h), new_owner_commitment, new_proof
+        )
 
     def transfer_to_self(self, wallet: NFTWallet, h: int) -> Credential:
         ticket = wallet.prepare_receive()
@@ -384,12 +369,12 @@ class NFTClient:
             bytes.fromhex(entry["signature"]),
         )
 
-    def transfer_private(
-        self, wallet: NFTWallet, h: int, new_owner_commitment: bytes, new_proof: bytes
+    def _transfer_private_cred(
+        self, cred: Credential, new_owner_commitment: bytes, new_proof: bytes
     ) -> Tuple[PublicKey, PublicKey]:
-        """Hidden-h variant of transfer: the mint never sees the asset
-        hash. Returns the blind-issued new credential for the receiver."""
-        cred = wallet.get_credential(h)
+        """Hidden-h variant of the swap: the mint never sees the asset
+        hash. The blind witness proves the new credential binds the same
+        h as the presented one. Returns the blind-issued credential."""
         pres = present_private(cred)
         begin = self._checked(
             self.http.post(
@@ -413,9 +398,65 @@ class NFTClient:
         ).json()
         return self._g1(resp["u"]), self._g1(resp["v"])
 
+    def transfer_private(
+        self, wallet: NFTWallet, h: int, new_owner_commitment: bytes, new_proof: bytes
+    ) -> Tuple[PublicKey, PublicKey]:
+        """Hidden-h variant of transfer: the mint never sees the asset
+        hash. Returns the blind-issued new credential for the receiver."""
+        return self._transfer_private_cred(
+            wallet.get_credential(h), new_owner_commitment, new_proof
+        )
+
     def transfer_private_to_self(self, wallet: NFTWallet, h: int) -> Credential:
         ticket = wallet.prepare_receive()
         u, v = self.transfer_private(
             wallet, h, ticket.commitment.format(), ticket.proof.to_bytes()
         )
         return wallet.store_credential(ticket, u, v, h, self.keyset_id)
+
+    def send_token(self, wallet: NFTWallet, h: int) -> str:
+        """Cashu-style offline send: serialize the credential as a bearer
+        token the receiver can swap at the mint. The sender keeps a copy
+        of the secret until the receiver swaps, exactly like an unredeemed
+        ecash token, so the receiver should swap promptly."""
+        cred = wallet.get_credential(h)
+        wallet.delete_asset(h)
+        return TOKEN_PREFIX + cred.to_bytes().hex()
+
+    @staticmethod
+    def decode_token(token: str) -> Credential:
+        t = token.strip()
+        if t.startswith(TOKEN_PREFIX):
+            t = t[len(TOKEN_PREFIX) :]
+        try:
+            return Credential.from_bytes(bytes.fromhex(t))
+        except ValueError:
+            raise ValueError("invalid NFT token")
+
+    def receive(
+        self,
+        wallet: NFTWallet,
+        token: str,
+        description: str = "",
+        private: bool = False,
+    ) -> Credential:
+        """Swap a received token at the mint: present the credential
+        (proving the MAC and, in private mode, the equality of h), and
+        re-issue it to a fresh secret of this wallet, all in one step."""
+        cred = self.decode_token(token)
+        if cred.keyset_id != self.keyset_id:
+            raise ValueError(
+                f"token is for keyset {cred.keyset_id}, not this mint's {self.keyset_id}"
+            )
+        ticket = wallet.prepare_receive()
+        if private:
+            u, v = self._transfer_private_cred(
+                cred, ticket.commitment.format(), ticket.proof.to_bytes()
+            )
+        else:
+            u, v = self._transfer_cred(
+                cred, ticket.commitment.format(), ticket.proof.to_bytes()
+            )
+        return wallet.store_credential(
+            ticket, u, v, cred.h, self.keyset_id, description
+        )
