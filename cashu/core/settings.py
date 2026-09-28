@@ -86,6 +86,12 @@ class MintSettings(CashuSettings):
     mint_retry_exponential_backoff_base_delay: int = Field(default=1)
     mint_retry_exponential_backoff_max_delay: int = Field(default=10)
 
+    mint_nft_module: bool = Field(
+        default=False,
+        title="Experimental PS-NFT module",
+        description="Serve the experimental PS-credential NFT API under /v1/nft.",
+    )
+
 
 class MintWatchdogSettings(MintSettings):
     mint_watchdog_enabled: bool = Field(

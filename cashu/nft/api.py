@@ -12,7 +12,7 @@ client-side: the mint only ever sees h, never the asset bytes.
 
 from typing import Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel
 
 from ..core.crypto.bls import PublicKey, curve_order
@@ -114,10 +114,10 @@ def _http_error(e: NFTError) -> HTTPException:
     return HTTPException(400, str(e))
 
 
-def create_app(ledger: PSLedger) -> FastAPI:
-    app = FastAPI(title="cashu PS-NFT experimental service")
+def create_router(ledger: PSLedger) -> APIRouter:
+    router = APIRouter()
 
-    @app.get("/v1/info")
+    @router.get("/info")
     async def info():
         return {
             "keyset_id": ledger.keyset.keyset_id,
@@ -125,7 +125,7 @@ def create_app(ledger: PSLedger) -> FastAPI:
             "payment_required": ledger.payment_verifier is not None,
         }
 
-    @app.post("/v1/mint", response_model=IssueResponse)
+    @router.post("/mint", response_model=IssueResponse)
     async def mint(req: MintRequest):
         try:
             u, v = await ledger.issue_nft(
@@ -140,7 +140,7 @@ def create_app(ledger: PSLedger) -> FastAPI:
             u=u.format().hex(), v=v.format().hex(), keyset_id=ledger.keyset.keyset_id
         )
 
-    @app.post("/v1/transfer", response_model=IssueResponse)
+    @router.post("/transfer", response_model=IssueResponse)
     async def transfer(req: TransferRequest):
         try:
             u, v = await ledger.transfer(
@@ -154,7 +154,7 @@ def create_app(ledger: PSLedger) -> FastAPI:
             u=u.format().hex(), v=v.format().hex(), keyset_id=ledger.keyset.keyset_id
         )
 
-    @app.post("/v1/burn")
+    @router.post("/burn")
     async def burn(req: SpendRequest):
         try:
             await ledger.burn(pres=_parse_presentation(req.presentation))
@@ -162,7 +162,7 @@ def create_app(ledger: PSLedger) -> FastAPI:
             raise _http_error(e)
         return {"status": "burned"}
 
-    @app.post("/v1/transfer/private/begin")
+    @router.post("/transfer/private/begin")
     async def transfer_private_begin(req: PrivateTransferBeginRequest):
         try:
             u2 = await ledger.transfer_private_begin(bytes.fromhex(req.nullifier))
@@ -170,7 +170,7 @@ def create_app(ledger: PSLedger) -> FastAPI:
             raise _http_error(e)
         return {"u": u2.format().hex()}
 
-    @app.post("/v1/transfer/private", response_model=IssueResponse)
+    @router.post("/transfer/private", response_model=IssueResponse)
     async def transfer_private(req: PrivateTransferRequest):
         try:
             u2, v2 = await ledger.transfer_private(
@@ -188,7 +188,7 @@ def create_app(ledger: PSLedger) -> FastAPI:
             u=u2.format().hex(), v=v2.format().hex(), keyset_id=ledger.keyset.keyset_id
         )
 
-    @app.post("/v1/verify")
+    @router.post("/verify")
     async def verify(req: SpendRequest):
         pres = _parse_presentation(req.presentation)
         valid = pres.keyset_id in ("", ledger.keyset.keyset_id) and verify_presentation(
@@ -203,7 +203,7 @@ def create_app(ledger: PSLedger) -> FastAPI:
             else False,
         }
 
-    @app.get("/v1/registry/{asset_hash}")
+    @router.get("/registry/{asset_hash}")
     async def registry(asset_hash: str):
         h = _parse_scalar(asset_hash)
         entry = await ledger.registry_entry(h)
@@ -218,4 +218,14 @@ def create_app(ledger: PSLedger) -> FastAPI:
             "signature": signature.hex(),
         }
 
+    return router
+
+
+NFT_API_PREFIX = "/v1/nft"
+
+
+def create_app(ledger: PSLedger) -> FastAPI:
+    """Standalone app: serves the NFT router under /v1/nft."""
+    app = FastAPI(title="cashu PS-NFT experimental service")
+    app.include_router(create_router(ledger), prefix=NFT_API_PREFIX, tags=["NFT"])
     return app

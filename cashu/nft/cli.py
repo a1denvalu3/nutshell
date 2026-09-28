@@ -14,6 +14,9 @@ Typical flow:
     cashu nft claim '<package>'          # receiver: store the credential
     cashu nft verify <h>                 # offline ownership check
     cashu nft burn <h>                   # retire the asset
+
+The mint URL defaults to settings.mint_url (the same default as every
+other cashu command); override with --mint-url or NFT_MINT_URL.
 """
 
 import functools
@@ -31,7 +34,9 @@ from ..core.settings import settings
 from .payment import DevPaymentVerifier
 from .wallet import NFTClient, NFTWallet
 
-DEFAULT_MINT_URL = "http://127.0.0.1:8338"
+# same default the rest of the cashu CLI uses (settings.mint_url, i.e.
+# http://<mint_host>:<mint_port>, 127.0.0.1:3338 unless configured)
+DEFAULT_MINT_URL = settings.mint_url or "http://127.0.0.1:3338"
 
 
 def _cli_errors(func):

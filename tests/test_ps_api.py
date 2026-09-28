@@ -33,7 +33,7 @@ def mint_via_api(client, verifier, asset: bytes, s: int) -> Credential:
     h = hash_asset(asset)
     S, pok = prove_owner_secret(s)
     resp = client.post(
-        "/v1/mint",
+        "/v1/nft/mint",
         json={
             "asset_hash": h.to_bytes(32, "big").hex(),
             "owner_commitment": S.format().hex(),
@@ -57,7 +57,7 @@ def mint_via_api(client, verifier, asset: bytes, s: int) -> Credential:
 def transfer_via_api(client, cred: Credential, s_new: int) -> Credential:
     S_new, pok_new = prove_owner_secret(s_new)
     resp = client.post(
-        "/v1/transfer",
+        "/v1/nft/transfer",
         json={
             "presentation": present(cred).to_bytes().hex(),
             "new_owner_commitment": S_new.format().hex(),
@@ -79,7 +79,7 @@ def transfer_via_api(client, cred: Credential, s_new: int) -> Credential:
 
 def test_info(client):
     c, _ = client
-    resp = c.get("/v1/info")
+    resp = c.get("/v1/nft/info")
     assert resp.status_code == 200
     body = resp.json()
     assert len(body["keyset_id"]) == 16
@@ -91,10 +91,10 @@ def test_mint_and_verify_and_registry(client):
     c, verifier = client
     cred = mint_via_api(c, verifier, b"jpeg", 111)
 
-    verify = c.post("/v1/verify", json={"presentation": present(cred).to_bytes().hex()})
+    verify = c.post("/v1/nft/verify", json={"presentation": present(cred).to_bytes().hex()})
     assert verify.json() == {"valid": True, "registered": True, "owner_matches": True}
 
-    reg = c.get(f"/v1/registry/{cred.h.to_bytes(32, 'big').hex()}")
+    reg = c.get(f"/v1/nft/registry/{cred.h.to_bytes(32, 'big').hex()}")
     assert reg.json()["owner"] == (G1 * 111).format().hex()
 
 
@@ -103,7 +103,7 @@ def test_mint_without_payment_is_402(client):
     h = hash_asset(b"jpeg")
     S, pok = prove_owner_secret(111)
     resp = c.post(
-        "/v1/mint",
+        "/v1/nft/mint",
         json={
             "asset_hash": h.to_bytes(32, "big").hex(),
             "owner_commitment": S.format().hex(),
@@ -119,7 +119,7 @@ def test_double_mint_is_409(client):
     h = hash_asset(b"jpeg")
     S, pok = prove_owner_secret(222)
     resp = c.post(
-        "/v1/mint",
+        "/v1/nft/mint",
         json={
             "asset_hash": h.to_bytes(32, "big").hex(),
             "owner_commitment": S.format().hex(),
@@ -135,14 +135,14 @@ def test_transfer_and_replay_is_409(client):
     cred = mint_via_api(c, verifier, b"jpeg", 111)
     cred2 = transfer_via_api(c, cred, 222)
     verify = c.post(
-        "/v1/verify", json={"presentation": present(cred2).to_bytes().hex()}
+        "/v1/nft/verify", json={"presentation": present(cred2).to_bytes().hex()}
     )
     assert verify.json()["owner_matches"] is True
 
     # replaying alice's spent presentation conflicts
     S3, pok3 = prove_owner_secret(333)
     resp = c.post(
-        "/v1/transfer",
+        "/v1/nft/transfer",
         json={
             "presentation": present(cred).to_bytes().hex(),
             "new_owner_commitment": S3.format().hex(),
@@ -155,17 +155,17 @@ def test_transfer_and_replay_is_409(client):
 def test_burn(client):
     c, verifier = client
     cred = mint_via_api(c, verifier, b"jpeg", 111)
-    resp = c.post("/v1/burn", json={"presentation": present(cred).to_bytes().hex()})
+    resp = c.post("/v1/nft/burn", json={"presentation": present(cred).to_bytes().hex()})
     assert resp.json() == {"status": "burned"}
-    assert c.get(f"/v1/registry/{cred.h.to_bytes(32, 'big').hex()}").status_code == 404
-    verify = c.post("/v1/verify", json={"presentation": present(cred).to_bytes().hex()})
+    assert c.get(f"/v1/nft/registry/{cred.h.to_bytes(32, 'big').hex()}").status_code == 404
+    verify = c.post("/v1/nft/verify", json={"presentation": present(cred).to_bytes().hex()})
     # the crypto still verifies, but the asset is gone from the registry
     assert verify.json() == {"valid": True, "registered": False, "owner_matches": False}
 
 
 def test_malformed_inputs(client):
     c, _ = client
-    assert c.post("/v1/mint", json={"asset_hash": "zz"}).status_code == 422
-    resp = c.post("/v1/verify", json={"presentation": "abcd"})
+    assert c.post("/v1/nft/mint", json={"asset_hash": "zz"}).status_code == 422
+    resp = c.post("/v1/nft/verify", json={"presentation": "abcd"})
     assert resp.status_code == 400
-    assert c.get("/v1/registry/00").status_code == 400
+    assert c.get("/v1/nft/registry/00").status_code == 400

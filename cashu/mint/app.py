@@ -35,6 +35,8 @@ from .middleware import add_middlewares, request_validation_exception_handler
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     await start_mint()
+    if settings.mint_nft_module:
+        await nft_ledger.migrate()
     if settings.mint_redis_cache_enabled:
         await redis.test_connection()
     if settings.mint_require_auth:
@@ -118,6 +120,14 @@ app.add_exception_handler(RequestValidationError, request_validation_exception_h
 
 # Add routers
 app.include_router(router=router, tags=["Mint"])
+
+if settings.mint_nft_module:
+    from ..nft.api import NFT_API_PREFIX
+    from ..nft.mint_integration import build_router_and_ledger
+
+    nft_router, nft_ledger = build_router_and_ledger()
+    app.include_router(nft_router, prefix=NFT_API_PREFIX, tags=["NFT"])
+    logger.info(f"Experimental PS-NFT module enabled at {NFT_API_PREFIX}")
 
 if settings.mint_require_auth:
     app.include_router(auth_router, tags=["Auth"])

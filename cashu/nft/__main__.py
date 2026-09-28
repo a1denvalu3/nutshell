@@ -7,7 +7,7 @@ Environment:
     NFT_MINT_SEED       mint key seed; random ephemeral key if unset
     NFT_PAYMENT_SECRET  if set, minting requires HMAC payment tickets
                         from this secret (see cashu/nft/payment.py)
-    NFT_PORT            default 8338
+    NFT_PORT            default: settings.mint_listen_port (3338)
 """
 
 import asyncio
@@ -18,6 +18,7 @@ from loguru import logger
 
 from ..core.crypto.ps import MintPrivateKeyPS
 from ..core.db import Database
+from ..core.settings import settings
 from .api import create_app
 from .ledger import PSLedger
 from .payment import DevPaymentVerifier
@@ -35,16 +36,13 @@ def main() -> None:
     verifier = DevPaymentVerifier(payment_secret.encode()) if payment_secret else None
     ledger = PSLedger(Database("nft", db_dir), mint_key, payment_verifier=verifier)
     asyncio.run(ledger.migrate())
+    port = int(os.environ.get("NFT_PORT", str(settings.mint_listen_port)))
     logger.info(
-        f"PS-NFT service on :{os.environ.get('NFT_PORT', '8338')}, "
+        f"PS-NFT service on :{port}, "
         f"keyset {ledger.keyset.keyset_id}, "
         f"payment {'required' if verifier else 'not required'}"
     )
-    uvicorn.run(
-        create_app(ledger),
-        host="127.0.0.1",
-        port=int(os.environ.get("NFT_PORT", "8338")),
-    )
+    uvicorn.run(create_app(ledger), host=settings.mint_listen_host, port=port)
 
 
 if __name__ == "__main__":

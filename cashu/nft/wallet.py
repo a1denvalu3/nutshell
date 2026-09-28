@@ -33,6 +33,7 @@ from ..core.crypto.ps import (
 from ..core.crypto.ps import (
     MintPublicKeyPS as MintPublicKeyPS,
 )
+from .api import NFT_API_PREFIX
 from .registry import verify_registry_entry
 
 WALLET_SECRET_DST = b"Cashu_PS_Wallet_v1"
@@ -257,10 +258,24 @@ class NFTClient:
 
     def __init__(self, http: httpx.Client):
         self.http = http
-        info = self._checked(self.http.get("/v1/info")).json()
-        self.keyset = MintPublicKeyPS.from_bytes(bytes.fromhex(info["public_key"]))
-        self.keyset_id: str = info["keyset_id"]
-        self.payment_required: bool = info["payment_required"]
+        resp = self.http.get(f"{NFT_API_PREFIX}/info")
+        if resp.status_code == 404:
+            raise RuntimeError(
+                f"no PS-NFT service at this URL ({NFT_API_PREFIX}/info not found). "
+                "If this is a Nutshell mint, enable the module with "
+                "MINT_NFT_MODULE=TRUE; otherwise start the standalone service "
+                "with `poetry run python -m cashu.nft`."
+            )
+        info = self._checked(resp).json()
+        try:
+            self.keyset = MintPublicKeyPS.from_bytes(bytes.fromhex(info["public_key"]))
+            self.keyset_id = info["keyset_id"]
+            self.payment_required = bool(info["payment_required"])
+        except (KeyError, ValueError):
+            raise RuntimeError(
+                "the service at this URL does not look like a PS-NFT mint "
+                f"(unexpected {NFT_API_PREFIX}/info response)"
+            )
 
     @staticmethod
     def _checked(resp: httpx.Response) -> httpx.Response:
@@ -282,7 +297,7 @@ class NFTClient:
         ticket = wallet.prepare_receive()
         resp = self._checked(
             self.http.post(
-                "/v1/mint",
+                f"{NFT_API_PREFIX}/mint",
                 json={
                     "asset_hash": h.to_bytes(32, "big").hex(),
                     "owner_commitment": ticket.commitment.format().hex(),
@@ -312,7 +327,7 @@ class NFTClient:
         finalize."""
         resp = self._checked(
             self.http.post(
-                "/v1/transfer",
+                f"{NFT_API_PREFIX}/transfer",
                 json={
                     "presentation": wallet.present(h).to_bytes().hex(),
                     "new_owner_commitment": new_owner_commitment.hex(),
@@ -332,7 +347,8 @@ class NFTClient:
     def burn(self, wallet: NFTWallet, h: int) -> None:
         self._checked(
             self.http.post(
-                "/v1/burn", json={"presentation": wallet.present(h).to_bytes().hex()}
+                f"{NFT_API_PREFIX}/burn",
+                json={"presentation": wallet.present(h).to_bytes().hex()},
             )
         )
         wallet.delete_asset(h)
@@ -344,7 +360,7 @@ class NFTClient:
         )
 
     def registry_entry(self, h: int) -> dict:
-        resp = self.http.get(f"/v1/registry/{h.to_bytes(32, 'big').hex()}")
+        resp = self.http.get(f"{NFT_API_PREFIX}/registry/{h.to_bytes(32, 'big').hex()}")
         if resp.status_code == 404:
             raise ValueError("unknown or burned asset")
         return self._checked(resp).json()
@@ -377,7 +393,7 @@ class NFTClient:
         pres = present_private(cred)
         begin = self._checked(
             self.http.post(
-                "/v1/transfer/private/begin",
+                f"{NFT_API_PREFIX}/transfer/private/begin",
                 json={"nullifier": pres.nullifier.format().hex()},
             )
         ).json()
@@ -385,7 +401,7 @@ class NFTClient:
         w_h, proof = blind_transfer_witness(cred, pres.u, u2)
         resp = self._checked(
             self.http.post(
-                "/v1/transfer/private",
+                f"{NFT_API_PREFIX}/transfer/private",
                 json={
                     "presentation": pres.to_bytes().hex(),
                     "w_h": w_h.format().hex(),
