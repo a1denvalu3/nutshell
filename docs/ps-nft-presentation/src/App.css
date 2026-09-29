@@ -168,31 +168,34 @@ nav button:disabled { opacity: 0.2; cursor: default; }
 .step-body { flex: 1; }
 .step-body p { margin: 0.15em 0; }
 
-/* ── Math typography ── */
+/* ── Math typography (KaTeX) ── */
 .math {
-  font-family: 'Rubik', system-ui, sans-serif;
-  font-style: italic;
-  font-size: 1.05rem;
   background: var(--purple-bg);
   border: 1px solid var(--purple-light);
   border-radius: 8px;
-  padding: 14px 22px;
+  padding: 10px 22px;
   margin: 12px 0;
   text-align: center;
-  line-height: 2;
+  font-size: 1.05rem;
+  line-height: 1.7;
 }
-.math.big { font-size: 1.3rem; padding: 20px 28px; }
-.math.small { font-size: 0.92rem; padding: 10px 16px; }
+.math.big { font-size: 1.25rem; padding: 14px 28px; }
+.math.small { font-size: 0.9rem; padding: 6px 16px; }
 .math .eq-step { display: block; }
-.math sub, .math sup, .mi sub, .mi sup { font-style: normal; font-size: 0.68em; }
+.math .katex-display { margin: 0.4em 0; }
 
-.mi { font-style: italic; white-space: nowrap; }
+.mi { font-style: italic; }
 
 .math-label {
-  font-size: 0.66rem; font-weight: 600; font-style: normal;
+  font-size: 0.66rem; font-weight: 600;
   text-transform: uppercase; letter-spacing: 0.08em;
   color: var(--purple);
   display: block; margin-bottom: 4px;
+}
+.math-note {
+  font-size: 0.85rem;
+  color: var(--muted);
+  display: block;
 }
 
 /* ── Title slide ── */

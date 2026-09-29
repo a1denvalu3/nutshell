@@ -1,5 +1,6 @@
 import React, { useState, useCallback, useEffect } from 'react'
 import { WireSizeChart } from './Charts'
+import MathTex from './MathTex'
 
 const TITLE = 'Pointcheval–Sanders NFT Credentials'
 
@@ -56,9 +57,7 @@ const Slide1 = () => (
           </h3>
           <ul>
             <li>
-              <span className="mi">
-                MAC = u<sup>(x + y<sub>h</sub>·h + y<sub>s</sub>·s)</sup>
-              </span>{' '}
+              <MathTex tex={'\\text{MAC} = u^{x + y_h\\cdot h + y_s\\cdot s}'} />{' '}
               computed as a Pedersen-like aggregate
             </li>
             <li>
@@ -79,13 +78,12 @@ const Slide1 = () => (
             <li>Same aggregate MAC shape</li>
             <li>
               A bilinear pairing{' '}
-              <span className="mi">
-                e : G<sub>1</sub> × G<sub>2</sub> → G<sub>T</sub>
-              </span>
+              <MathTex tex={'e : G_1 \\times G_2 \\to G_T'} />
             </li>
             <li>
               <strong>Anyone</strong> verifies a presentation against the mint's
-              public G<sub>2</sub> parameters — offline, without the secret key
+              public <MathTex tex={'G_2'} /> parameters — offline, without the
+              secret key
             </li>
           </ul>
         </div>
@@ -107,37 +105,33 @@ const Slide2 = () => (
       </div>
       <div className="card">
         <h3>
-          Groups G<sub>1</sub>, G<sub>2</sub>, G<sub>T</sub>
+          Groups <MathTex tex={'G_1,\\ G_2,\\ G_T'} />
         </h3>
         <p>
-          G<sub>1</sub>, G<sub>2</sub> of prime order{' '}
-          <span className="mi">r</span> with generators{' '}
-          <span className="mi">
-            g<sub>1</sub>, g<sub>2</sub>
-          </span>
-          ; G<sub>T</sub> is the target group.
+          <MathTex tex={'G_1, G_2'} /> of prime order <MathTex tex={'r'} /> with
+          generators <MathTex tex={'g_1, g_2'} />; <MathTex tex={'G_T'} /> is
+          the target group.
         </p>
       </div>
       <div className="card">
         <h3>Bilinear map</h3>
         <p>
-          <span className="mi">
-            e(a·P, b·Q) = e(P, Q)<sup>a·b</sup>
-          </span>
+          <MathTex tex={'e(a\\cdot P,\\ b\\cdot Q) = e(P, Q)^{a\\cdot b}'} />
         </p>
       </div>
       <div className="card">
         <h3>Type-3 pairing</h3>
         <p>
-          No efficient isomorphism between G<sub>1</sub> and G<sub>2</sub>. This
-          asymmetry is load-bearing — see the next slide.
+          No efficient isomorphism between <MathTex tex={'G_1'} /> and{' '}
+          <MathTex tex={'G_2'} />. This asymmetry is load-bearing — see the
+          next slide.
         </p>
       </div>
     </div>
     <div className="callout d2">
       <strong>Two credential attributes:</strong>{' '}
-      <span className="mi">h = SHA-256(asset) mod r</span> — hash of the
-      JPEG/asset, public at issuance — and <span className="mi">s</span> — the
+      <MathTex tex={'h = \\text{SHA-256}(\\text{asset}) \\bmod r'} /> — hash of
+      the JPEG/asset, public at issuance — and <MathTex tex={'s'} /> — the
       owner secret, never revealed to the mint.
     </div>
   </>
@@ -147,32 +141,33 @@ const Slide3 = () => (
   <>
     <h2>Mint key and public parameters</h2>
     <div className="math d1">
-      <span className="eq-step">
-        sk = (x, y<sub>h</sub>, y<sub>s</sub>) ← random in Z<sub>r</sub>
-      </span>
-      <span className="eq-step">
-        pk = (X<sub>2</sub>, Y<sub>h2</sub>, Y<sub>s2</sub>) = (x·g<sub>2</sub>
-        , y<sub>h</sub>·g<sub>2</sub>, y<sub>s</sub>·g<sub>2</sub>)
-      </span>
+      <MathTex
+        display
+        tex={'\\text{sk} = (x,\\ y_h,\\ y_s) \\xleftarrow{\\text{random}} \\mathbb{Z}_r'}
+      />
+      <MathTex
+        display
+        tex={'\\text{pk} = (X_2,\\ Y_{h2},\\ Y_{s2}) = (x\\cdot g_2,\\ y_h\\cdot g_2,\\ y_s\\cdot g_2)'}
+      />
     </div>
     <div className="callout purple d2">
       <p>
         <strong>
-          The y values exist in G<sub>2</sub> only, by construction.
+          The <MathTex tex={'y'} /> values exist in <MathTex tex={'G_2'} />{' '}
+          only, by construction.
         </strong>
       </p>
       <p>
-        If y<sub>h</sub> were available in G<sub>1</sub>, anyone could rescale a
-        credential from asset h<sub>1</sub> to h<sub>2</sub> — they'd need{' '}
-        <span className="mi">
-          u<sup>(y<sub>h</sub>)</sup>
-        </span>{' '}
-        in G<sub>1</sub>, which is exactly what the mint withholds. This is the
-        "exponent rescaling" forgery.
+        If <MathTex tex={'y_h'} /> were available in <MathTex tex={'G_1'} />,
+        anyone could rescale a credential from asset <MathTex tex={'h_1'} /> to{' '}
+        <MathTex tex={'h_2'} /> — they'd need <MathTex tex={'u^{y_h}'} /> in{' '}
+        <MathTex tex={'G_1'} />, which is exactly what the mint withholds. This
+        is the "exponent rescaling" forgery.
       </p>
       <p>
-        The G<sub>1</sub>/G<sub>2</sub> asymmetry of a type-3 pairing is what
-        makes withholding possible while still allowing verification.
+        The <MathTex tex={'G_1'}/>/<MathTex tex={'G_2'} /> asymmetry of a
+        type-3 pairing is what makes withholding possible while still allowing
+        verification.
       </p>
     </div>
   </>
@@ -186,12 +181,9 @@ const Slide4 = () => (
         <div className="step-num">1</div>
         <div className="step-body">
           <p>
-            User picks <span className="mi">s</span>, sends{' '}
-            <span className="mi">
-              S = s·g<sub>1</sub>
-            </span>{' '}
-            plus a Schnorr proof of knowledge of <span className="mi">s</span>{' '}
-            (Chaum–Pedersen, Fiat–Shamir).
+            User picks <MathTex tex={'s'} />, sends{' '}
+            <MathTex tex={'S = s\\cdot g_1'} /> plus a Schnorr proof of
+            knowledge of <MathTex tex={'s'} /> (Chaum–Pedersen, Fiat–Shamir).
           </p>
         </div>
       </div>
@@ -199,16 +191,9 @@ const Slide4 = () => (
         <div className="step-num">2</div>
         <div className="step-body">
           <p>
-            Mint checks the proof, checks <span className="mi">h</span> was
-            never issued before, samples{' '}
-            <span className="mi">
-              k ← Z<sub>r</sub>
-            </span>{' '}
-            and sets{' '}
-            <span className="mi">
-              u = k·g<sub>1</sub>
-            </span>
-            .
+            Mint checks the proof, checks <MathTex tex={'h'} /> was never
+            issued before, samples <MathTex tex={'k \\leftarrow \\mathbb{Z}_r'} />{' '}
+            and sets <MathTex tex={'u = k\\cdot g_1'} />.
           </p>
         </div>
       </div>
@@ -216,37 +201,31 @@ const Slide4 = () => (
         <div className="step-num">3</div>
         <div className="step-body">
           <div className="math small">
-            v = (x + y<sub>h</sub>·h)·u + (k·y<sub>s</sub>)·S
+            <MathTex
+              display
+              tex={'v = (x + y_h\\cdot h)\\cdot u + (k\\cdot y_s)\\cdot S'}
+            />
           </div>
           <p>
             A Diffie–Hellman trick:{' '}
-            <span className="mi">
-              S<sup>(k·y<sub>s</sub>)</sup> = (s·g<sub>1</sub>)
-              <sup>(k·y<sub>s</sub>)</sup> = s·y<sub>s</sub>·u
-            </span>
+            <MathTex
+              tex={'S^{k\\cdot y_s} = (s\\cdot g_1)^{k\\cdot y_s} = s\\cdot y_s\\cdot u'}
+            />
             , so{' '}
-            <span className="mi">
-              v = (x + y<sub>h</sub>·h + y<sub>s</sub>·s)·u
-            </span>{' '}
-            — without the mint ever seeing <span className="mi">s</span>.
+            <MathTex tex={'v = (x + y_h\\cdot h + y_s\\cdot s)\\cdot u'} /> —
+            without the mint ever seeing <MathTex tex={'s'} />.
           </p>
         </div>
       </div>
     </div>
     <div className="callout d2">
       <strong>
-        Credential = (u, v, h, s).
+        Credential <MathTex tex={'= (u,\\ v,\\ h,\\ s)'} />.
       </strong>{' '}
       The mint only ever emits ONE aggregate exponent — it never hands out
-      separate per-term oracles like{' '}
-      <span className="mi">
-        u<sup>x</sup>
-      </span>{' '}
-      or{' '}
-      <span className="mi">
-        u<sup>(y<sub>h</sub>·h)</sup>
-      </span>
-      ; the sum is what keeps the individual scalars safe.
+      separate per-term oracles like <MathTex tex={'u^{x}'} /> or{' '}
+      <MathTex tex={'u^{y_h\\cdot h}'} />; the sum is what keeps the individual
+      scalars safe.
     </div>
   </>
 )
@@ -255,60 +234,46 @@ const Slide5 = () => (
   <>
     <h2>Presentation: randomized, publicly verifiable</h2>
     <div className="math d1">
-      <span className="eq-step">
-        ρ ← Z<sub>r</sub>*&nbsp;&nbsp;&nbsp;(u′, v′) = (ρ·u, ρ·v)
-      </span>
-      <span className="eq-step" style={{ fontSize: '0.85rem', fontStyle: 'normal', color: 'var(--muted)' }}>
-        rerandomizable — unlinkable across showings
-      </span>
+      <MathTex
+        display
+        tex={"\\rho \\leftarrow \\mathbb{Z}_r^{*} \\qquad (u',\\ v') = (\\rho\\cdot u,\\ \\rho\\cdot v)"}
+      />
+      <span className="math-note">rerandomizable — unlinkable across showings</span>
     </div>
     <div className="cards d2">
       <div className="card">
         <h3>Revealed values</h3>
         <ul>
           <li>
-            <span className="mi">h, u′, v′</span>
+            <MathTex tex={"h,\\ u',\\ v'"} />
           </li>
           <li>
-            <span className="mi">
-              U<sub>s</sub> = s·u′
-            </span>
+            <MathTex tex={"U_s = s\\cdot u'"} />
           </li>
           <li>
-            <span className="mi">
-              S = s·g<sub>1</sub>
-            </span>
+            <MathTex tex={'S = s\\cdot g_1'} />
           </li>
           <li>
-            <span className="mi">
-              N = s·G<sub>NULL</sub>
-            </span>{' '}
-            — nullifier; G<sub>NULL</sub> is a nothing-up-my-sleeve
+            <MathTex tex={'N = s\\cdot G_{\\text{NULL}}'} /> — nullifier;{' '}
+            <MathTex tex={'G_{\\text{NULL}}'} /> is a nothing-up-my-sleeve
             hash-to-curve point with unknown discrete log
           </li>
         </ul>
       </div>
       <div className="card">
-        <h3>Proof π</h3>
+        <h3>
+          Proof <MathTex tex={'\\pi'} />
+        </h3>
         <p>
-          One Chaum–Pedersen proof that the SAME <span className="mi">s</span>{' '}
-          is the discrete log of <span className="mi">S</span> (base{' '}
-          <span className="mi">
-            g<sub>1</sub>
-          </span>
-          ), <span className="mi">N</span> (base{' '}
-          <span className="mi">
-            G<sub>NULL</sub>
-          </span>
-          ) and{' '}
-          <span className="mi">
-            U<sub>s</sub>
-          </span>{' '}
-          (base <span className="mi">u′</span>).
+          One Chaum–Pedersen proof that the SAME <MathTex tex={'s'} /> is the
+          discrete log of <MathTex tex={'S'} /> (base{' '}
+          <MathTex tex={'g_1'} />), <MathTex tex={'N'} /> (base{' '}
+          <MathTex tex={'G_{\\text{NULL}}'} />) and <MathTex tex={'U_s'} />{' '}
+          (base <MathTex tex={"u'"} />).
         </p>
         <p>
-          All bases are G<sub>1</sub> points, so no G<sub>T</sub> exponentiation
-          is needed.
+          All bases are <MathTex tex={'G_1'} /> points, so no{' '}
+          <MathTex tex={'G_T'} /> exponentiation is needed.
         </p>
       </div>
     </div>
@@ -319,22 +284,21 @@ const Slide6 = () => (
   <>
     <h2>The verification equation</h2>
     <div className="math big d1">
-      e(v′, g<sub>2</sub>) = e(u′, X<sub>2</sub> + h·Y<sub>h2</sub>) · e(U
-      <sub>s</sub>, Y<sub>s2</sub>)
+      <MathTex
+        display
+        tex={"e(v',\\ g_2) = e(u',\\ X_2 + h\\cdot Y_{h2}) \\cdot e(U_s,\\ Y_{s2})"}
+      />
     </div>
     <div className="math small d2">
       <span className="math-label">Why it holds — bilinearity</span>
-      <span className="eq-step">
-        v′ = ρ(x + y<sub>h</sub>·h + y<sub>s</sub>·s)·u
-      </span>
-      <span className="eq-step">
-        e(v′, g<sub>2</sub>) = e(u, g<sub>2</sub>)
-        <sup>
-          ρ(x + y<sub>h</sub>·h + y<sub>s</sub>·s)
-        </sup>{' '}
-        = e(ρ·u, (x + y<sub>h</sub>·h)·g<sub>2</sub>) · e(ρ·s·u, y<sub>s</sub>·g
-        <sub>2</sub>)
-      </span>
+      <MathTex
+        display
+        tex={"v' = \\rho(x + y_h\\cdot h + y_s\\cdot s)\\cdot u"}
+      />
+      <MathTex
+        display
+        tex={"e(v', g_2) = e(u, g_2)^{\\rho(x + y_h\\cdot h + y_s\\cdot s)} = e(\\rho\\cdot u,\\ (x + y_h\\cdot h)\\cdot g_2) \\cdot e(\\rho\\cdot s\\cdot u,\\ y_s\\cdot g_2)"}
+      />
     </div>
     <div className="callout purple d3">
       <p>
@@ -343,8 +307,7 @@ const Slide6 = () => (
       </p>
       <p>
         <strong>Ownership</strong> = the dlog-eq proof on{' '}
-        <span className="mi">s</span>; <strong>authenticity</strong> = the
-        pairing.
+        <MathTex tex={'s'} />; <strong>authenticity</strong> = the pairing.
       </p>
     </div>
   </>
@@ -358,8 +321,8 @@ const Slide7 = () => (
         <div className="step-num">1</div>
         <div className="step-body">
           <p>
-            Sender hands over the credential + <span className="mi">s</span>{' '}
-            offline as a bearer token (<span className="mi">psnft1…</span>).
+            Sender hands over the credential + <MathTex tex={'s'} /> offline as
+            a bearer token (<span className="mi">psnft1…</span>).
           </p>
         </div>
       </div>
@@ -374,21 +337,16 @@ const Slide7 = () => (
         <div className="step-body">
           <p>
             Mint verifies the presentation, checks nullifier{' '}
-            <span className="mi">
-              N = s·G<sub>NULL</sub>
-            </span>{' '}
-            is FRESH (never seen), records it, then re-issues a credential over
-            the same <span className="mi">h</span> bound to the receiver's new
-            secret.
+            <MathTex tex={'N = s\\cdot G_{\\text{NULL}}'} /> is FRESH (never
+            seen), records it, then re-issues a credential over the same{' '}
+            <MathTex tex={'h'} /> bound to the receiver's new secret.
           </p>
         </div>
       </div>
       <div className="step">
         <div className="step-num">4</div>
         <div className="step-body">
-          <p>
-            Spent nullifier = rejected — same as double-spent ecash.
-          </p>
+          <p>Spent nullifier = rejected — same as double-spent ecash.</p>
         </div>
       </div>
     </div>
@@ -403,60 +361,44 @@ const Slide8 = () => (
   <>
     <h2>Private presentations: hiding h</h2>
     <p className="subtitle d1">
-      Instead of revealing <span className="mi">h</span>, the owner reveals{' '}
-      <span className="mi">
-        U<sub>h</sub> = h·u′
-      </span>{' '}
-      with a Chaum–Pedersen proof. The pairing becomes:
+      Instead of revealing <MathTex tex={'h'} />, the owner reveals{' '}
+      <MathTex tex={"U_h = h\\cdot u'"} /> with a Chaum–Pedersen proof. The
+      pairing becomes:
     </p>
     <div className="math d1">
-      e(v′, g<sub>2</sub>) = e(u′, X<sub>2</sub>) · e(U<sub>h</sub>, Y
-      <sub>h2</sub>) · e(U<sub>s</sub>, Y<sub>s2</sub>)
+      <MathTex
+        display
+        tex={"e(v',\\ g_2) = e(u',\\ X_2) \\cdot e(U_h,\\ Y_{h2}) \\cdot e(U_s,\\ Y_{s2})"}
+      />
     </div>
     <div className="card d2">
       <h3>Blind re-issuance</h3>
       <ul>
         <li>
           Mint derives a fresh base deterministically from the nullifier:{' '}
-          <span className="mi">
-            u<sub>2</sub> = k<sub>2</sub>·g<sub>1</sub>
-          </span>{' '}
-          with{' '}
-          <span className="mi">
-            k<sub>2</sub> = HMAC<sub>x</sub>(nullifier)
-          </span>{' '}
-          — the two-round protocol is stateless
+          <MathTex tex={'u_2 = k_2\\cdot g_1'} /> with{' '}
+          <MathTex tex={'k_2 = \\text{HMAC}_x(\\text{nullifier})'} /> — the
+          two-round protocol is stateless
         </li>
         <li>
-          Owner shows{' '}
-          <span className="mi">
-            W<sub>h</sub> = h·u<sub>2</sub>
-          </span>{' '}
-          with a dlog-eq proof that the same <span className="mi">h</span> sits
-          in{' '}
-          <span className="mi">
-            U<sub>h</sub>
-          </span>{' '}
-          and{' '}
-          <span className="mi">
-            W<sub>h</sub>
-          </span>
+          Owner shows <MathTex tex={'W_h = h\\cdot u_2'} /> with a dlog-eq
+          proof that the same <MathTex tex={'h'} /> sits in{' '}
+          <MathTex tex={'U_h'} /> and <MathTex tex={'W_h'} />
         </li>
         <li>
           Mint computes{' '}
-          <span className="mi">
-            v<sub>2</sub> = x·u<sub>2</sub> + y<sub>h</sub>·W<sub>h</sub> + (k
-            <sub>2</sub>·y<sub>s</sub>)·S<sub>new</sub>
-          </span>{' '}
-          without ever learning <span className="mi">h</span>
+          <MathTex
+            tex={'v_2 = x\\cdot u_2 + y_h\\cdot W_h + (k_2\\cdot y_s)\\cdot S_{\\text{new}}'}
+          />{' '}
+          without ever learning <MathTex tex={'h'} />
         </li>
       </ul>
     </div>
     <div className="callout amber d3">
       <strong>Scope:</strong> this is honest-but-curious privacy for the asset
-      id — <span className="mi">h</span> never leaves the wallet, but the mint
-      sees THAT a transfer happened and can correlate old/new owner commitments.
-      Not full KVAC anonymity.
+      id — <MathTex tex={'h'} /> never leaves the wallet, but the mint sees
+      THAT a transfer happened and can correlate old/new owner commitments. Not
+      full KVAC anonymity.
     </div>
   </>
 )
@@ -486,7 +428,7 @@ const Slide9 = () => (
         </tr>
         <tr>
           <td>
-            compressed G<sub>1</sub> point
+            compressed <MathTex tex={'G_1'} /> point
           </td>
           <td>48 B</td>
           <td>—</td>
@@ -505,7 +447,7 @@ const Slide9 = () => (
           <td>mint public params</td>
           <td>288 B</td>
           <td>
-            3 compressed G<sub>2</sub> points
+            3 compressed <MathTex tex={'G_2'} /> points
           </td>
         </tr>
       </tbody>
