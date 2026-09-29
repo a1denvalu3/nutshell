@@ -60,6 +60,7 @@ class TransferRequest(BaseModel):
 
 class SpendRequest(BaseModel):
     presentation: str
+    binding: Optional[str] = None  # hex, purpose binding for /verify only
 
 
 class PrivateTransferBeginRequest(BaseModel):
@@ -233,9 +234,14 @@ def create_router(ledger: PSLedger) -> APIRouter:
     @router.post("/verify")
     async def verify(req: SpendRequest):
         pres = _parse_presentation(req.presentation)
-        valid = pres.keyset_id in ("", ledger.keyset.keyset_id) and verify_presentation(
-            ledger.keyset, pres
-        )
+        try:
+            binding = bytes.fromhex(req.binding) if req.binding else b""
+        except ValueError:
+            raise HTTPException(400, "binding must be hex")
+        valid = pres.keyset_id in (
+            "",
+            ledger.keyset.keyset_id,
+        ) and verify_presentation(ledger.keyset, pres, binding=binding)
         spent = await ledger.is_spent(pres.nullifier.format()) if valid else False
         return {"valid": valid, "spent": spent}
 

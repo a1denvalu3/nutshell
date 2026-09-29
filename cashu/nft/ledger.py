@@ -32,6 +32,7 @@ from sqlalchemy.exc import IntegrityError
 
 from ..core.crypto.bls import PublicKey
 from ..core.crypto.ps import (
+    PS_BURN_BINDING,
     DlogEqProof,
     MintPrivateKeyPS,
     MintPublicKeyPS,
@@ -302,13 +303,15 @@ class PSLedger:
         self,
         pres: Presentation,
         conn: Connection,
+        binding: bytes,
     ) -> None:
         """Verify a presentation and claim its nullifier, atomically with
         the caller's transaction. The asset must be known and active
-        (h is revealed for public presentations)."""
+        (h is revealed for public presentations). The caller picks the
+        purpose binding the presentation proof must match."""
         if pres.keyset_id and pres.keyset_id != self.keyset.keyset_id:
             raise InvalidProofError("unknown keyset")
-        if not verify_presentation(self.keyset, pres):
+        if not verify_presentation(self.keyset, pres, binding=binding):
             raise InvalidProofError("invalid presentation")
         if await conn.fetchone(
             "SELECT 1 AS x FROM ps_nullifiers WHERE nullifier = :n",
@@ -344,21 +347,25 @@ class PSLedger:
         pok_new: DlogEqProof,
         conn: Optional[Connection] = None,
     ) -> Tuple[PublicKey, PublicKey]:
-        """Atomically spend pres and re-issue the asset to S_new."""
+        """Atomically spend pres and re-issue the asset to S_new. The
+        presentation proof must be bound to S_new, so a presentation
+        captured in transit is only good for the re-issuance its owner
+        actually authorized."""
         if not verify_owner_secret(S_new, pok_new):
             raise InvalidProofError("invalid new owner secret proof")
         async with self.db.get_connection(
             conn, locks=[LockOptions(table="ps_nullifiers")]
         ) as c:
-            await self._spend(pres, c)
+            await self._spend(pres, c, binding=S_new.format())
         return issue(self.mint_key, pres.h, S_new)
 
     async def burn(self, pres: Presentation, conn: Optional[Connection] = None) -> None:
-        """Retire an asset: spend the credential without re-issuing."""
+        """Retire an asset: spend the credential without re-issuing. The
+        presentation must be bound to the burn domain."""
         async with self.db.get_connection(
             conn, locks=[LockOptions(table="ps_nullifiers")]
         ) as c:
-            await self._spend(pres, c)
+            await self._spend(pres, c, binding=PS_BURN_BINDING)
             await c.execute(
                 "UPDATE ps_assets SET status = 'burned' WHERE h = :h",
                 {"h": _h_hex(pres.h)},
@@ -391,7 +398,9 @@ class PSLedger:
         if pres.keyset_id and pres.keyset_id != self.keyset.keyset_id:
             raise InvalidProofError("unknown keyset")
         k2, u2 = blind_base_for_nullifier(self.mint_key, pres.nullifier.format())
-        if not verify_blind_transfer(self.keyset, pres, w_h, proof, u2):
+        if not verify_blind_transfer(
+            self.keyset, pres, w_h, proof, u2, binding=S_new.format()
+        ):
             raise InvalidProofError("invalid private transfer proof")
         async with self.db.get_connection(
             conn, locks=[LockOptions(table="ps_nullifiers")]

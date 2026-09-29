@@ -33,6 +33,19 @@ Presentation (public, offline verifiable):
 Transfer:
     the mint checks the presentation, enforces nullifier N freshness, then
     re-issues a credential over the same h with the new owner's secret.
+
+Purpose binding:
+    every presentation proof's Fiat-Shamir transcript carries a length-framed
+    binding right after the domain separator, so a presentation is only
+    usable for one exact purpose:
+      transfers bind S_new (only that exact re-issuance accepts them),
+      burns bind PS_BURN_BINDING,
+      showings bind PS_SHOW_BINDING + a context (verifiable offline, but
+      rejected by transfer and burn -- a published showing cannot be
+      replayed into a spend).
+    The binding never goes on the wire: it lives only inside the challenge
+    computation, so wire formats are unchanged and the verifier must know
+    the expected binding out of band.
 """
 
 import hashlib
@@ -55,6 +68,10 @@ PS_ASSET_DST = b"Cashu_PS_Asset_v1"
 PS_ISSUE_DST = b"Cashu_PS_Issue_v1"
 PS_PRESENT_DST = b"Cashu_PS_Present_v1"
 PS_GNULL_DST = b"CASHU_PS_GNULL_XMD:SHA-256_SSWU_RO_"
+
+# Purpose bindings for presentation proofs (see the module docstring)
+PS_SHOW_BINDING = b"Cashu_PS_Showing_v1"
+PS_BURN_BINDING = b"Cashu_PS_Burn_v1"
 
 # Nullifier base: nothing-up-my-sleeve G1 point with unknown discrete log
 G_NULL = PublicKey(
@@ -152,8 +169,9 @@ def _dlog_eq_transcript(
     bases: List[PublicKey],
     points: List[PublicKey],
     commitments: List[PublicKey],
+    binding: bytes = b"",
 ) -> bytes:
-    transcript = dst
+    transcript = dst + len(binding).to_bytes(2, "big") + binding
     for group in (bases, points, commitments):
         for p in group:
             serialized = p.format()
@@ -162,7 +180,11 @@ def _dlog_eq_transcript(
 
 
 def prove_dlog_eq(
-    bases: List[PublicKey], points: List[PublicKey], secret: int, dst: bytes
+    bases: List[PublicKey],
+    points: List[PublicKey],
+    secret: int,
+    dst: bytes,
+    binding: bytes = b"",
 ) -> DlogEqProof:
     if not bases or len(bases) != len(points):
         raise ValueError("need an equal, nonzero number of bases and points")
@@ -170,13 +192,19 @@ def prove_dlog_eq(
         raise ValueError("secret must be in Fr*")
     nonce = _random_scalar()
     commitments = [base * nonce for base in bases]
-    challenge = _challenge(_dlog_eq_transcript(dst, bases, points, commitments))
+    challenge = _challenge(
+        _dlog_eq_transcript(dst, bases, points, commitments, binding)
+    )
     response = (nonce + challenge * secret) % curve_order
     return DlogEqProof(challenge=challenge, response=response)
 
 
 def verify_dlog_eq(
-    bases: List[PublicKey], points: List[PublicKey], proof: DlogEqProof, dst: bytes
+    bases: List[PublicKey],
+    points: List[PublicKey],
+    proof: DlogEqProof,
+    dst: bytes,
+    binding: bytes = b"",
 ) -> bool:
     if not bases or len(bases) != len(points):
         return False
@@ -186,7 +214,9 @@ def verify_dlog_eq(
         _add_p1(base * proof.response, _neg_p1(point * proof.challenge))
         for base, point in zip(bases, points)
     ]
-    expected = _challenge(_dlog_eq_transcript(dst, bases, points, commitments))
+    expected = _challenge(
+        _dlog_eq_transcript(dst, bases, points, commitments, binding)
+    )
     return expected == proof.challenge
 
 
@@ -397,8 +427,12 @@ def issue(
     return u, v
 
 
-def present(cred: Credential, rho: Optional[int] = None) -> Presentation:
-    """Owner side: randomize the credential and build the presentation."""
+def present(
+    cred: Credential, rho: Optional[int] = None, binding: bytes = b""
+) -> Presentation:
+    """Owner side: randomize the credential and build the presentation.
+    The binding is mixed into the proof transcript, tying the presentation
+    to one exact purpose (see the module docstring)."""
     if not 0 <= cred.h < curve_order:
         raise ValueError("h must be a scalar")
     if not 0 < cred.s < curve_order:
@@ -410,7 +444,7 @@ def present(cred: Credential, rho: Optional[int] = None) -> Presentation:
     v_r = cred.v * rho
     u_s = u_r * cred.s
     N = G_NULL * cred.s
-    proof = prove_dlog_eq([G_NULL, u_r], [N, u_s], cred.s, PS_PRESENT_DST)
+    proof = prove_dlog_eq([G_NULL, u_r], [N, u_s], cred.s, PS_PRESENT_DST, binding)
     return Presentation(
         h=cred.h,
         u=u_r,
@@ -422,14 +456,17 @@ def present(cred: Credential, rho: Optional[int] = None) -> Presentation:
     )
 
 
-def verify_presentation(mint_public: MintPublicKeyPS, pres: Presentation) -> bool:
+def verify_presentation(
+    mint_public: MintPublicKeyPS, pres: Presentation, binding: bytes = b""
+) -> bool:
     """Public, offline verification of a presentation.
 
     Checks authenticity (pairing equation against the mint's G2 parameters)
-    and ownership (the same s in N and u_s). The caller must separately
-    ask the mint whether pres.nullifier is spent (the only unspent nullifier
-    belongs to the current holder) and, for transfers, claim the nullifier
-    atomically with the re-issuance.
+    and ownership (the same s in N and u_s). The caller must supply the
+    purpose binding the presentation was created with, ask the mint whether
+    pres.nullifier is spent (the only unspent nullifier belongs to the
+    current holder) and, for transfers, claim the nullifier atomically with
+    the re-issuance.
     """
     for p in (pres.u, pres.v, pres.u_s, pres.nullifier):
         if p.is_infinity():
@@ -441,6 +478,7 @@ def verify_presentation(mint_public: MintPublicKeyPS, pres: Presentation) -> boo
         [pres.nullifier, pres.u_s],
         pres.proof,
         PS_PRESENT_DST,
+        binding,
     ):
         return False
     base_h = PublicKey(
@@ -451,6 +489,26 @@ def verify_presentation(mint_public: MintPublicKeyPS, pres: Presentation) -> boo
     miller = miller * pyblst.miller_loop(pres.u.point, base_h.point)
     miller = miller * pyblst.miller_loop(pres.u_s.point, mint_public.Y_s2.point)
     return pyblst.final_verify(miller, pyblst.BlstFP12Element())
+
+
+def _showing_binding(context: bytes) -> bytes:
+    return PS_SHOW_BINDING + len(context).to_bytes(2, "big") + context
+
+
+def present_showing(
+    cred: Credential, context: bytes, rho: Optional[int] = None
+) -> Presentation:
+    """A verify-only presentation bound to a caller-chosen context (e.g. a
+    nonce or the verifier's identity). Showings are rejected by the mint's
+    spend endpoints, so publishing one cannot lose the NFT."""
+    return present(cred, rho=rho, binding=_showing_binding(context))
+
+
+def verify_showing(
+    mint_public: MintPublicKeyPS, pres: Presentation, context: bytes
+) -> bool:
+    """Verify a showing against the context it claims to be bound to."""
+    return verify_presentation(mint_public, pres, binding=_showing_binding(context))
 
 
 def verify_presentation_keysets(
@@ -549,7 +607,9 @@ class PrivatePresentation:
         )
 
 
-def present_private(cred: Credential, rho: Optional[int] = None) -> PrivatePresentation:
+def present_private(
+    cred: Credential, rho: Optional[int] = None, binding: bytes = b""
+) -> PrivatePresentation:
     if not 0 < cred.h < curve_order:
         raise ValueError("h must be in Fr* for a private presentation")
     if not 0 < cred.s < curve_order:
@@ -562,8 +622,8 @@ def present_private(cred: Credential, rho: Optional[int] = None) -> PrivatePrese
     u_h = u_r * cred.h
     u_s = u_r * cred.s
     N = G_NULL * cred.s
-    proof_h = prove_dlog_eq([u_r], [u_h], cred.h, PS_PRIVATE_DST)
-    proof_s = prove_dlog_eq([G_NULL, u_r], [N, u_s], cred.s, PS_PRESENT_DST)
+    proof_h = prove_dlog_eq([u_r], [u_h], cred.h, PS_PRIVATE_DST, binding)
+    proof_s = prove_dlog_eq([G_NULL, u_r], [N, u_s], cred.s, PS_PRESENT_DST, binding)
     return PrivatePresentation(
         u=u_r,
         v=v_r,
@@ -577,7 +637,7 @@ def present_private(cred: Credential, rho: Optional[int] = None) -> PrivatePrese
 
 
 def verify_private_presentation(
-    mint_public: MintPublicKeyPS, pres: PrivatePresentation
+    mint_public: MintPublicKeyPS, pres: PrivatePresentation, binding: bytes = b""
 ) -> bool:
     for p in (
         pres.u,
@@ -588,13 +648,16 @@ def verify_private_presentation(
     ):
         if p.is_infinity():
             return False
-    if not verify_dlog_eq([pres.u], [pres.u_h], pres.proof_h, PS_PRIVATE_DST):
+    if not verify_dlog_eq(
+        [pres.u], [pres.u_h], pres.proof_h, PS_PRIVATE_DST, binding
+    ):
         return False
     if not verify_dlog_eq(
         [G_NULL, pres.u],
         [pres.nullifier, pres.u_s],
         pres.proof_s,
         PS_PRESENT_DST,
+        binding,
     ):
         return False
     miller = pyblst.miller_loop(-pres.v.point, G2)
@@ -605,14 +668,14 @@ def verify_private_presentation(
 
 
 def blind_transfer_witness(
-    cred: Credential, u_r: PublicKey, u2: PublicKey
+    cred: Credential, u_r: PublicKey, u2: PublicKey, binding: bytes = b""
 ) -> Tuple[PublicKey, DlogEqProof]:
     """Owner side of blind re-issuance: W_h = h * u2 and a proof that the
     same h sits in the presentation's U_h (base u') and W_h (base u2)."""
     if u2.is_infinity():
         raise ValueError("u2 must not be the point at infinity")
     w_h = u2 * cred.h
-    proof = prove_dlog_eq([u_r, u2], [u_r * cred.h, w_h], cred.h, PS_BLIND_DST)
+    proof = prove_dlog_eq([u_r, u2], [u_r * cred.h, w_h], cred.h, PS_BLIND_DST, binding)
     return w_h, proof
 
 
@@ -622,12 +685,13 @@ def verify_blind_transfer(
     w_h: PublicKey,
     proof: DlogEqProof,
     u2: PublicKey,
+    binding: bytes = b"",
 ) -> bool:
     if u2.is_infinity() or w_h.is_infinity():
         return False
-    if not verify_private_presentation(mint_public, pres):
+    if not verify_private_presentation(mint_public, pres, binding=binding):
         return False
-    return verify_dlog_eq([pres.u, u2], [pres.u_h, w_h], proof, PS_BLIND_DST)
+    return verify_dlog_eq([pres.u, u2], [pres.u_h, w_h], proof, PS_BLIND_DST, binding)
 
 
 def issue_blind(
@@ -670,7 +734,7 @@ def _derive_batch_scalars(presentations: List[Presentation]) -> List[int]:
 
 
 def batch_verify_presentations(
-    mint_public: MintPublicKeyPS, presentations: List[Presentation]
+    mint_public: MintPublicKeyPS, presentations: List[Presentation], binding: bytes = b""
 ) -> bool:
     """Verify many same-keyset presentations with one combined pairing.
 
@@ -694,6 +758,7 @@ def batch_verify_presentations(
             [pres.nullifier, pres.u_s],
             pres.proof,
             PS_PRESENT_DST,
+            binding,
         ):
             return False
     rs = _derive_batch_scalars(presentations)

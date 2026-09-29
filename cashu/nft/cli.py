@@ -14,6 +14,8 @@ Typical flow (cashu-style, sending is offline):
     cashu nft send <h>                   # print a bearer token for the receiver
     cashu nft receive <token>            # receiver: swap the token at the mint
     cashu nft verify <h>                 # offline verify + mint spent/status check
+    cashu nft show <h>                   # publish a verify-only showing
+    cashu nft inspect <blob>             # third party: check a showing
     cashu nft burn <h>                   # retire the asset
 
 The mint URL defaults to settings.mint_url (the same default as every
@@ -21,6 +23,7 @@ other cashu command); override with --mint-url or NFT_MINT_URL.
 """
 
 import functools
+import json
 import os
 import secrets
 from typing import Optional
@@ -275,6 +278,43 @@ def nft_verify(ctx: click.Context, asset_hash: str):
     # shown this presentation can ask the mint the same two questions
     print(f"nullifier spent: {client.check_state(pres.nullifier.format()) == 'SPENT'}")
     print(f"asset status:    {client.asset_status(h)}")
+
+
+@nft.command("show", help="Publish a verify-only showing for an NFT.")
+@click.argument("asset_hash", type=str)
+@click.option(
+    "--context",
+    "context",
+    default=None,
+    help="Context the showing is bound to (default: random nonce).",
+)
+@click.pass_context
+@_cli_errors
+def nft_show(ctx: click.Context, asset_hash: str, context: Optional[str]):
+    client = _make_client(ctx.obj["NFT_MINT_URL"])
+    wallet = _open_wallet(ctx.obj["NFT_WALLET_DB"])
+    h = _resolve_h(wallet, asset_hash)
+    blob = client.show(wallet, h, context.encode() if context else b"")
+    print("showing (verify-only, bound to context; cannot be spent):")
+    print(json.dumps(blob))
+
+
+@nft.command("inspect", help="Third-party check of a showing blob.")
+@click.argument("blob_json", type=str)
+@click.pass_context
+@_cli_errors
+def nft_inspect(ctx: click.Context, blob_json: str):
+    client = _make_client(ctx.obj["NFT_MINT_URL"])
+    try:
+        blob = json.loads(blob_json)
+    except ValueError:
+        raise click.UsageError("blob must be the JSON printed by `cashu nft show`")
+    result = client.verify_showing_blob(blob)
+    print(f"asset hash:               {result['asset_hash']}")
+    print(f"signature valid:          {result['valid']}")
+    print(f"publisher knows the secret: {result['valid']}")
+    print(f"nullifier spent:          {result['spent']}")
+    print(f"asset status:             {result['asset_status']}")
 
 
 @nft.command("burn", help="Retire an NFT.")

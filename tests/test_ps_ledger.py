@@ -4,6 +4,7 @@ import pytest
 import pytest_asyncio
 
 from cashu.core.crypto.ps import (
+    PS_BURN_BINDING,
     Credential,
     DlogEqProof,
     MintPrivateKeyPS,
@@ -77,7 +78,9 @@ async def test_persistence_across_reopens(tmp_path):
     assert await led2.asset_status(cred.h) == "active"
     # a transfer issued against the reopened ledger verifies
     S_new, pok_new = prove_owner_secret(222)
-    u2, v2 = await led2.transfer(present(cred), S_new, pok_new)
+    u2, v2 = await led2.transfer(
+        present(cred, binding=S_new.format()), S_new, pok_new
+    )
     cred2 = Credential(u=u2, v=v2, h=cred.h, s=222, keyset_id=cred.keyset_id)
     assert verify_presentation(led2.keyset, present(cred2))
 
@@ -87,7 +90,9 @@ async def test_transfer_flow_and_double_spend(ledger):
     cred = await mint_asset(ledger, b"jpeg", 111)
     old_nullifier = present(cred).nullifier.format()
     S_new, pok_new = prove_owner_secret(222)
-    u2, v2 = await ledger.transfer(present(cred), S_new, pok_new)
+    u2, v2 = await ledger.transfer(
+        present(cred, binding=S_new.format()), S_new, pok_new
+    )
     # the old generation is spent; the re-issued credential's is unspent
     assert await ledger.check_nullifiers([old_nullifier]) == ["SPENT"]
     cred2 = Credential(u=u2, v=v2, h=cred.h, s=222, keyset_id=cred.keyset_id)
@@ -95,28 +100,39 @@ async def test_transfer_flow_and_double_spend(ledger):
         "UNSPENT"
     ]
     with pytest.raises(AlreadySpentError):
-        await ledger.transfer(present(cred), S_new, pok_new)
+        await ledger.transfer(present(cred, binding=S_new.format()), S_new, pok_new)
     S3, pok3 = prove_owner_secret(333)
-    await ledger.transfer(present(cred2), S3, pok3)
+    await ledger.transfer(present(cred2, binding=S3.format()), S3, pok3)
 
 
 @pytest.mark.asyncio
 async def test_transfer_rejects_non_owner(ledger):
     cred = await mint_asset(ledger, b"jpeg", 111)
     evil = await mint_asset(ledger, b"other", 222)
-    pres = present(evil)
-    pres.h = cred.h
     S_new, pok_new = prove_owner_secret(222)
+    pres = present(evil, binding=S_new.format())
+    pres.h = cred.h
     with pytest.raises(InvalidProofError):
         await ledger.transfer(pres, S_new, pok_new)
 
 
 @pytest.mark.asyncio
+async def test_transfer_rejects_wrong_binding(ledger):
+    cred = await mint_asset(ledger, b"jpeg", 111)
+    S_a, _ = prove_owner_secret(222)
+    S_b, pok_b = prove_owner_secret(333)
+    # a presentation bound to S_new_A is rejected when submitted with S_new_B
+    pres = present(cred, binding=S_a.format())
+    with pytest.raises(InvalidProofError):
+        await ledger.transfer(pres, S_b, pok_b)
+
+
+@pytest.mark.asyncio
 async def test_transfer_unknown_asset(ledger):
     cred = await mint_asset(ledger, b"jpeg", 111)
-    pres = present(cred)
-    pres.h = hash_asset(b"never minted")
     S_new, pok_new = prove_owner_secret(222)
+    pres = present(cred, binding=S_new.format())
+    pres.h = hash_asset(b"never minted")
     with pytest.raises((InvalidProofError, UnknownAssetError)):
         await ledger.transfer(pres, S_new, pok_new)
 
@@ -128,10 +144,14 @@ async def test_concurrent_transfers_only_one_wins(ledger):
     S_alt, pok_alt = prove_owner_secret(333)
 
     async def t1():
-        return await ledger.transfer(present(cred), S_new, pok_new)
+        return await ledger.transfer(
+            present(cred, binding=S_new.format()), S_new, pok_new
+        )
 
     async def t2():
-        return await ledger.transfer(present(cred), S_alt, pok_alt)
+        return await ledger.transfer(
+            present(cred, binding=S_alt.format()), S_alt, pok_alt
+        )
 
     results = await asyncio.gather(t1(), t2(), return_exceptions=True)
     successes = [r for r in results if not isinstance(r, Exception)]
@@ -144,10 +164,23 @@ async def test_concurrent_transfers_only_one_wins(ledger):
 @pytest.mark.asyncio
 async def test_burn(ledger):
     cred = await mint_asset(ledger, b"jpeg", 111)
-    await ledger.burn(present(cred))
+    await ledger.burn(present(cred, binding=PS_BURN_BINDING))
     assert await ledger.asset_status(cred.h) == "burned"
     with pytest.raises(AlreadySpentError):
-        await ledger.burn(present(cred))
+        await ledger.burn(present(cred, binding=PS_BURN_BINDING))
     S_new, pok_new = prove_owner_secret(222)
     with pytest.raises((InvalidProofError, UnknownAssetError, AlreadySpentError)):
-        await ledger.transfer(present(cred), S_new, pok_new)
+        await ledger.transfer(present(cred, binding=S_new.format()), S_new, pok_new)
+
+
+@pytest.mark.asyncio
+async def test_burn_rejects_transfer_bound_presentation(ledger):
+    cred = await mint_asset(ledger, b"jpeg", 111)
+    S_new, _ = prove_owner_secret(222)
+    # a presentation bound to a transfer cannot burn
+    with pytest.raises(InvalidProofError):
+        await ledger.burn(present(cred, binding=S_new.format()))
+    # and a default-bound one cannot either
+    with pytest.raises(InvalidProofError):
+        await ledger.burn(present(cred))
+    assert await ledger.asset_status(cred.h) == "active"

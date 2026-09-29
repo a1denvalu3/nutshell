@@ -20,6 +20,7 @@ import httpx
 
 from ..core.crypto.bls import PublicKey, curve_order
 from ..core.crypto.ps import (
+    PS_BURN_BINDING,
     Credential,
     DlogEqProof,
     Presentation,
@@ -27,8 +28,10 @@ from ..core.crypto.ps import (
     hash_asset,
     present,
     present_private,
+    present_showing,
     prove_owner_secret,
     verify_presentation,
+    verify_showing,
 )
 from ..core.crypto.ps import (
     MintPublicKeyPS as MintPublicKeyPS,
@@ -332,13 +335,17 @@ class NFTClient:
         self, cred: Credential, new_owner_commitment: bytes, new_proof: bytes
     ) -> Tuple[PublicKey, PublicKey]:
         """Swap a credential at the mint toward a receiver's commitment.
-        The presentation proves the MAC; the mint re-issues on the same h.
-        Returns the raw new credential for the receiver to finalize."""
+        The presentation proves the MAC and is bound to the receiver's
+        commitment, so a captured presentation is useless for any other
+        re-issuance. Returns the raw new credential for the receiver to
+        finalize."""
         resp = self._checked(
             self.http.post(
                 f"{NFT_API_PREFIX}/transfer",
                 json={
-                    "presentation": present(cred).to_bytes().hex(),
+                    "presentation": present(
+                        cred, binding=new_owner_commitment
+                    ).to_bytes().hex(),
                     "new_owner_commitment": new_owner_commitment.hex(),
                     "new_proof": new_proof.hex(),
                 },
@@ -370,7 +377,11 @@ class NFTClient:
         self._checked(
             self.http.post(
                 f"{NFT_API_PREFIX}/burn",
-                json={"presentation": wallet.present(h).to_bytes().hex()},
+                json={
+                    "presentation": present(
+                        wallet.get_credential(h), binding=PS_BURN_BINDING
+                    ).to_bytes().hex()
+                },
             )
         )
         wallet.delete_asset(h)
@@ -401,13 +412,44 @@ class NFTClient:
         ).json()
         return str(resp["status"])
 
+    def show(self, wallet: NFTWallet, h: int, context: bytes = b"") -> dict:
+        """Publish a verify-only showing for an asset: a presentation whose
+        proof is bound to a showing context, so it verifies offline but is
+        rejected by the mint's spend endpoints. The context travels next to
+        the presentation in the blob; it defaults to a fresh random nonce."""
+        if not context:
+            context = os.urandom(16)
+        pres = present_showing(wallet.get_credential(h), context)
+        return {"context": context.hex(), "presentation": pres.to_bytes().hex()}
+
+    def verify_showing_blob(self, blob: dict) -> dict:
+        """Third-party check of a showing blob: offline signature/context
+        verification plus the mint's spent and status answers. The spent
+        check is the ownership check -- only the current holder's nullifier
+        is unspent."""
+        try:
+            context = bytes.fromhex(blob["context"])
+            pres = Presentation.from_bytes(bytes.fromhex(blob["presentation"]))
+        except (KeyError, ValueError):
+            raise ValueError("invalid showing blob")
+        valid = pres.keyset_id in ("", self.keyset_id) and verify_showing(
+            self.keyset, pres, context
+        )
+        spent = self.check_state(pres.nullifier.format()) == "SPENT" if valid else False
+        return {
+            "valid": valid,
+            "spent": spent,
+            "asset_status": self.asset_status(pres.h),
+            "asset_hash": pres.h.to_bytes(32, "big").hex(),
+        }
+
     def _transfer_private_cred(
         self, cred: Credential, new_owner_commitment: bytes, new_proof: bytes
     ) -> Tuple[PublicKey, PublicKey]:
         """Hidden-h variant of the swap: the mint never sees the asset
         hash. The blind witness proves the new credential binds the same
         h as the presented one. Returns the blind-issued credential."""
-        pres = present_private(cred)
+        pres = present_private(cred, binding=new_owner_commitment)
         begin = self._checked(
             self.http.post(
                 f"{NFT_API_PREFIX}/transfer/private/begin",
@@ -415,7 +457,9 @@ class NFTClient:
             )
         ).json()
         u2 = self._g1(begin["u"])
-        w_h, proof = blind_transfer_witness(cred, pres.u, u2)
+        w_h, proof = blind_transfer_witness(
+            cred, pres.u, u2, binding=new_owner_commitment
+        )
         resp = self._checked(
             self.http.post(
                 f"{NFT_API_PREFIX}/transfer/private",

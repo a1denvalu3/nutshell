@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from cashu.core.crypto.ps import (
+    PS_BURN_BINDING,
     Credential,
     MintPrivateKeyPS,
     hash_asset,
@@ -66,7 +67,7 @@ def transfer_via_api(client, cred: Credential, s_new: int) -> Credential:
     resp = client.post(
         "/v1/nft/transfer",
         json={
-            "presentation": present(cred).to_bytes().hex(),
+            "presentation": present(cred, binding=S_new.format()).to_bytes().hex(),
             "new_owner_commitment": S_new.format().hex(),
             "new_proof": pok_new.to_bytes().hex(),
         },
@@ -162,14 +163,14 @@ def test_transfer_and_replay_is_409(client):
     )
     assert verify.json() == {"valid": True, "spent": False}
 
-    # replaying alice's spent presentation conflicts
-    S3, pok3 = prove_owner_secret(333)
+    # replaying the spent presentation (bound to the same S_new) conflicts
+    S2, pok2 = prove_owner_secret(222)
     resp = c.post(
         "/v1/nft/transfer",
         json={
-            "presentation": present(cred).to_bytes().hex(),
-            "new_owner_commitment": S3.format().hex(),
-            "new_proof": pok3.to_bytes().hex(),
+            "presentation": present(cred, binding=S2.format()).to_bytes().hex(),
+            "new_owner_commitment": S2.format().hex(),
+            "new_proof": pok2.to_bytes().hex(),
         },
     )
     assert resp.status_code == 409
@@ -178,7 +179,10 @@ def test_transfer_and_replay_is_409(client):
 def test_burn(client):
     c, backend = client
     cred = mint_via_api(c, backend, b"jpeg", 111)
-    resp = c.post("/v1/nft/burn", json={"presentation": present(cred).to_bytes().hex()})
+    resp = c.post(
+        "/v1/nft/burn",
+        json={"presentation": present(cred, binding=PS_BURN_BINDING).to_bytes().hex()},
+    )
     assert resp.json() == {"status": "burned"}
     asset = c.get(f"/v1/nft/asset/{cred.h.to_bytes(32, 'big').hex()}")
     assert asset.json()["status"] == "burned"

@@ -11,11 +11,13 @@ from cashu.core.crypto.ps import (
     hash_asset,
     issue,
     present,
+    present_showing,
     prove_dlog_eq,
     prove_owner_secret,
     verify_dlog_eq,
     verify_owner_secret,
     verify_presentation,
+    verify_showing,
 )
 
 
@@ -52,7 +54,8 @@ class NFTMint:
             raise ValueError("unknown asset")
         if pres.nullifier.format() in self.nullifiers:
             raise ValueError("credential already spent")
-        if not verify_presentation(self.public_key, pres):
+        # the presentation proof must be bound to this exact re-issuance
+        if not verify_presentation(self.public_key, pres, binding=S_new.format()):
             raise ValueError("invalid presentation")
         if not verify_owner_secret(S_new, pok_new):
             raise ValueError("invalid new owner secret proof")
@@ -157,9 +160,10 @@ def test_transfer_flow():
     asset = b"jpeg bytes"
     cred_alice = make_credential(mint, asset, s=11111)
 
-    # alice presents her credential to the mint for transfer to bob
-    pres = present(cred_alice)
+    # alice presents her credential to the mint for transfer to bob, bound
+    # to bob's commitment
     S_bob, pok_bob = prove_owner_secret(22222)
+    pres = present(cred_alice, binding=S_bob.format())
     cred_bob = mint.transfer(pres, S_bob, pok_bob, asset)
     cred_bob.s = 22222
 
@@ -170,8 +174,9 @@ def test_transfer_flow():
     assert pres_bob.nullifier.format() not in mint.nullifiers
 
     # alice's old credential is dead
+    S_eve, pok_eve = prove_owner_secret(33333)
     with pytest.raises(ValueError, match="already spent"):
-        mint.transfer(present(cred_alice), *prove_owner_secret(33333), asset)
+        mint.transfer(present(cred_alice, binding=S_eve.format()), S_eve, pok_eve, asset)
 
 
 def test_transfer_rejects_non_owner():
@@ -181,10 +186,33 @@ def test_transfer_rejects_non_owner():
     # mallory presents her own valid credential for a different asset and
     # tries to move alice's by lying about h
     cred_mallory = make_credential(mint, b"mallory asset", s=44444)
-    pres = present(cred_mallory)
+    S_new, pok_new = prove_owner_secret(44444)
+    pres = present(cred_mallory, binding=S_new.format())
     pres.h = cred_alice.h
     with pytest.raises(ValueError, match="invalid presentation"):
-        mint.transfer(pres, *prove_owner_secret(44444), asset)
+        mint.transfer(pres, S_new, pok_new, asset)
+
+
+def test_transfer_binding_ties_to_exact_new_owner():
+    mint = NFTMint()
+    asset = b"jpeg bytes"
+    cred = make_credential(mint, asset, s=11111)
+    S_a, _ = prove_owner_secret(22222)
+    S_b, pok_b = prove_owner_secret(33333)
+    # a presentation bound to S_new_A is rejected when submitted with S_new_B
+    pres = present(cred, binding=S_a.format())
+    with pytest.raises(ValueError, match="invalid presentation"):
+        mint.transfer(pres, S_b, pok_b, asset)
+
+
+def test_showing_binds_context():
+    mint = NFTMint()
+    cred = make_credential(mint, b"jpeg bytes", s=12345)
+    pres = present_showing(cred, b"context-1")
+    assert verify_showing(mint.public_key, pres, b"context-1")
+    assert not verify_showing(mint.public_key, pres, b"context-2")
+    # a showing is not a valid default-bound (spendable) presentation
+    assert not verify_presentation(mint.public_key, pres)
 
 
 def test_owner_secret_pok_required():
