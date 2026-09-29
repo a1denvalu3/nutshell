@@ -2,7 +2,6 @@ import pytest
 from fastapi.testclient import TestClient
 
 from cashu.core.crypto.ps import (
-    G1,
     Credential,
     MintPrivateKeyPS,
     hash_asset,
@@ -95,17 +94,24 @@ def test_info(client):
     assert len(body["public_key"]) == 576
 
 
-def test_mint_and_verify_and_registry(client):
+def test_mint_and_verify_and_checkstate(client):
     c, backend = client
     cred = mint_via_api(c, backend, b"jpeg", 111)
 
     verify = c.post(
         "/v1/nft/verify", json={"presentation": present(cred).to_bytes().hex()}
     )
-    assert verify.json() == {"valid": True, "registered": True, "owner_matches": True}
+    assert verify.json() == {"valid": True, "spent": False}
 
-    reg = c.get(f"/v1/nft/registry/{cred.h.to_bytes(32, 'big').hex()}")
-    assert reg.json()["owner"] == (G1 * 111).format().hex()
+    nullifier = present(cred).nullifier.format().hex()
+    cs = c.post("/v1/nft/checkstate", json={"nullifiers": [nullifier]})
+    assert cs.json() == {"states": [{"nullifier": nullifier, "state": "UNSPENT"}]}
+
+    asset = c.get(f"/v1/nft/asset/{cred.h.to_bytes(32, 'big').hex()}")
+    assert asset.json() == {
+        "asset_hash": cred.h.to_bytes(32, "big").hex(),
+        "status": "active",
+    }
 
 
 def test_mint_without_payment_is_402(client):
@@ -154,7 +160,7 @@ def test_transfer_and_replay_is_409(client):
     verify = c.post(
         "/v1/nft/verify", json={"presentation": present(cred2).to_bytes().hex()}
     )
-    assert verify.json()["owner_matches"] is True
+    assert verify.json() == {"valid": True, "spent": False}
 
     # replaying alice's spent presentation conflicts
     S3, pok3 = prove_owner_secret(333)
@@ -174,14 +180,13 @@ def test_burn(client):
     cred = mint_via_api(c, backend, b"jpeg", 111)
     resp = c.post("/v1/nft/burn", json={"presentation": present(cred).to_bytes().hex()})
     assert resp.json() == {"status": "burned"}
-    assert (
-        c.get(f"/v1/nft/registry/{cred.h.to_bytes(32, 'big').hex()}").status_code == 404
-    )
+    asset = c.get(f"/v1/nft/asset/{cred.h.to_bytes(32, 'big').hex()}")
+    assert asset.json()["status"] == "burned"
     verify = c.post(
         "/v1/nft/verify", json={"presentation": present(cred).to_bytes().hex()}
     )
-    # the crypto still verifies, but the asset is gone from the registry
-    assert verify.json() == {"valid": True, "registered": False, "owner_matches": False}
+    # the crypto still verifies, but the nullifier is spent
+    assert verify.json() == {"valid": True, "spent": True}
 
 
 def test_malformed_inputs(client):
@@ -189,4 +194,9 @@ def test_malformed_inputs(client):
     assert c.post("/v1/nft/mint", json={"asset_hash": "zz"}).status_code == 422
     resp = c.post("/v1/nft/verify", json={"presentation": "abcd"})
     assert resp.status_code == 400
-    assert c.get("/v1/nft/registry/00").status_code == 400
+    assert c.get("/v1/nft/asset/00").status_code == 400
+    # checkstate rejects non-hex and wrong-length nullifiers
+    assert c.post("/v1/nft/checkstate", json={"nullifiers": ["zz"]}).status_code == 400
+    assert (
+        c.post("/v1/nft/checkstate", json={"nullifiers": ["abcd"]}).status_code == 400
+    )

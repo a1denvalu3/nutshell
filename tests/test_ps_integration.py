@@ -1,7 +1,8 @@
 """End-to-end integration: paid minting, public and private transfers
 between independent wallets, offline third-party verification, batch
-verification, signed registry entries, and burn — all through the HTTP
-API with two service restarts (persistence) in between."""
+verification, NUT-07-style nullifier spent checks, and burn — all
+through the HTTP API with two service restarts (persistence) in
+between."""
 
 import asyncio
 
@@ -53,7 +54,7 @@ def test_full_nft_lifecycle(tmp_path):
 
     # --- service restart: everything survives
     client, verifier = make_service(tmp_path / "mint")
-    assert client.registry_entry(h1)["epoch"] == 0
+    assert client.asset_status(h1) == "active"
 
     # --- public transfer: art1 alice -> bob
     ticket = bob.prepare_receive()
@@ -74,9 +75,16 @@ def test_full_nft_lifecycle(tmp_path):
     pres1, pres2 = bob.present(h1), bob.present(h2)
     assert third_party.verify(pres1) and third_party.verify(pres2)
     assert batch_verify_presentations(third_party.keyset, [pres1, pres2])
-    entry1 = third_party.registry_entry(h1)
-    assert third_party.verify_registered_owner(pres1, entry1)
-    assert entry1["epoch"] == 1
+    # the third party observes bob's published presentation and asks the
+    # mint whether its nullifier is spent: UNSPENT means the presenter
+    # still owns the NFT
+    assert third_party.check_state(pres1.nullifier.format()) == "UNSPENT"
+    assert third_party.asset_status(h1) == "active"
+
+    # --- once bob moves art1 on, the published presentation is stale
+    client.transfer_to_self(bob, h1)
+    assert third_party.check_state(pres1.nullifier.format()) == "SPENT"
+    assert third_party.check_state(bob.present(h1).nullifier.format()) == "UNSPENT"
 
     # --- spent credentials are dead even after another restart
     with pytest.raises(RuntimeError, match="409"):
@@ -84,8 +92,8 @@ def test_full_nft_lifecycle(tmp_path):
 
     # --- burn art1; art2 keeps working
     client.burn(bob, cred1_bob.h)
-    with pytest.raises(ValueError, match="unknown or burned"):
-        client.registry_entry(h1)
+    assert third_party.asset_status(h1) == "burned"
+    assert third_party.check_state(bob.present(h2).nullifier.format()) == "UNSPENT"
     assert third_party.verify(bob.present(h2))
     assert len(bob.assets()) == 1
     assert bob.assets()[0].description == "second"

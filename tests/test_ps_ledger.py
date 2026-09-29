@@ -4,7 +4,6 @@ import pytest
 import pytest_asyncio
 
 from cashu.core.crypto.ps import (
-    G1,
     Credential,
     DlogEqProof,
     MintPrivateKeyPS,
@@ -18,7 +17,6 @@ from cashu.nft.ledger import (
     AlreadyMintedError,
     AlreadySpentError,
     InvalidProofError,
-    NotOwnerError,
     PSLedger,
     UnknownAssetError,
 )
@@ -40,10 +38,13 @@ async def mint_asset(led: PSLedger, asset: bytes, s: int) -> Credential:
 
 
 @pytest.mark.asyncio
-async def test_issue_and_owner_lookup(ledger):
+async def test_issue_and_status_lookup(ledger):
     cred = await mint_asset(ledger, b"jpeg", 111)
-    assert await ledger.get_owner(cred.h) == (G1 * 111).format()
-    assert await ledger.get_owner(hash_asset(b"never minted")) is None
+    assert await ledger.asset_status(cred.h) == "active"
+    assert await ledger.asset_status(hash_asset(b"never minted")) == "unknown"
+    assert await ledger.check_nullifiers([present(cred).nullifier.format()]) == [
+        "UNSPENT"
+    ]
 
 
 @pytest.mark.asyncio
@@ -73,7 +74,7 @@ async def test_persistence_across_reopens(tmp_path):
 
     led2 = PSLedger(Database("test_nft", str(tmp_path)), key)
     await led2.migrate()
-    assert await led2.get_owner(cred.h) == (G1 * 111).format()
+    assert await led2.asset_status(cred.h) == "active"
     # a transfer issued against the reopened ledger verifies
     S_new, pok_new = prove_owner_secret(222)
     u2, v2 = await led2.transfer(present(cred), S_new, pok_new)
@@ -84,12 +85,17 @@ async def test_persistence_across_reopens(tmp_path):
 @pytest.mark.asyncio
 async def test_transfer_flow_and_double_spend(ledger):
     cred = await mint_asset(ledger, b"jpeg", 111)
+    old_nullifier = present(cred).nullifier.format()
     S_new, pok_new = prove_owner_secret(222)
     u2, v2 = await ledger.transfer(present(cred), S_new, pok_new)
-    assert await ledger.get_owner(cred.h) == (G1 * 222).format()
+    # the old generation is spent; the re-issued credential's is unspent
+    assert await ledger.check_nullifiers([old_nullifier]) == ["SPENT"]
+    cred2 = Credential(u=u2, v=v2, h=cred.h, s=222, keyset_id=cred.keyset_id)
+    assert await ledger.check_nullifiers([present(cred2).nullifier.format()]) == [
+        "UNSPENT"
+    ]
     with pytest.raises(AlreadySpentError):
         await ledger.transfer(present(cred), S_new, pok_new)
-    cred2 = Credential(u=u2, v=v2, h=cred.h, s=222, keyset_id=cred.keyset_id)
     S3, pok3 = prove_owner_secret(333)
     await ledger.transfer(present(cred2), S3, pok3)
 
@@ -101,7 +107,7 @@ async def test_transfer_rejects_non_owner(ledger):
     pres = present(evil)
     pres.h = cred.h
     S_new, pok_new = prove_owner_secret(222)
-    with pytest.raises((InvalidProofError, NotOwnerError)):
+    with pytest.raises(InvalidProofError):
         await ledger.transfer(pres, S_new, pok_new)
 
 
@@ -139,7 +145,7 @@ async def test_concurrent_transfers_only_one_wins(ledger):
 async def test_burn(ledger):
     cred = await mint_asset(ledger, b"jpeg", 111)
     await ledger.burn(present(cred))
-    assert await ledger.get_owner(cred.h) is None
+    assert await ledger.asset_status(cred.h) == "burned"
     with pytest.raises(AlreadySpentError):
         await ledger.burn(present(cred))
     S_new, pok_new = prove_owner_secret(222)

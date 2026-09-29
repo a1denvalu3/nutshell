@@ -428,8 +428,9 @@ def verify_presentation(mint_public: MintPublicKeyPS, pres: Presentation) -> boo
 
     Checks authenticity (pairing equation against the mint's G2 parameters)
     and ownership (the same s in S, N and u_s). The caller must separately
-    compare pres.owner_commitment against the ownership registry entry for
-    pres.h, and (for transfers) enforce pres.nullifier freshness.
+    ask the mint whether pres.nullifier is spent (the only unspent nullifier
+    belongs to the current holder) and, for transfers, claim the nullifier
+    atomically with the re-issuance.
     """
     for p in (pres.u, pres.v, pres.u_s, pres.owner_commitment, pres.nullifier):
         if p.is_infinity():
@@ -474,10 +475,10 @@ def verify_presentation_keysets(
 # v2 = u2^x * W_h^{y_h} * S_new^{k2 * y_s} without ever learning h.
 #
 # Privacy scope: h leaves the owner's wallet in no message. The mint still
-# learns *that* a transfer happened and can correlate the old and new
-# owner commitments; a mint that shadows its registry can still reverse
-# the lookup. This is honest-but-curious privacy for the asset id, not
-# full KVAC anonymity.
+# learns *that* a transfer happened and sees the spent nullifier; since the
+# previous generation's nullifier is claimed on every transfer, the mint
+# can tell when a given credential generation dies. This is
+# honest-but-curious privacy for the asset id, not full KVAC anonymity.
 
 PS_PRIVATE_DST = b"Cashu_PS_Private_v1"
 PS_BLIND_DST = b"Cashu_PS_Blind_v1"

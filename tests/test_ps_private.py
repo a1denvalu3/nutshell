@@ -51,6 +51,7 @@ def test_private_transfer_hides_h(service, tmp_path):
     asset = b"jpeg"
     h = hash_asset(asset)
     client.mint(alice, asset)
+    alice_nullifier = alice.present(h).nullifier.format()
 
     ticket = bob.prepare_receive()
     u2, v2 = client.transfer_private(
@@ -62,10 +63,11 @@ def test_private_transfer_hides_h(service, tmp_path):
     assert verify_presentation(client.keyset, present(cred_bob))
     assert verify_private_presentation(client.keyset, present_private(cred_bob))
 
-    # registry moved to bob, epoch bumped
-    entry = client.registry_entry(h)
-    assert entry["epoch"] == 1
-    assert client.verify_registered_owner(bob.present(h), entry)
+    # ownership moved to bob, observable via the nullifier spent set:
+    # alice's generation is spent, bob's is the only unspent one
+    assert client.check_state(alice_nullifier) == "SPENT"
+    assert client.check_state(bob.present(h).nullifier.format()) == "UNSPENT"
+    assert client.asset_status(h) == "active"
 
     # alice's credential is dead
     with pytest.raises(RuntimeError, match="409"):
@@ -110,4 +112,7 @@ def test_private_and_public_transfers_compose(service, tmp_path):
     client.transfer_private_to_self(wallet, h)
     cred = client.transfer_to_self(wallet, h)
     assert verify_presentation(client.keyset, present(cred))
-    assert client.registry_entry(h)["epoch"] == 3
+    # three transfers happened: the first two nullifiers are spent, the
+    # current credential's is not, and the asset is still active
+    assert client.check_state(present(cred).nullifier.format()) == "UNSPENT"
+    assert client.asset_status(h) == "active"

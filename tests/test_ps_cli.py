@@ -1,5 +1,4 @@
 import asyncio
-import json
 
 import pytest
 from click.testing import CliRunner
@@ -85,11 +84,8 @@ def test_cli_full_flow(runner, tmp_path):
 
     out = invoke(runner, "verify", h_full[:12], wallet=bob)
     assert "credential valid: True" in out
-    assert "registered owner: True" in out
-    assert "registry epoch:   1" in out
-
-    out = invoke(runner, "registry", h_full[:12], wallet=bob)
-    assert json.loads(out)["epoch"] == 1
+    assert "nullifier spent: False" in out
+    assert "asset status:    active" in out
 
     # receiving the same token twice fails: the nullifier is spent
     result = r.invoke(cli, ["nft", "--wallet-db", alice, "receive", token])
@@ -99,13 +95,15 @@ def test_cli_full_flow(runner, tmp_path):
     token2 = invoke(runner, "send", h_full[:12], wallet=bob).strip().splitlines()[-1]
     invoke(runner, "receive", token2, "--private", wallet=alice)
     out = invoke(runner, "verify", h_full[:12], wallet=alice)
-    assert "registry epoch:   2" in out
+    assert "nullifier spent: False" in out
+    assert "asset status:    active" in out
 
     # burn
     out = invoke(runner, "burn", h_full[:12], wallet=alice)
     assert f"burned: {h_full}" in out
     assert "no assets" in invoke(runner, "list", wallet=alice)
-    result = r.invoke(cli, ["nft", "--wallet-db", alice, "registry", h_full])
+    # the asset is gone from the wallet, so verify cannot resolve it anymore
+    result = r.invoke(cli, ["nft", "--wallet-db", alice, "verify", h_full])
     assert result.exit_code != 0
 
 

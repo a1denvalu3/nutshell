@@ -21,14 +21,15 @@ from cashu.core.crypto.ps import (
 
 class NFTMint:
     """Minimal experimental mint state for the NFT flow: one credential per
-    asset hash, a nullifier set for spent credentials, and an ownership
-    registry mapping asset hash -> current owner commitment."""
+    asset hash and a nullifier spent set. There is no owner registry:
+    transfers claim the current credential's nullifier and re-issue under
+    a fresh owner secret, so the only unspent nullifier at any time
+    belongs to the current holder."""
 
     def __init__(self):
         self.key = MintPrivateKeyPS()
         self.issued: set[int] = set()
         self.nullifiers: set[bytes] = set()
-        self.owners: dict[int, bytes] = {}
 
     @property
     def public_key(self):
@@ -42,7 +43,6 @@ class NFTMint:
             raise ValueError("invalid owner secret proof")
         u, v = issue(self.key, h, S)
         self.issued.add(h)
-        self.owners[h] = S.format()
         return Credential(u=u, v=v, h=h, s=0)  # s filled in by the owner
 
     def transfer(self, pres: Presentation, S_new, pok_new, asset: bytes) -> Credential:
@@ -52,15 +52,12 @@ class NFTMint:
             raise ValueError("unknown asset")
         if pres.nullifier.format() in self.nullifiers:
             raise ValueError("credential already spent")
-        if self.owners[pres.h] != pres.owner_commitment.format():
-            raise ValueError("not the registered owner")
         if not verify_presentation(self.public_key, pres):
             raise ValueError("invalid presentation")
         if not verify_owner_secret(S_new, pok_new):
             raise ValueError("invalid new owner secret proof")
         self.nullifiers.add(pres.nullifier.format())
         u, v = issue(self.key, pres.h, S_new)
-        self.owners[pres.h] = S_new.format()
         return Credential(u=u, v=v, h=pres.h, s=0)
 
 
@@ -174,10 +171,11 @@ def test_transfer_flow():
     cred_bob = mint.transfer(pres, S_bob, pok_bob, asset)
     cred_bob.s = 22222
 
-    # bob's new credential verifies and the registry points to him
+    # bob's new credential verifies and his nullifier is the only unspent one
     pres_bob = present(cred_bob)
     assert verify_presentation(mint.public_key, pres_bob)
-    assert mint.owners[cred_bob.h] == S_bob.format()
+    assert pres.nullifier.format() in mint.nullifiers
+    assert pres_bob.nullifier.format() not in mint.nullifiers
 
     # alice's old credential is dead
     with pytest.raises(ValueError, match="already spent"):
@@ -193,9 +191,7 @@ def test_transfer_rejects_non_owner():
     cred_mallory = make_credential(mint, b"mallory asset", s=44444)
     pres = present(cred_mallory)
     pres.h = cred_alice.h
-    with pytest.raises(
-        ValueError, match="invalid presentation|not the registered owner"
-    ):
+    with pytest.raises(ValueError, match="invalid presentation"):
         mint.transfer(pres, *prove_owner_secret(44444), asset)
 
 

@@ -13,7 +13,7 @@ Typical flow (cashu-style, sending is offline):
     cashu nft list                       # show owned assets
     cashu nft send <h>                   # print a bearer token for the receiver
     cashu nft receive <token>            # receiver: swap the token at the mint
-    cashu nft verify <h>                 # offline ownership check
+    cashu nft verify <h>                 # offline verify + mint spent/status check
     cashu nft burn <h>                   # retire the asset
 
 The mint URL defaults to settings.mint_url (the same default as every
@@ -21,7 +21,6 @@ other cashu command); override with --mint-url or NFT_MINT_URL.
 """
 
 import functools
-import json
 import os
 import secrets
 from typing import Optional
@@ -261,7 +260,7 @@ def nft_receive(ctx: click.Context, token: str, description: str, private: bool)
     print(f"received: {cred.h.to_bytes(32, 'big').hex()}")
 
 
-@nft.command("verify", help="Verify ownership of an NFT offline.")
+@nft.command("verify", help="Verify ownership of an NFT.")
 @click.argument("asset_hash", type=str)
 @click.pass_context
 @_cli_errors
@@ -271,24 +270,11 @@ def nft_verify(ctx: click.Context, asset_hash: str):
     h = _resolve_h(wallet, asset_hash)
     pres = wallet.present(h)
     print(f"credential valid: {client.verify(pres)}")
-    try:
-        entry = client.registry_entry(h)
-        print(f"registered owner: {client.verify_registered_owner(pres, entry)}")
-        print(f"registry epoch:   {entry['epoch']}")
-    except ValueError:
-        print("registered owner: asset not in registry (burned or unknown)")
-
-
-@nft.command("registry", help="Show the mint-signed registry entry for an asset.")
-@click.argument("asset_hash", type=str)
-@click.pass_context
-@_cli_errors
-def nft_registry(ctx: click.Context, asset_hash: str):
-    client = _make_client(ctx.obj["NFT_MINT_URL"])
-    wallet = _open_wallet(ctx.obj["NFT_WALLET_DB"])
-    h = _resolve_h(wallet, asset_hash)
-    entry = client.registry_entry(h)
-    print(json.dumps(entry, indent=2))
+    # the only unspent nullifier belongs to the current holder, so the
+    # mint's spent check doubles as the ownership check -- a third party
+    # shown this presentation can ask the mint the same two questions
+    print(f"nullifier spent: {client.check_state(pres.nullifier.format()) == 'SPENT'}")
+    print(f"asset status:    {client.asset_status(h)}")
 
 
 @nft.command("burn", help="Retire an NFT.")

@@ -10,7 +10,7 @@ encodings from cashu/core/crypto/ps.py. Asset hashes are computed
 client-side: the mint only ever sees h, never the asset bytes.
 """
 
-from typing import Optional
+from typing import List, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel
@@ -27,12 +27,14 @@ from .ledger import (
     AlreadySpentError,
     InvalidProofError,
     NFTError,
-    NotOwnerError,
     PaymentError,
     PSLedger,
     UnknownAssetError,
     UnknownQuoteError,
 )
+
+# cap on the /checkstate batch, NUT-07 style
+MAX_CHECKSTATE_NULLIFIERS = 1000
 
 
 class MintRequest(BaseModel):
@@ -62,6 +64,10 @@ class SpendRequest(BaseModel):
 
 class PrivateTransferBeginRequest(BaseModel):
     nullifier: str  # 48-byte compressed G1 point, hex
+
+
+class CheckStateRequest(BaseModel):
+    nullifiers: List[str]  # hex of 48-byte compressed G1 points
 
 
 class PrivateTransferRequest(BaseModel):
@@ -118,7 +124,7 @@ def _http_error(e: NFTError) -> HTTPException:
         return HTTPException(409, str(e))
     if isinstance(e, (UnknownAssetError, UnknownQuoteError)):
         return HTTPException(404, str(e))
-    if isinstance(e, (NotOwnerError, InvalidProofError)):
+    if isinstance(e, InvalidProofError):
         return HTTPException(403, str(e))
     return HTTPException(400, str(e))
 
@@ -230,29 +236,38 @@ def create_router(ledger: PSLedger) -> APIRouter:
         valid = pres.keyset_id in ("", ledger.keyset.keyset_id) and verify_presentation(
             ledger.keyset, pres
         )
-        owner = await ledger.get_owner(pres.h) if valid else None
+        spent = await ledger.is_spent(pres.nullifier.format()) if valid else False
+        return {"valid": valid, "spent": spent}
+
+    @router.post("/checkstate")
+    async def checkstate(req: CheckStateRequest):
+        if len(req.nullifiers) > MAX_CHECKSTATE_NULLIFIERS:
+            raise HTTPException(
+                400, f"too many nullifiers (max {MAX_CHECKSTATE_NULLIFIERS})"
+            )
+        nullifiers = []
+        for raw in req.nullifiers:
+            try:
+                n = bytes.fromhex(raw)
+            except ValueError:
+                raise HTTPException(400, "nullifier must be hex")
+            if len(n) != 48:
+                raise HTTPException(
+                    400, "nullifier must be a 48-byte compressed G1 point"
+                )
+            nullifiers.append(n)
+        states = await ledger.check_nullifiers(nullifiers)
         return {
-            "valid": valid,
-            "registered": owner is not None,
-            "owner_matches": owner == pres.owner_commitment.format()
-            if owner
-            else False,
+            "states": [
+                {"nullifier": n.hex(), "state": s}
+                for n, s in zip(nullifiers, states)
+            ]
         }
 
-    @router.get("/registry/{asset_hash}")
-    async def registry(asset_hash: str):
+    @router.get("/asset/{asset_hash}")
+    async def asset(asset_hash: str):
         h = _parse_scalar(asset_hash)
-        entry = await ledger.registry_entry(h)
-        if entry is None:
-            raise HTTPException(404, "unknown or burned asset")
-        owner, epoch, signature = entry
-        return {
-            "asset_hash": asset_hash,
-            "owner": owner.hex(),
-            "status": "active",
-            "epoch": epoch,
-            "signature": signature.hex(),
-        }
+        return {"asset_hash": asset_hash, "status": await ledger.asset_status(h)}
 
     return router
 

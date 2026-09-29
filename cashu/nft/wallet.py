@@ -34,7 +34,6 @@ from ..core.crypto.ps import (
     MintPublicKeyPS as MintPublicKeyPS,
 )
 from .api import NFT_API_PREFIX
-from .registry import verify_registry_entry
 
 WALLET_SECRET_DST = b"Cashu_PS_Wallet_v1"
 
@@ -382,30 +381,25 @@ class NFTClient:
             self.keyset, pres
         )
 
-    def registry_entry(self, h: int) -> dict:
-        resp = self.http.get(f"{NFT_API_PREFIX}/registry/{h.to_bytes(32, 'big').hex()}")
-        if resp.status_code == 404:
-            raise ValueError("unknown or burned asset")
-        return self._checked(resp).json()
+    def check_state(self, nullifier: bytes) -> str:
+        """NUT-07-style spent lookup at the mint: "SPENT" or "UNSPENT".
+        The only unspent nullifier of an asset belongs to its current
+        holder, so this doubles as the ownership check for a third party
+        shown a presentation."""
+        resp = self._checked(
+            self.http.post(
+                f"{NFT_API_PREFIX}/checkstate",
+                json={"nullifiers": [nullifier.hex()]},
+            )
+        ).json()
+        return str(resp["states"][0]["state"])
 
-    def verify_registered_owner(self, pres: Presentation, entry: dict) -> bool:
-        """Offline check that a presentation comes from the currently
-        registered owner: the registry entry must carry a valid mint
-        signature over (h, owner, epoch) and name the presentation's
-        owner commitment. Callers comparing entries across time should
-        take the one with the highest epoch."""
-        owner = bytes.fromhex(entry["owner"])
-        if owner != pres.owner_commitment.format():
-            return False
-        if int(entry["asset_hash"], 16) != pres.h:
-            return False
-        return verify_registry_entry(
-            self.keyset,
-            pres.h,
-            owner,
-            int(entry["epoch"]),
-            bytes.fromhex(entry["signature"]),
-        )
+    def asset_status(self, h: int) -> str:
+        """Asset status at the mint: "active", "burned" or "unknown"."""
+        resp = self._checked(
+            self.http.get(f"{NFT_API_PREFIX}/asset/{h.to_bytes(32, 'big').hex()}")
+        ).json()
+        return str(resp["status"])
 
     def _transfer_private_cred(
         self, cred: Credential, new_owner_commitment: bytes, new_proof: bytes

@@ -11,7 +11,6 @@ from .ledger import (
     AlreadyMintedError,
     AlreadySpentError,
     InvalidProofError,
-    NotOwnerError,
     PSLedger,
     UnknownAssetError,
 )
@@ -20,7 +19,6 @@ __all__ = [
     "AlreadyMintedError",
     "AlreadySpentError",
     "InvalidProofError",
-    "NotOwnerError",
     "PSLedger",
     "UnknownAssetError",
 ]

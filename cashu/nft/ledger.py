@@ -1,23 +1,32 @@
 """Persistent ledger for the experimental PS-credential NFT service.
 
 State:
-    ps_assets     -- one row per minted asset: h -> current owner commitment
+    ps_assets     -- one row per minted asset: h -> status (active/burned)
     ps_nullifiers -- spent presentation nullifiers (double-spend prevention)
     ps_quotes     -- mint quotes: h -> settlement state (one NFT per quote)
+
+There is no owner column and no ownership registry: a transfer claims the
+current credential's nullifier and re-issues the asset under a fresh owner
+secret, so every previous generation's nullifier lands in ps_nullifiers
+and the only unspent nullifier at any time belongs to the current holder.
+A third party shown a presentation therefore only needs an ecash/NUT-07-
+style spent check on the nullifier (check_nullifiers) to learn whether the
+presenter still owns the NFT. Burn stays distinguishable from transfer via
+the per-asset status (asset_status).
 
 Invariants enforced here, on top of the cryptography in
 cashu/core/crypto/ps.py:
     * one credential per asset hash, enforced by the ps_assets primary key
     * a presentation can be spent exactly once, enforced by claiming the
-      nullifier inside the same transaction that moves ownership
-    * transfers are atomic: proof checks, nullifier claim, ownership move
-      and re-issuance either all commit or all roll back
+      nullifier inside the caller's transaction
+    * transfers are atomic: proof checks, nullifier claim and re-issuance
+      either all commit or all roll back
     * a paid quote mints exactly one NFT, enforced by consuming the quote
       in the same transaction that inserts the asset
 """
 
 import uuid
-from typing import Optional, Tuple
+from typing import List, Optional, Tuple
 
 from sqlalchemy.exc import IntegrityError
 
@@ -35,9 +44,8 @@ from ..core.crypto.ps import (
     verify_owner_secret,
     verify_presentation,
 )
-from ..core.db import Connection, Database, LockOptions
+from ..core.db import SQLITE, Connection, Database, LockOptions
 from .quotes import QuoteBackend
-from .registry import sign_registry_entry
 
 
 class NFTError(Exception):
@@ -53,10 +61,6 @@ class UnknownAssetError(NFTError):
 
 
 class UnknownQuoteError(NFTError):
-    pass
-
-
-class NotOwnerError(NFTError):
     pass
 
 
@@ -95,13 +99,29 @@ class PSLedger:
 
     async def migrate(self) -> None:
         async with self.db.get_connection() as conn:
+            # Old (owner-registry era) schema: ps_assets carried owner/epoch
+            # and ps_nullifiers carried h. This feature is experimental, so
+            # instead of migrating rows we drop and recreate both tables;
+            # ps_quotes is untouched.
+            if conn.type == SQLITE:
+                rows = await conn.fetchall("PRAGMA table_info(ps_assets)")
+                old_schema = any(row["name"] == "owner" for row in rows)
+            else:
+                rows = await conn.fetchall(
+                    """
+                    SELECT column_name FROM information_schema.columns
+                    WHERE table_name = 'ps_assets'
+                    """
+                )
+                old_schema = any(row["column_name"] == "owner" for row in rows)
+            if old_schema:
+                await conn.execute("DROP TABLE ps_assets")
+                await conn.execute("DROP TABLE ps_nullifiers")
             await conn.execute(
                 """
                 CREATE TABLE IF NOT EXISTS ps_assets (
                     h TEXT PRIMARY KEY,
-                    owner BLOB NOT NULL,
                     status TEXT NOT NULL DEFAULT 'active',
-                    epoch INTEGER NOT NULL DEFAULT 0,
                     created TEXT NOT NULL
                 )
                 """
@@ -110,7 +130,6 @@ class PSLedger:
                 """
                 CREATE TABLE IF NOT EXISTS ps_nullifiers (
                     nullifier BLOB PRIMARY KEY,
-                    h TEXT NOT NULL,
                     spent TEXT NOT NULL
                 )
                 """
@@ -239,12 +258,11 @@ class PSLedger:
             try:
                 await c.execute(
                     """
-                    INSERT INTO ps_assets (h, owner, status, created)
-                    VALUES (:h, :owner, 'active', :created)
+                    INSERT INTO ps_assets (h, status, created)
+                    VALUES (:h, 'active', :created)
                     """,
                     {
                         "h": _h_hex(h),
-                        "owner": S.format(),
                         "created": self.db.timestamp_now_str(),
                     },
                 )
@@ -252,35 +270,33 @@ class PSLedger:
                 raise AlreadyMintedError("asset was already minted")
         return issue(self.mint_key, h, S)
 
-    async def get_owner(self, h: int) -> Optional[bytes]:
-        """Current owner commitment for an active asset, None if unknown
-        or burned."""
-        row = await self.db.fetchone(
-            "SELECT owner, status FROM ps_assets WHERE h = :h", {"h": _h_hex(h)}
-        )
-        if row is None or row["status"] != "active":
-            return None
-        return bytes(row["owner"])
-
     async def is_spent(self, nullifier: bytes) -> bool:
         row = await self.db.fetchone(
             "SELECT 1 AS x FROM ps_nullifiers WHERE nullifier = :n", {"n": nullifier}
         )
         return row is not None
 
-    async def registry_entry(self, h: int) -> Optional[Tuple[bytes, int, bytes]]:
-        """Signed registry entry (owner, epoch, signature) for an active
-        asset, verifiable offline against the keyset's X2."""
+    async def check_nullifiers(self, nullifiers: List[bytes]) -> List[str]:
+        """NUT-07-style spent lookup: "SPENT" or "UNSPENT" per nullifier,
+        in the same order as the input. The only unspent nullifier of an
+        asset belongs to its current holder, so this doubles as the
+        ownership check for third parties shown a presentation."""
+        states = []
+        for n in nullifiers:
+            row = await self.db.fetchone(
+                "SELECT 1 AS x FROM ps_nullifiers WHERE nullifier = :n", {"n": n}
+            )
+            states.append("SPENT" if row is not None else "UNSPENT")
+        return states
+
+    async def asset_status(self, h: int) -> str:
+        """Status of an asset hash: "active", "burned" or "unknown"."""
         row = await self.db.fetchone(
-            "SELECT owner, epoch FROM ps_assets WHERE h = :h AND status = 'active'",
-            {"h": _h_hex(h)},
+            "SELECT status FROM ps_assets WHERE h = :h", {"h": _h_hex(h)}
         )
         if row is None:
-            return None
-        owner = bytes(row["owner"])
-        epoch = int(row["epoch"])
-        sig = sign_registry_entry(self.mint_key, h, owner, epoch)
-        return owner, epoch, sig.format()
+            return "unknown"
+        return str(row["status"])
 
     async def _spend(
         self,
@@ -288,8 +304,8 @@ class PSLedger:
         conn: Connection,
     ) -> None:
         """Verify a presentation and claim its nullifier, atomically with
-        the caller's transaction. The asset must be active and the
-        presentation must come from the registered owner."""
+        the caller's transaction. The asset must be known and active
+        (h is revealed for public presentations)."""
         if pres.keyset_id and pres.keyset_id != self.keyset.keyset_id:
             raise InvalidProofError("unknown keyset")
         if not verify_presentation(self.keyset, pres):
@@ -300,24 +316,21 @@ class PSLedger:
         ):
             raise AlreadySpentError("credential already spent")
         row = await conn.fetchone(
-            "SELECT owner, status FROM ps_assets WHERE h = :h",
+            "SELECT status FROM ps_assets WHERE h = :h",
             {"h": _h_hex(pres.h)},
         )
         if row is None:
             raise UnknownAssetError("unknown asset")
         if row["status"] != "active":
             raise UnknownAssetError("asset is burned")
-        if bytes(row["owner"]) != pres.owner_commitment.format():
-            raise NotOwnerError("presentation is not from the registered owner")
         try:
             await conn.execute(
                 """
-                INSERT INTO ps_nullifiers (nullifier, h, spent)
-                VALUES (:n, :h, :spent)
+                INSERT INTO ps_nullifiers (nullifier, spent)
+                VALUES (:n, :spent)
                 """,
                 {
                     "n": pres.nullifier.format(),
-                    "h": _h_hex(pres.h),
                     "spent": self.db.timestamp_now_str(),
                 },
             )
@@ -338,10 +351,6 @@ class PSLedger:
             conn, locks=[LockOptions(table="ps_nullifiers")]
         ) as c:
             await self._spend(pres, c)
-            await c.execute(
-                "UPDATE ps_assets SET owner = :owner, epoch = epoch + 1 WHERE h = :h",
-                {"owner": S_new.format(), "h": _h_hex(pres.h)},
-            )
         return issue(self.mint_key, pres.h, S_new)
 
     async def burn(self, pres: Presentation, conn: Optional[Connection] = None) -> None:
@@ -373,9 +382,10 @@ class PSLedger:
         conn: Optional[Connection] = None,
     ) -> Tuple[PublicKey, PublicKey]:
         """Atomically spend a hidden-h presentation and blindly re-issue
-        the same asset to S_new. The asset hash never reaches the mint;
-        the registry row is located by the old owner commitment, which
-        must be unique among active assets."""
+        the same asset to S_new. The asset hash never reaches the mint, so
+        no asset row can be touched here; ownership is implicit in the
+        nullifier set — only an unspent nullifier can pass, and the burn
+        path spends the nullifier too, so a burned asset cannot transfer."""
         if not verify_owner_secret(S_new, pok_new):
             raise InvalidProofError("invalid new owner secret proof")
         if pres.keyset_id and pres.keyset_id != self.keyset.keyset_id:
@@ -393,20 +403,9 @@ class PSLedger:
                 raise AlreadySpentError("credential already spent")
             await c.execute(
                 """
-                INSERT INTO ps_nullifiers (nullifier, h, spent)
-                VALUES (:n, '', :spent)
+                INSERT INTO ps_nullifiers (nullifier, spent)
+                VALUES (:n, :spent)
                 """,
                 {"n": pres.nullifier.format(), "spent": self.db.timestamp_now_str()},
             )
-            result = await c.execute(
-                """
-                UPDATE ps_assets SET owner = :owner, epoch = epoch + 1
-                WHERE owner = :old_owner AND status = 'active'
-                """,
-                {"owner": S_new.format(), "old_owner": pres.owner_commitment.format()},
-            )
-            if result.rowcount != 1:
-                raise UnknownAssetError(
-                    "no unique active asset for this owner commitment"
-                )
         return u2, issue_blind(self.mint_key, k2, u2, w_h, S_new)
