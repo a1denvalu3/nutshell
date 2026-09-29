@@ -53,7 +53,7 @@ class DevPayRequest(BaseModel):
 
 
 class TransferRequest(BaseModel):
-    presentation: str  # 369-byte Presentation, hex
+    presentation: str  # 321-byte Presentation, hex
     new_owner_commitment: str
     new_proof: str
 
@@ -71,7 +71,7 @@ class CheckStateRequest(BaseModel):
 
 
 class PrivateTransferRequest(BaseModel):
-    presentation: str  # 449-byte PrivatePresentation, hex
+    presentation: str  # 401-byte PrivatePresentation, hex
     w_h: str  # 48-byte compressed G1 point, hex
     proof: str  # 64-byte DlogEqProof, hex
     new_owner_commitment: str

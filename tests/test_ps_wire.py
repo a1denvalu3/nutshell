@@ -43,6 +43,7 @@ def test_presentation_roundtrip_and_tamper():
     key = MintPrivateKeyPS()
     cred = make_cred(key, b"asset", 42)
     pres = present(cred)
+    assert len(pres.to_bytes()) == 321
     restored = Presentation.from_bytes(pres.to_bytes())
     assert restored == pres
     assert verify_presentation(key.public_key, restored)

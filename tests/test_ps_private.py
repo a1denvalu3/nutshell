@@ -36,6 +36,7 @@ def test_private_presentation_roundtrip(service, tmp_path):
     wallet = NFTWallet(str(tmp_path / "alice.sqlite3"), seed=b"alice seed 00001")
     cred = client.mint(wallet, b"jpeg")
     pres = present_private(cred)
+    assert len(pres.to_bytes()) == 401
     assert verify_private_presentation(client.keyset, pres)
     restored = PrivatePresentation.from_bytes(pres.to_bytes())
     assert restored == pres

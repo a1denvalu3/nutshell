@@ -20,11 +20,15 @@ Issuance (blind in s):
 
 Presentation (public, offline verifiable):
     user randomizes (u', v') = (u^rho, v^rho) and reveals
-    (h, u', v', U_s = u'^s, S, N = G_NULL^s, dlog-eq proof of s)
+    (h, u', v', U_s = u'^s, N = G_NULL^s, dlog-eq proof of s)
     authenticity: e(v', g2) == e(u', X2 * Y_h2^h) * e(U_s, Y_s2)
-    ownership:    Chaum-Pedersen proof that the same s sits in S (G1),
-                  N (G_NULL) and U_s (u'). All bases are G1 points, so no
-                  GT exponentiation is needed.
+    ownership:    Chaum-Pedersen proof that the same s sits in N (G_NULL)
+                  and U_s (u'). All bases are G1 points, so no GT
+                  exponentiation is needed.
+    The owner commitment S = g1^s is NOT part of a presentation: it is
+    only used at issuance/transfer time (the Diffie-Hellman trick needs
+    it there), so a presentation cannot be matched against the S values
+    in the mint's issuance logs.
 
 Transfer:
     the mint checks the presentation, enforces nullifier N freshness, then
@@ -333,7 +337,6 @@ class Presentation:
     u: PublicKey
     v: PublicKey
     u_s: PublicKey
-    owner_commitment: PublicKey  # S = g1^s
     nullifier: PublicKey  # N = G_NULL^s
     proof: DlogEqProof
     keyset_id: str = ""
@@ -345,24 +348,22 @@ class Presentation:
             + self.u.format()
             + self.v.format()
             + self.u_s.format()
-            + self.owner_commitment.format()
             + self.nullifier.format()
             + self.proof.to_bytes()
         )
 
     @classmethod
     def from_bytes(cls, raw: bytes) -> "Presentation":
-        if len(raw) != 369:
-            raise ValueError("Presentation is 369 bytes")
+        if len(raw) != 321:
+            raise ValueError("Presentation is 321 bytes")
         return cls(
             keyset_id=_keyset_id_from_bytes(raw[:33]),
             h=_scalar_from_bytes(raw[33:65]),
             u=_g1_from_bytes(raw[65:113]),
             v=_g1_from_bytes(raw[113:161]),
             u_s=_g1_from_bytes(raw[161:209]),
-            owner_commitment=_g1_from_bytes(raw[209:257]),
-            nullifier=_g1_from_bytes(raw[257:305]),
-            proof=DlogEqProof.from_bytes(raw[305:]),
+            nullifier=_g1_from_bytes(raw[209:257]),
+            proof=DlogEqProof.from_bytes(raw[257:]),
         )
 
 
@@ -408,15 +409,13 @@ def present(cred: Credential, rho: Optional[int] = None) -> Presentation:
     u_r = cred.u * rho
     v_r = cred.v * rho
     u_s = u_r * cred.s
-    S = G1 * cred.s
     N = G_NULL * cred.s
-    proof = prove_dlog_eq([G1, G_NULL, u_r], [S, N, u_s], cred.s, PS_PRESENT_DST)
+    proof = prove_dlog_eq([G_NULL, u_r], [N, u_s], cred.s, PS_PRESENT_DST)
     return Presentation(
         h=cred.h,
         u=u_r,
         v=v_r,
         u_s=u_s,
-        owner_commitment=S,
         nullifier=N,
         proof=proof,
         keyset_id=cred.keyset_id,
@@ -427,19 +426,19 @@ def verify_presentation(mint_public: MintPublicKeyPS, pres: Presentation) -> boo
     """Public, offline verification of a presentation.
 
     Checks authenticity (pairing equation against the mint's G2 parameters)
-    and ownership (the same s in S, N and u_s). The caller must separately
+    and ownership (the same s in N and u_s). The caller must separately
     ask the mint whether pres.nullifier is spent (the only unspent nullifier
     belongs to the current holder) and, for transfers, claim the nullifier
     atomically with the re-issuance.
     """
-    for p in (pres.u, pres.v, pres.u_s, pres.owner_commitment, pres.nullifier):
+    for p in (pres.u, pres.v, pres.u_s, pres.nullifier):
         if p.is_infinity():
             return False
     if not 0 <= pres.h < curve_order:
         return False
     if not verify_dlog_eq(
-        [G1, G_NULL, pres.u],
-        [pres.owner_commitment, pres.nullifier, pres.u_s],
+        [G_NULL, pres.u],
+        [pres.nullifier, pres.u_s],
         pres.proof,
         PS_PRESENT_DST,
     ):
@@ -517,7 +516,6 @@ class PrivatePresentation:
     v: PublicKey
     u_h: PublicKey  # h * u
     u_s: PublicKey  # s * u
-    owner_commitment: PublicKey  # S = g1^s
     nullifier: PublicKey  # N = G_NULL^s
     proof_h: DlogEqProof
     proof_s: DlogEqProof
@@ -530,7 +528,6 @@ class PrivatePresentation:
             + self.v.format()
             + self.u_h.format()
             + self.u_s.format()
-            + self.owner_commitment.format()
             + self.nullifier.format()
             + self.proof_h.to_bytes()
             + self.proof_s.to_bytes()
@@ -538,18 +535,17 @@ class PrivatePresentation:
 
     @classmethod
     def from_bytes(cls, raw: bytes) -> "PrivatePresentation":
-        if len(raw) != 449:
-            raise ValueError("PrivatePresentation is 449 bytes")
+        if len(raw) != 401:
+            raise ValueError("PrivatePresentation is 401 bytes")
         return cls(
             keyset_id=_keyset_id_from_bytes(raw[:33]),
             u=_g1_from_bytes(raw[33:81]),
             v=_g1_from_bytes(raw[81:129]),
             u_h=_g1_from_bytes(raw[129:177]),
             u_s=_g1_from_bytes(raw[177:225]),
-            owner_commitment=_g1_from_bytes(raw[225:273]),
-            nullifier=_g1_from_bytes(raw[273:321]),
-            proof_h=DlogEqProof.from_bytes(raw[321:385]),
-            proof_s=DlogEqProof.from_bytes(raw[385:]),
+            nullifier=_g1_from_bytes(raw[225:273]),
+            proof_h=DlogEqProof.from_bytes(raw[273:337]),
+            proof_s=DlogEqProof.from_bytes(raw[337:]),
         )
 
 
@@ -565,16 +561,14 @@ def present_private(cred: Credential, rho: Optional[int] = None) -> PrivatePrese
     v_r = cred.v * rho
     u_h = u_r * cred.h
     u_s = u_r * cred.s
-    S = G1 * cred.s
     N = G_NULL * cred.s
     proof_h = prove_dlog_eq([u_r], [u_h], cred.h, PS_PRIVATE_DST)
-    proof_s = prove_dlog_eq([G1, G_NULL, u_r], [S, N, u_s], cred.s, PS_PRESENT_DST)
+    proof_s = prove_dlog_eq([G_NULL, u_r], [N, u_s], cred.s, PS_PRESENT_DST)
     return PrivatePresentation(
         u=u_r,
         v=v_r,
         u_h=u_h,
         u_s=u_s,
-        owner_commitment=S,
         nullifier=N,
         proof_h=proof_h,
         proof_s=proof_s,
@@ -590,7 +584,6 @@ def verify_private_presentation(
         pres.v,
         pres.u_h,
         pres.u_s,
-        pres.owner_commitment,
         pres.nullifier,
     ):
         if p.is_infinity():
@@ -598,8 +591,8 @@ def verify_private_presentation(
     if not verify_dlog_eq([pres.u], [pres.u_h], pres.proof_h, PS_PRIVATE_DST):
         return False
     if not verify_dlog_eq(
-        [G1, G_NULL, pres.u],
-        [pres.owner_commitment, pres.nullifier, pres.u_s],
+        [G_NULL, pres.u],
+        [pres.nullifier, pres.u_s],
         pres.proof_s,
         PS_PRESENT_DST,
     ):
@@ -693,12 +686,12 @@ def batch_verify_presentations(
     for pres in presentations:
         if not 0 <= pres.h < curve_order:
             return False
-        for p in (pres.u, pres.v, pres.u_s, pres.owner_commitment, pres.nullifier):
+        for p in (pres.u, pres.v, pres.u_s, pres.nullifier):
             if p.is_infinity():
                 return False
         if not verify_dlog_eq(
-            [G1, G_NULL, pres.u],
-            [pres.owner_commitment, pres.nullifier, pres.u_s],
+            [G_NULL, pres.u],
+            [pres.nullifier, pres.u_s],
             pres.proof,
             PS_PRESENT_DST,
         ):

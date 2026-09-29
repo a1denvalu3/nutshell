@@ -125,14 +125,6 @@ def test_foreign_credential_fails():
     assert not verify_presentation(mint_b.public_key, pres)
 
 
-def test_swapped_owner_commitment_fails():
-    mint = NFTMint()
-    cred = make_credential(mint, b"jpeg bytes", s=12345)
-    pres = present(cred)
-    pres.owner_commitment = G1 * 999
-    assert not verify_presentation(mint.public_key, pres)
-
-
 def test_swapped_nullifier_fails():
     mint = NFTMint()
     cred = make_credential(mint, b"jpeg bytes", s=12345)
