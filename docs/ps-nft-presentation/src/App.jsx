@@ -408,7 +408,27 @@ const SlideProofs = () => (
         </div>
       </div>
     </div>
-    <div className="callout purple d2">
+    <div className="card d2">
+      <h3>
+        <span className="material-symbols-outlined">visibility</span>
+        Showings — safe to publish
+      </h3>
+      <p>
+        A purpose-bound presentation a third party can verify offline + one
+        mint query. The owner publishes a showing{' '}
+        <MathTex tex={"(h,\\ u',\\ v',\\ U_s,\\ N,\\ \\pi)"} /> with{' '}
+        <MathTex tex={'\\pi'} /> bound to a verifier context (e.g. buyer
+        nonce) → the verifier checks pairing + <MathTex tex={'\\pi'} />{' '}
+        offline — proving the mint signature AND that the publisher knows{' '}
+        <MathTex tex={'s'} /> AND that <MathTex tex={'N'} /> belongs to this
+        credential → the verifier asks the mint <code>checkstate(N)</code> →
+        UNSPENT = still owned, optionally asset status (active/burned). The
+        mint rejects a showing for transfer/burn — mathematically unspendable.
+        Point-in-time caveat: UNSPENT is a snapshot — the owner can spend
+        right after.
+      </p>
+    </div>
+    <div className="callout purple d3">
       In a private presentation — the default swap — there is a second dlog-eq
       proof of the same shape with witness <MathTex tex={'h'} /> instead of{' '}
       <MathTex tex={'s'} /> (bases <MathTex tex={"u'"} /> and{' '}
@@ -447,10 +467,13 @@ const SlideChaumPedersen = () => (
           <p>
             <strong>Challenge</strong> — Fiat–Shamir:{' '}
             <MathTex
-              tex={'c = \\text{SHA-256}(\\text{DST} \\,\\|\\, B_1,B_2 \\,\\|\\, P_1,P_2 \\,\\|\\, T_1,T_2) \\bmod r'}
+              tex={'c = \\text{SHA-256}(\\text{DST} \\,\\|\\, \\text{binding} \\,\\|\\, B_1,B_2 \\,\\|\\, P_1,P_2 \\,\\|\\, T_1,T_2) \\bmod r'}
             />
-            . The transcript binds the proof to THIS statement — it can't be
-            replayed for a different credential. The DST is{' '}
+            . The transcript binds the proof to THIS statement — and, via a
+            length-framed <em>purpose</em> binding right after the DST, to ONE
+            operation: the receiver's <MathTex tex={'S_{\\text{new}}'} /> for
+            transfers, a burn domain constant for burns, a showing domain +
+            verifier context (e.g. buyer nonce) for showings. The DST is{' '}
             <code>b"Cashu_PS_Present_v1"</code> and each point is
             length-framed.
           </p>
@@ -480,7 +503,7 @@ const SlideChaumPedersen = () => (
     <div className="math small d2">
       <MathTex
         display
-        tex={'c = \\text{SHA-256}(\\text{DST} \\,\\|\\, B \\,\\|\\, P \\,\\|\\, \\hat{T})'}
+        tex={'c = \\text{SHA-256}(\\text{DST} \\,\\|\\, \\text{binding} \\,\\|\\, B \\,\\|\\, P \\,\\|\\, \\hat{T})'}
       />
     </div>
     <div className="math small d2">
@@ -516,6 +539,12 @@ const SlideChaumPedersen = () => (
         </p>
       </div>
     </div>
+    <div className="callout purple d3">
+      <strong>A proof speaks for exactly one purpose</strong> — the purpose
+      binding is what kills replay: a published showing verifies offline but
+      the mint rejects it for transfer/burn, so publishing a proof of
+      ownership no longer hands out a bearer instrument.
+    </div>
     <div className="callout d3">
       Implemented in <strong>prove_dlog_eq</strong> /{' '}
       <strong>verify_dlog_eq</strong> in{' '}
@@ -550,6 +579,9 @@ const Slide7 = () => (
             <MathTex tex={'h'} /> sits in{' '}
             <MathTex tex={"U_h = h\\cdot u'"} /> (input) and{' '}
             <MathTex tex={'W_h = h\\cdot u_2'} /> (output) — a dlog-eq proof.
+            Both proofs are purpose-bound to the receiver's{' '}
+            <MathTex tex={'S_{\\text{new}}'} /> — the presentation only works
+            for that exact re-issuance.
           </p>
         </div>
       </div>
