@@ -238,7 +238,7 @@ const Slide5 = () => (
         display
         tex={"\\rho \\leftarrow \\mathbb{Z}_r^{*} \\qquad (u',\\ v') = (\\rho\\cdot u,\\ \\rho\\cdot v)"}
       />
-      <span className="math-note">rerandomizable — unlinkable across showings</span>
+      <span className="math-note">rerandomizable — a fresh signature object every showing</span>
     </div>
     <div className="cards d2">
       <div className="card">
@@ -274,6 +274,38 @@ const Slide5 = () => (
         <p>
           All bases are <MathTex tex={'G_1'} /> points, so no{' '}
           <MathTex tex={'G_T'} /> exponentiation is needed.
+        </p>
+      </div>
+    </div>
+    <div className="cards d3">
+      <div className="card">
+        <h3>
+          What <MathTex tex={'\\rho'} /> buys
+        </h3>
+        <p>
+          The signature object is fresh every showing. Matching{' '}
+          <MathTex tex={"(u',\\ v')"} /> to a recorded issuance{' '}
+          <MathTex tex={'(u,\\ v)'} /> means deciding{' '}
+          <MathTex tex={"\\log_{u}(u') = \\log_{v}(v')"} /> — a DDH instance
+          in <MathTex tex={'G_1'} />, assumed hard on BLS12-381 (XDH); the
+          pairing can't help because all these points live in{' '}
+          <MathTex tex={'G_1'} />. So the raw MAC can't be used as a static
+          tracking cookie by third parties.
+        </p>
+      </div>
+      <div className="card">
+        <h3>
+          What <MathTex tex={'\\rho'} /> does NOT buy
+        </h3>
+        <p>
+          Showings are linkable by design.{' '}
+          <MathTex tex={'S = s\\cdot g_1'} /> is constant and was already shown
+          to the mint at issuance, and{' '}
+          <MathTex tex={'N = s\\cdot G_{\\text{NULL}}'} /> must be
+          deterministic — it's the double-spend nullifier. The mint links every
+          presentation to an issuance via <MathTex tex={'S'} />. Privacy
+          against the mint comes from the hidden-<MathTex tex={'h'} /> private
+          presentation (next-but-one slide), not from <MathTex tex={'\\rho'} />.
         </p>
       </div>
     </div>
@@ -656,7 +688,7 @@ function Nav({ cur, total, go, setCur }) {
   )
 }
 
-const WIDE = new Set([1, 2, 4, 7, 8, 9, 11])
+const WIDE = new Set([1, 2, 4, 5, 7, 8, 9, 11])
 
 export default function App() {
   const [cur, setCur] = useState(0)
