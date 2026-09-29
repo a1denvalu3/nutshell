@@ -409,8 +409,8 @@ const SlideProofs = () => (
       </div>
     </div>
     <div className="callout purple d2">
-      In a PRIVATE presentation there is a second dlog-eq proof of the same
-      shape with witness <MathTex tex={'h'} /> instead of{' '}
+      In a private presentation — the default swap — there is a second dlog-eq
+      proof of the same shape with witness <MathTex tex={'h'} /> instead of{' '}
       <MathTex tex={'s'} /> (bases <MathTex tex={"u'"} /> and{' '}
       <MathTex tex={'u_2'} />, points <MathTex tex={'U_h'} /> and{' '}
       <MathTex tex={'W_h'} />). One construction, two witnesses.
@@ -540,7 +540,17 @@ const Slide7 = () => (
       <div className="step">
         <div className="step-num">2</div>
         <div className="step-body">
-          <p>Receiver presents it to the mint.</p>
+          <p>
+            Receiver swaps with the mint — by DEFAULT with a hidden-h private
+            presentation{' '}
+            <MathTex
+              tex={"(u',\\ v',\\ U_h,\\ U_s,\\ N,\\ \\pi_h,\\ \\pi_s)"}
+            />
+            ; <MathTex tex={'\\pi_h'} /> proves the same{' '}
+            <MathTex tex={'h'} /> sits in{' '}
+            <MathTex tex={"U_h = h\\cdot u'"} /> (input) and{' '}
+            <MathTex tex={'W_h = h\\cdot u_2'} /> (output) — a dlog-eq proof.
+          </p>
         </div>
       </div>
       <div className="step">
@@ -549,8 +559,9 @@ const Slide7 = () => (
           <p>
             Mint verifies the presentation, checks nullifier{' '}
             <MathTex tex={'N = s\\cdot G_{\\text{NULL}}'} /> is FRESH (never
-            seen), records it, then re-issues a credential over the same{' '}
-            <MathTex tex={'h'} /> bound to the receiver's new secret.
+            seen), records it, then re-issues BLINDLY over the same{' '}
+            <MathTex tex={'h'} /> bound to the receiver's new secret — it
+            learns THAT a credential moved, not which asset.
           </p>
         </div>
       </div>
@@ -560,6 +571,11 @@ const Slide7 = () => (
           <p>Spent nullifier = rejected — same as double-spent ecash.</p>
         </div>
       </div>
+    </div>
+    <div className="callout d2">
+      A public, <MathTex tex={'h'} />-revealing swap exists as an explicit
+      option. Burning an asset always reveals <MathTex tex={'h'} /> by
+      necessity — the mint must know which asset to tombstone.
     </div>
     <div className="callout amber d2">
       <strong>Trust note:</strong> until the receiver swaps, the sender can
@@ -572,9 +588,9 @@ const Slide8 = () => (
   <>
     <h2>Private presentations: hiding h</h2>
     <p className="subtitle d1">
-      Instead of revealing <MathTex tex={'h'} />, the owner reveals{' '}
-      <MathTex tex={"U_h = h\\cdot u'"} /> with a Chaum–Pedersen proof. On the
-      wire:{' '}
+      The default swap path. Instead of revealing <MathTex tex={'h'} />, the
+      owner reveals <MathTex tex={"U_h = h\\cdot u'"} /> with a Chaum–Pedersen
+      proof. On the wire:{' '}
       <MathTex
         tex={"(u',\\ v',\\ U_h,\\ U_s,\\ N,\\ \\pi_h,\\ \\pi_s)"}
       />
@@ -610,10 +626,20 @@ const Slide8 = () => (
       </ul>
     </div>
     <div className="callout amber d3">
-      <strong>Scope:</strong> this is honest-but-curious privacy for the asset
-      id — <MathTex tex={'h'} /> never leaves the wallet, but the mint sees
-      THAT a transfer happened and can correlate old/new owner commitments. Not
-      full KVAC anonymity.
+      <strong>What the mint learns from a private swap — exactly:</strong> (1)
+      THAT some credential moved; (2) the spent nullifier{' '}
+      <MathTex tex={'N'} /> — a point it has never seen before and cannot map
+      to any asset or owner; (3) the receiver's fresh{' '}
+      <MathTex tex={'S_{\\text{new}}'} />, unlinkable to past and future swaps
+      (chaining <MathTex tex={'S_{\\text{new}}'} /> values would need{' '}
+      <MathTex tex={'s'} /> — DDH-hard). It does NOT learn which asset moved.
+    </div>
+    <div className="callout d3">
+      <strong>Caveat:</strong> minting still reveals <MathTex tex={'h'} /> by
+      design — the one-credential-per-asset rule needs it — so the mint knows
+      the set of minted assets. An asset later swapped publicly (
+      <code>--public</code>) or burned reveals <MathTex tex={'h'} /> at that
+      point.
     </div>
   </>
 )
