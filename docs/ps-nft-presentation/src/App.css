@@ -173,16 +173,25 @@ nav button:disabled { opacity: 0.2; cursor: default; }
   background: var(--purple-bg);
   border: 1px solid var(--purple-light);
   border-radius: 8px;
-  padding: 10px 22px;
+  padding: 12px 24px;
   margin: 12px 0;
   text-align: center;
-  font-size: 1.05rem;
+  font-size: 1.35rem;
   line-height: 1.7;
 }
-.math.big { font-size: 1.25rem; padding: 14px 28px; }
-.math.small { font-size: 0.9rem; padding: 6px 16px; }
+.math.big { font-size: 1.7rem; padding: 16px 30px; }
+.math.small { font-size: 1.1rem; padding: 8px 18px; }
 .math .eq-step { display: block; }
 .math .katex-display { margin: 0.4em 0; }
+
+/* inline math: bump KaTeX's default 1.21em a notch */
+.slide-content p .katex,
+.slide-content li .katex,
+.slide-content td .katex,
+.slide-content .callout .katex,
+.slide-content .step-body .katex {
+  font-size: 1.35em;
+}
 
 .mi { font-style: italic; }
 
