@@ -42,8 +42,8 @@ export function WireSizeChart() {
   const data = useMemo(
     () => [
       { name: 'Credential', bytes: 193 },
-      { name: 'Presentation', bytes: 369 },
-      { name: 'PrivatePresentation', bytes: 449 },
+      { name: 'Presentation', bytes: 321 },
+      { name: 'PrivatePresentation', bytes: 401 },
     ],
     []
   )

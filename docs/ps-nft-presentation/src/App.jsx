@@ -251,12 +251,12 @@ const Slide5 = () => (
             <MathTex tex={"U_s = s\\cdot u'"} />
           </li>
           <li>
-            <MathTex tex={'S = s\\cdot g_1'} />
-          </li>
-          <li>
             <MathTex tex={'N = s\\cdot G_{\\text{NULL}}'} /> — nullifier;{' '}
             <MathTex tex={'G_{\\text{NULL}}'} /> is a nothing-up-my-sleeve
             hash-to-curve point with unknown discrete log
+          </li>
+          <li>
+            <MathTex tex={'\\pi'} /> — the ownership proof
           </li>
         </ul>
       </div>
@@ -266,10 +266,9 @@ const Slide5 = () => (
         </h3>
         <p>
           One Chaum–Pedersen proof that the SAME <MathTex tex={'s'} /> is the
-          discrete log of <MathTex tex={'S'} /> (base{' '}
-          <MathTex tex={'g_1'} />), <MathTex tex={'N'} /> (base{' '}
+          discrete log of <MathTex tex={'N'} /> (base{' '}
           <MathTex tex={'G_{\\text{NULL}}'} />) and <MathTex tex={'U_s'} />{' '}
-          (base <MathTex tex={"u'"} />).
+          (base <MathTex tex={"u'"} />) — two bases.
         </p>
         <p>
           All bases are <MathTex tex={'G_1'} /> points, so no{' '}
@@ -298,14 +297,17 @@ const Slide5 = () => (
           What <MathTex tex={'\\rho'} /> does NOT buy
         </h3>
         <p>
-          Showings are linkable by design.{' '}
-          <MathTex tex={'S = s\\cdot g_1'} /> is constant and was already shown
-          to the mint at issuance, and{' '}
-          <MathTex tex={'N = s\\cdot G_{\\text{NULL}}'} /> must be
-          deterministic — it's the double-spend nullifier. The mint links every
-          presentation to an issuance via <MathTex tex={'S'} />. Privacy
-          against the mint comes from the hidden-<MathTex tex={'h'} /> private
-          presentation (next-but-one slide), not from <MathTex tex={'\\rho'} />.
+          Showings of the same credential are still linkable to EACH OTHER via
+          the constant nullifier <MathTex tex={'N'} /> — by design,{' '}
+          <MathTex tex={'N'} /> must be deterministic to catch double-spends.
+          But the mint can no longer match a presentation to the owner
+          commitments <MathTex tex={'S = s\\cdot g_1'} /> in its
+          issuance/transfer logs: deriving <MathTex tex={'N'} /> from{' '}
+          <MathTex tex={'S'} /> needs <MathTex tex={'s'} />, and deciding
+          whether <MathTex tex={'N'} /> and <MathTex tex={'S'} /> share a
+          secret is DDH in <MathTex tex={'G_1'} /> (XDH-hard). Bonus: a third
+          party's checkstate query reveals only <MathTex tex={'N'} /> — a
+          point the mint has never seen and cannot map to any asset or owner.
         </p>
       </div>
     </div>
@@ -397,11 +399,10 @@ const SlideProofs = () => (
             </li>
             <li>
               Proves knowledge of a single <MathTex tex={'s'} /> that is
-              simultaneously the discrete log of <MathTex tex={'S'} /> (base{' '}
-              <MathTex tex={'g_1'} />), <MathTex tex={'N'} /> (base{' '}
+              simultaneously the discrete log of <MathTex tex={'N'} /> (base{' '}
               <MathTex tex={'G_{\\text{NULL}}'} />) and{' '}
-              <MathTex tex={'U_s'} /> (base <MathTex tex={"u'"} />) — without
-              revealing <MathTex tex={'s'} />
+              <MathTex tex={'U_s'} /> (base <MathTex tex={"u'"} />) — two
+              bases — without revealing <MathTex tex={'s'} />
             </li>
           </ul>
         </div>
@@ -422,8 +423,8 @@ const SlideChaumPedersen = () => (
     <h2>Inside the Chaum–Pedersen proof</h2>
     <p className="subtitle d1">
       Witness <MathTex tex={'s'} />; bases{' '}
-      <MathTex tex={"B = (g_1,\\ G_{\\text{NULL}},\\ u')"} />, points{' '}
-      <MathTex tex={'P = (S,\\ N,\\ U_s)'} />.
+      <MathTex tex={"B = (G_{\\text{NULL}},\\ u')"} />, points{' '}
+      <MathTex tex={'P = (N,\\ U_s)'} />.
     </p>
     <div className="steps d1">
       <div className="step">
@@ -434,7 +435,7 @@ const SlideChaumPedersen = () => (
             <MathTex tex={'r \\xleftarrow{\\text{\\$}} \\mathbb{Z}_r'} /> and sends
             commitments <MathTex tex={'T_i = r\\cdot B_i'} />, i.e.{' '}
             <MathTex
-              tex={"T_1 = r\\cdot g_1,\\ \\ T_2 = r\\cdot G_{\\text{NULL}},\\ \\ T_3 = r\\cdot u'"}
+              tex={"T_1 = r\\cdot G_{\\text{NULL}},\\ \\ T_2 = r\\cdot u'"}
             />
             .
           </p>
@@ -446,7 +447,7 @@ const SlideChaumPedersen = () => (
           <p>
             <strong>Challenge</strong> — Fiat–Shamir:{' '}
             <MathTex
-              tex={'c = \\text{SHA-256}(\\text{DST} \\,\\|\\, B_1,B_2,B_3 \\,\\|\\, P_1,P_2,P_3 \\,\\|\\, T_1,T_2,T_3) \\bmod r'}
+              tex={'c = \\text{SHA-256}(\\text{DST} \\,\\|\\, B_1,B_2 \\,\\|\\, P_1,P_2 \\,\\|\\, T_1,T_2) \\bmod r'}
             />
             . The transcript binds the proof to THIS statement — it can't be
             replayed for a different credential. The DST is{' '}
@@ -510,8 +511,8 @@ const SlideChaumPedersen = () => (
       <div className="card">
         <h3>One proof, n bases</h3>
         <p>
-          A single <MathTex tex={'(c,\\ z)'} /> covers all three bases at once,
-          so ownership, nullifier and credential-binding cost 64 bytes total.
+          A single <MathTex tex={'(c,\\ z)'} /> covers both bases at once, so
+          the nullifier and the credential binding cost 64 bytes total.
         </p>
       </div>
     </div>
@@ -572,8 +573,12 @@ const Slide8 = () => (
     <h2>Private presentations: hiding h</h2>
     <p className="subtitle d1">
       Instead of revealing <MathTex tex={'h'} />, the owner reveals{' '}
-      <MathTex tex={"U_h = h\\cdot u'"} /> with a Chaum–Pedersen proof. The
-      pairing becomes:
+      <MathTex tex={"U_h = h\\cdot u'"} /> with a Chaum–Pedersen proof. On the
+      wire:{' '}
+      <MathTex
+        tex={"(u',\\ v',\\ U_h,\\ U_s,\\ N,\\ \\pi_h,\\ \\pi_s)"}
+      />
+      . The pairing becomes:
     </p>
     <div className="math d1">
       <MathTex
