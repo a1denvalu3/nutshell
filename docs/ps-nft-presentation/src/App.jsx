@@ -313,6 +313,184 @@ const Slide6 = () => (
   </>
 )
 
+const SlideProofs = () => (
+  <>
+    <h2>Two proofs, two jobs</h2>
+    <div className="cols d1">
+      <div className="col">
+        <div className="card">
+          <h3>
+            <span className="material-symbols-outlined">verified</span>
+            Authenticity — the pairing check
+          </h3>
+          <ul>
+            <li>
+              NOT a sigma protocol — no prover interaction at all
+            </li>
+            <li>
+              The presentation itself{' '}
+              <MathTex tex={"(h,\\ u',\\ v',\\ U_s)"} /> is the proof: the
+              verifier simply evaluates{' '}
+              <MathTex
+                tex={"e(v', g_2) = e(u', X_2 + h\\cdot Y_{h2}) \\cdot e(U_s, Y_{s2})"}
+              />{' '}
+              with the mint's public parameters
+            </li>
+            <li>
+              Answers: "was this credential really issued by the mint, over this{' '}
+              <MathTex tex={'h'} />?"
+            </li>
+            <li>
+              Unforgeable under the PS assumption — without{' '}
+              <MathTex tex={'(x,\\ y_h,\\ y_s)'} /> you cannot produce{' '}
+              <MathTex tex={"(u',\\ v')"} /> that satisfies the equation
+            </li>
+          </ul>
+        </div>
+      </div>
+      <div className="col">
+        <div className="card">
+          <h3>
+            <span className="material-symbols-outlined">key</span>
+            Ownership — the dlog-eq proof
+          </h3>
+          <ul>
+            <li>
+              An interactive sigma protocol made non-interactive with
+              Fiat–Shamir
+            </li>
+            <li>
+              Answers: "does the presenter actually know the secret{' '}
+              <MathTex tex={'s'} /> bound into this credential?"
+            </li>
+            <li>
+              Proves knowledge of a single <MathTex tex={'s'} /> that is
+              simultaneously the discrete log of <MathTex tex={'S'} /> (base{' '}
+              <MathTex tex={'g_1'} />), <MathTex tex={'N'} /> (base{' '}
+              <MathTex tex={'G_{\\text{NULL}}'} />) and{' '}
+              <MathTex tex={'U_s'} /> (base <MathTex tex={"u'"} />) — without
+              revealing <MathTex tex={'s'} />
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+    <div className="callout purple d2">
+      In a PRIVATE presentation there is a second dlog-eq proof of the same
+      shape with witness <MathTex tex={'h'} /> instead of{' '}
+      <MathTex tex={'s'} /> (bases <MathTex tex={"u'"} /> and{' '}
+      <MathTex tex={'u_2'} />, points <MathTex tex={'U_h'} /> and{' '}
+      <MathTex tex={'W_h'} />). One construction, two witnesses.
+    </div>
+  </>
+)
+
+const SlideChaumPedersen = () => (
+  <>
+    <h2>Inside the Chaum–Pedersen proof</h2>
+    <p className="subtitle d1">
+      Witness <MathTex tex={'s'} />; bases{' '}
+      <MathTex tex={"B = (g_1,\\ G_{\\text{NULL}},\\ u')"} />, points{' '}
+      <MathTex tex={'P = (S,\\ N,\\ U_s)'} />.
+    </p>
+    <div className="steps d1">
+      <div className="step">
+        <div className="step-num">1</div>
+        <div className="step-body">
+          <p>
+            <strong>Commit</strong> — prover samples{' '}
+            <MathTex tex={'r \\xleftarrow{\\text{\\$}} \\mathbb{Z}_r'} /> and sends
+            commitments <MathTex tex={'T_i = r\\cdot B_i'} />, i.e.{' '}
+            <MathTex
+              tex={"T_1 = r\\cdot g_1,\\ \\ T_2 = r\\cdot G_{\\text{NULL}},\\ \\ T_3 = r\\cdot u'"}
+            />
+            .
+          </p>
+        </div>
+      </div>
+      <div className="step">
+        <div className="step-num">2</div>
+        <div className="step-body">
+          <p>
+            <strong>Challenge</strong> — Fiat–Shamir:{' '}
+            <MathTex
+              tex={'c = \\text{SHA-256}(\\text{DST} \\,\\|\\, B_1,B_2,B_3 \\,\\|\\, P_1,P_2,P_3 \\,\\|\\, T_1,T_2,T_3) \\bmod r'}
+            />
+            . The transcript binds the proof to THIS statement — it can't be
+            replayed for a different credential. The DST is{' '}
+            <code>b"Cashu_PS_Present_v1"</code> and each point is
+            length-framed.
+          </p>
+        </div>
+      </div>
+      <div className="step">
+        <div className="step-num">3</div>
+        <div className="step-body">
+          <p>
+            <strong>Respond</strong> —{' '}
+            <MathTex tex={'z = r + c\\cdot s \\bmod r'} />. The proof on the
+            wire is just <MathTex tex={'(c,\\ z)'} />: 64 bytes.
+          </p>
+        </div>
+      </div>
+      <div className="step">
+        <div className="step-num">4</div>
+        <div className="step-body">
+          <p>
+            <strong>Verify</strong> — recompute{' '}
+            <MathTex tex={'\\hat{T}_i = z\\cdot B_i - c\\cdot P_i'} /> for
+            each <MathTex tex={'i'} /> and accept iff:
+          </p>
+        </div>
+      </div>
+    </div>
+    <div className="math small d2">
+      <MathTex
+        display
+        tex={'c = \\text{SHA-256}(\\text{DST} \\,\\|\\, B \\,\\|\\, P \\,\\|\\, \\hat{T})'}
+      />
+    </div>
+    <div className="math small d2">
+      <span className="math-label">Why it works</span>
+      <MathTex
+        display
+        tex={'z\\cdot B_i = (r + c\\cdot s)\\cdot B_i = r\\cdot B_i + c\\cdot(s\\cdot B_i) = T_i + c\\cdot P_i'}
+      />
+    </div>
+    <div className="cards three d3">
+      <div className="card">
+        <h3>Zero-knowledge</h3>
+        <p>
+          <MathTex tex={'z'} /> hides <MathTex tex={'s'} /> perfectly because{' '}
+          <MathTex tex={'r'} /> is uniform; a simulator can fake transcripts by
+          picking <MathTex tex={'(c,\\ z)'} /> first and setting{' '}
+          <MathTex tex={'T_i = z\\cdot B_i - c\\cdot P_i'} />.
+        </p>
+      </div>
+      <div className="card">
+        <h3>Proof of knowledge</h3>
+        <p>
+          From two accepting transcripts with the same commitments but different
+          challenges, an extractor recovers{' '}
+          <MathTex tex={'s = (z_1 - z_2)\\,/(c_1 - c_2)'} />.
+        </p>
+      </div>
+      <div className="card">
+        <h3>One proof, n bases</h3>
+        <p>
+          A single <MathTex tex={'(c,\\ z)'} /> covers all three bases at once,
+          so ownership, nullifier and credential-binding cost 64 bytes total.
+        </p>
+      </div>
+    </div>
+    <div className="callout d3">
+      Implemented in <strong>prove_dlog_eq</strong> /{' '}
+      <strong>verify_dlog_eq</strong> in{' '}
+      <span className="mi">cashu/core/crypto/ps.py</span>.
+    </div>
+  </>
+)
+
 const Slide7 = () => (
   <>
     <h2>Transfers and double-spend safety</h2>
@@ -459,7 +637,7 @@ const Slide9 = () => (
   </>
 )
 
-const SLIDES = [Slide0, Slide1, Slide2, Slide3, Slide4, Slide5, Slide6, Slide7, Slide8, Slide9]
+const SLIDES = [Slide0, Slide1, Slide2, Slide3, Slide4, Slide5, Slide6, SlideProofs, SlideChaumPedersen, Slide7, Slide8, Slide9]
 
 /* ─────────────────────────── Chrome ─────────────────────────── */
 
@@ -478,7 +656,7 @@ function Nav({ cur, total, go, setCur }) {
   )
 }
 
-const WIDE = new Set([1, 2, 4, 7, 9])
+const WIDE = new Set([1, 2, 4, 7, 8, 9, 11])
 
 export default function App() {
   const [cur, setCur] = useState(0)
