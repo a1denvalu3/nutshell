@@ -470,11 +470,12 @@ class NFTClient:
         wallet: NFTWallet,
         token: str,
         description: str = "",
-        private: bool = False,
+        private: bool = True,
     ) -> Credential:
-        """Swap a received token at the mint: present the credential
-        (proving the MAC and, in private mode, the equality of h), and
-        re-issue it to a fresh secret of this wallet, all in one step."""
+        """Swap a received token at the mint: present the credential and
+        re-issue it to a fresh secret of this wallet, all in one step.
+        Private by default: the mint never sees h, only a proof that the
+        input and output credentials bind the same asset hash."""
         cred = self.decode_token(token)
         if cred.keyset_id != self.keyset_id:
             raise ValueError(

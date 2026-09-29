@@ -91,9 +91,9 @@ def test_cli_full_flow(runner, tmp_path):
     result = r.invoke(cli, ["nft", "--wallet-db", alice, "receive", token])
     assert result.exit_code != 0
 
-    # private receive: bob sends offline, alice swaps with h hidden
+    # public receive: bob sends offline, alice swaps revealing h to the mint
     token2 = invoke(runner, "send", h_full[:12], wallet=bob).strip().splitlines()[-1]
-    invoke(runner, "receive", token2, "--private", wallet=alice)
+    invoke(runner, "receive", token2, "--public", wallet=alice)
     out = invoke(runner, "verify", h_full[:12], wallet=alice)
     assert "nullifier spent: False" in out
     assert "asset status:    active" in out

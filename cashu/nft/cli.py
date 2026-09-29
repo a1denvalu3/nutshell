@@ -245,18 +245,18 @@ def nft_send(ctx: click.Context, asset_hash: str):
 @click.argument("token", type=str)
 @click.option("--description", "-d", default="", help="Asset description.")
 @click.option(
-    "--private",
-    "private",
+    "--public",
+    "public",
     is_flag=True,
     default=False,
-    help="Hide the asset hash from the mint during the swap.",
+    help="Reveal the asset hash to the mint during the swap (default: hidden).",
 )
 @click.pass_context
 @_cli_errors
-def nft_receive(ctx: click.Context, token: str, description: str, private: bool):
+def nft_receive(ctx: click.Context, token: str, description: str, public: bool):
     client = _make_client(ctx.obj["NFT_MINT_URL"])
     wallet = _open_wallet(ctx.obj["NFT_WALLET_DB"])
-    cred = client.receive(wallet, token, description=description, private=private)
+    cred = client.receive(wallet, token, description=description, private=not public)
     print(f"received: {cred.h.to_bytes(32, 'big').hex()}")
 
 
