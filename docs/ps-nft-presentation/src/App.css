@@ -1,0 +1,210 @@
+:root {
+  /* ── UI chrome ── */
+  --dark: #1c1028;
+  --purple: #6c5fc7;
+  --purple-light: #b5aade;
+  --purple-bg: #ede8f5;
+  --bg: #faf9fb;
+  --card: #f3f1f5;
+  --muted: #80708f;
+  --border: #dbd6e1;
+
+  /* ── Semantic (use ONLY when meaning applies) ── */
+  --semantic-green: #2ba185;
+  --semantic-red: #f55459;
+  --semantic-amber: #d4953a;
+  --semantic-green-bg: #e0f5ef;
+  --semantic-red-bg: #fde8e9;
+  --semantic-amber-bg: #fdf3e4;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  margin: 0;
+  font-family: 'Rubik', system-ui, -apple-system, sans-serif;
+  color: var(--dark);
+  background: var(--bg);
+  line-height: 1.7;
+  font-size: 0.9rem;
+}
+
+h1 { font-size: 2.5rem; font-weight: 700; letter-spacing: -0.03em; margin: 0.4em 0 0.3em; }
+h2 { font-size: 1.55rem; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 0.35em; }
+h3 { font-size: 1rem; font-weight: 600; margin: 0 0 0.4em; }
+
+.subtitle {
+  font-size: 0.95rem; font-weight: 400;
+  max-width: 620px; color: var(--muted);
+  margin: 0 0 1.2em;
+}
+
+/* ── Slide system ── */
+.progress {
+  position: fixed; top: 0; left: 0; height: 3px;
+  background: var(--purple); transition: width 0.3s; z-index: 10;
+}
+
+.slide {
+  position: absolute; inset: 0;
+  display: flex; align-items: center; justify-content: center;
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.45s ease;
+}
+.slide.active { opacity: 1; pointer-events: auto; }
+
+.slide-content {
+  width: 100%; max-width: 880px;
+  padding: 60px 40px 100px;
+}
+.slide-content.wide { max-width: 1060px; }
+
+/* ── Animations ── */
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(12px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.anim h2, .anim .subtitle, .anim .cols,
+.anim .cards, .anim .chart-wrap, .anim table,
+.anim .zone-diagram, .anim ul, .anim .math,
+.anim .steps, .anim .callout, .anim .title-block {
+  opacity: 0; animation: fadeUp 0.5s ease both;
+}
+
+.anim .d1 { animation-delay: 0.1s; }
+.anim .d2 { animation-delay: 0.2s; }
+.anim .d3 { animation-delay: 0.3s; }
+
+/* ── Watermark ── */
+.glyph-watermark {
+  position: fixed; top: 20px; left: 24px; z-index: 8;
+  opacity: 0.12; pointer-events: none;
+  display: flex; align-items: center; gap: 10px;
+}
+.watermark-title {
+  font-size: 1.1rem; font-weight: 600;
+  letter-spacing: -0.01em;
+  line-height: 1;
+}
+
+/* ── Navigation ── */
+nav {
+  position: fixed; bottom: 0; left: 0; right: 0;
+  display: flex; align-items: center; justify-content: center;
+  gap: 16px; padding: 14px;
+  z-index: 5;
+}
+nav button {
+  background: none; border: none;
+  cursor: pointer; font-family: inherit;
+  font-size: 0.8rem; color: var(--muted);
+  padding: 4px 8px;
+}
+nav button:hover { color: var(--dark); }
+nav button:disabled { opacity: 0.2; cursor: default; }
+.slide-number {
+  font-size: 0.75rem; color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.dots { display: flex; gap: 6px; }
+.dot {
+  width: 6px; height: 6px; border-radius: 50%;
+  background: var(--border); cursor: pointer;
+  transition: background 0.2s;
+}
+.dot.on { background: var(--purple); }
+
+/* ── Layout ── */
+.cols { display: flex; gap: 40px; max-width: 1060px; }
+.col { flex: 1; }
+
+.cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+.cards.three { grid-template-columns: 1fr 1fr 1fr; }
+.card {
+  background: #fff; border: 1px solid var(--border);
+  border-radius: 8px; padding: 17px;
+}
+.card h3 { display: flex; align-items: center; gap: 8px; }
+.card ul { margin: 0.3em 0 0; padding-left: 1.2em; }
+.card li { margin-bottom: 0.35em; }
+.card p { margin: 0.3em 0; }
+
+.chart-wrap { max-width: 920px; margin: 0 auto; }
+
+.compare { width: 100%; border-collapse: collapse; }
+.compare th {
+  text-align: left; font-weight: 600;
+  padding: 10px 14px; border-bottom: 2px solid var(--border);
+}
+.compare td { padding: 10px 14px; border-bottom: 1px solid #f0edf3; }
+
+/* ── Callout / note cards ── */
+.callout {
+  border-radius: 8px; padding: 14px 17px;
+  border: 1px solid var(--border);
+  background: var(--card);
+  margin-top: 14px;
+}
+.callout.purple { background: var(--purple-bg); border-color: var(--purple-light); }
+.callout.amber { background: var(--semantic-amber-bg); border-color: var(--semantic-amber); }
+.callout strong { font-weight: 600; }
+.callout p { margin: 0.2em 0; }
+
+/* ── Numbered flow steps ── */
+.steps { display: flex; flex-direction: column; gap: 12px; margin-top: 6px; }
+.step {
+  display: flex; gap: 14px; align-items: flex-start;
+  background: #fff; border: 1px solid var(--border);
+  border-radius: 8px; padding: 13px 17px;
+}
+.step-num {
+  flex: none; width: 26px; height: 26px; border-radius: 50%;
+  background: var(--purple); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 0.8rem; font-weight: 600;
+  margin-top: 2px;
+}
+.step-body { flex: 1; }
+.step-body p { margin: 0.15em 0; }
+
+/* ── Math typography ── */
+.math {
+  font-family: 'Rubik', system-ui, sans-serif;
+  font-style: italic;
+  font-size: 1.05rem;
+  background: var(--purple-bg);
+  border: 1px solid var(--purple-light);
+  border-radius: 8px;
+  padding: 14px 22px;
+  margin: 12px 0;
+  text-align: center;
+  line-height: 2;
+}
+.math.big { font-size: 1.3rem; padding: 20px 28px; }
+.math.small { font-size: 0.92rem; padding: 10px 16px; }
+.math .eq-step { display: block; }
+.math sub, .math sup, .mi sub, .mi sup { font-style: normal; font-size: 0.68em; }
+
+.mi { font-style: italic; white-space: nowrap; }
+
+.math-label {
+  font-size: 0.66rem; font-weight: 600; font-style: normal;
+  text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--purple);
+  display: block; margin-bottom: 4px;
+}
+
+/* ── Title slide ── */
+.title-block { display: flex; flex-direction: column; align-items: flex-start; }
+.title-logo { color: var(--dark); margin-bottom: 26px; }
+.title-meta {
+  margin-top: 22px; font-size: 0.85rem; color: var(--muted);
+}
+.title-meta code {
+  font-size: 0.8rem; background: var(--card);
+  border: 1px solid var(--border); border-radius: 4px;
+  padding: 2px 7px;
+}
+
+.material-symbols-outlined { font-size: 1.1rem; vertical-align: middle; }
