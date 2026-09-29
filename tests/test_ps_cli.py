@@ -69,6 +69,11 @@ def test_cli_full_flow(runner, tmp_path):
     result = r.invoke(cli, ["nft", "--wallet-db", alice, "mint", str(asset)])
     assert result.exit_code != 0
 
+    # mint with neither file nor quote is a usage error
+    result = r.invoke(cli, ["nft", "--wallet-db", alice, "mint"])
+    assert result.exit_code != 0
+    assert "give a file" in result.output
+
     # offline send alice -> bob, then bob swaps the token at the mint
     out = invoke(runner, "send", h_full[:12], wallet=alice)
     token = out.strip().splitlines()[-1]
@@ -153,3 +158,17 @@ def test_cli_quote_flow(runner, tmp_path, monkeypatch):
     assert "state: paid" in out
     out = invoke(runner, "mint", str(asset), "--quote", quote_id, wallet=wallet)
     assert "minted: " in out
+
+    # second asset: mint from the settled quote alone -- no file needed,
+    # the mint already knows the asset hash for the quote
+    asset2 = tmp_path / "art2.jpg"
+    asset2.write_bytes(b"\xff\xd8 another fake jpeg")
+    out = invoke(runner, "quote", str(asset2), wallet=wallet)
+    quote_id2 = out.split("quote:  ")[1].splitlines()[0].strip()
+    assert "asset:  " in out
+    invoke(runner, "dev-pay", quote_id2, "--secret", "operator secret!!", wallet=wallet)
+    out = invoke(runner, "mint", "--quote", quote_id2, wallet=wallet)
+    h2 = out.strip().split("minted: ")[1]
+    assert len(h2) == 64
+    out = invoke(runner, "list", wallet=wallet)
+    assert h2 in out

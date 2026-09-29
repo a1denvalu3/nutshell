@@ -274,9 +274,13 @@ class NFTClient:
             )
         ).json()
 
+    def get_quote(self, quote_id: str) -> dict:
+        return self._checked(
+            self.http.get(f"{NFT_API_PREFIX}/mint/quote/{quote_id}")
+        ).json()
+
     def quote_state(self, quote_id: str) -> str:
-        resp = self._checked(self.http.get(f"{NFT_API_PREFIX}/mint/quote/{quote_id}"))
-        return resp.json()["state"]
+        return self.get_quote(quote_id)["state"]
 
     def dev_pay_quote(self, quote_id: str, ticket: bytes) -> None:
         self._checked(
@@ -293,7 +297,17 @@ class NFTClient:
         quote: Optional[str] = None,
         description: str = "",
     ) -> Credential:
-        h = hash_asset(asset)
+        return self.mint_h(
+            wallet, hash_asset(asset), quote=quote, description=description
+        )
+
+    def mint_h(
+        self,
+        wallet: NFTWallet,
+        h: int,
+        quote: Optional[str] = None,
+        description: str = "",
+    ) -> Credential:
         ticket = wallet.prepare_receive()
         resp = self._checked(
             self.http.post(

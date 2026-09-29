@@ -8,6 +8,8 @@ or NFT_MINT_URL).
 Typical flow (cashu-style, sending is offline):
     cashu nft init                       # create wallet, prints the seed
     cashu nft mint my.jpg                # mint an NFT for a file
+    cashu nft quote my.jpg               # (paid mints) request a mint quote
+    cashu nft mint --quote <id>          # mint once the quote is settled
     cashu nft list                       # show owned assets
     cashu nft send <h>                   # print a bearer token for the receiver
     cashu nft receive <token>            # receiver: swap the token at the mint
@@ -150,6 +152,7 @@ def nft_quote(ctx: click.Context, file: str):
         asset = f.read()
     quote = client.mint_quote(asset)
     print(f"quote:  {quote['quote']}")
+    print(f"asset:  {quote['asset_hash']}")
     print(f"amount: {quote['amount']} sat")
     print(f"state:  {quote['state']}")
     print(f"request: {quote['request']}")
@@ -173,27 +176,43 @@ def nft_dev_pay(ctx: click.Context, quote_id: str, secret: str):
     print(f"paid: {quote_id} (state: {client.quote_state(quote_id)})")
 
 
-@nft.command("mint", help="Mint an NFT for a file.")
-@click.argument("file", type=click.Path(exists=True, dir_okay=False))
+@nft.command("mint", help="Mint an NFT for a file, or for a settled quote.")
+@click.argument("file", required=False, type=click.Path(exists=True, dir_okay=False))
 @click.option("--quote", "quote_id", default=None, help="Settled mint quote id.")
 @click.option("--description", "-d", default="", help="Asset description.")
 @click.pass_context
 @_cli_errors
-def nft_mint(ctx: click.Context, file: str, quote_id: Optional[str], description: str):
+def nft_mint(
+    ctx: click.Context, file: Optional[str], quote_id: Optional[str], description: str
+):
     client = _make_client(ctx.obj["NFT_MINT_URL"])
     wallet = _open_wallet(ctx.obj["NFT_WALLET_DB"])
     if client.payment_required and not quote_id:
         raise click.UsageError(
             "this mint requires a paid quote -- run `cashu nft quote <file>` first"
         )
-    with open(file, "rb") as f:
-        asset = f.read()
-    cred = client.mint(
-        wallet,
-        asset,
-        quote=quote_id,
-        description=description or os.path.basename(file),
-    )
+    if file:
+        with open(file, "rb") as f:
+            asset = f.read()
+        cred = client.mint(
+            wallet,
+            asset,
+            quote=quote_id,
+            description=description or os.path.basename(file),
+        )
+    else:
+        if not quote_id:
+            raise click.UsageError(
+                "give a file to mint, or --quote to mint from a settled quote "
+                "(the mint already knows the asset hash for the quote)"
+            )
+        quote = client.get_quote(quote_id)
+        cred = client.mint_h(
+            wallet,
+            int(quote["asset_hash"], 16),
+            quote=quote_id,
+            description=description,
+        )
     print(f"minted: {cred.h.to_bytes(32, 'big').hex()}")
 
 
