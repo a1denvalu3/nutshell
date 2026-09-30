@@ -277,8 +277,10 @@ const SlideTransfer = () => (
       </div>
     </div>
     <p className="lede d3">
-      The receiver's wallet proves old and new credential carry the same asset
-      — without naming it. (A public mode exists if you WANT to reveal it.)
+      The receiver's wallet proves equality between two Pedersen commitments —
+      the mint sees only commitments; every candidate asset has a consistent
+      blinding, so guessing doesn't work. (A public mode exists if you WANT to
+      reveal the asset.)
     </p>
   </>
 )
@@ -392,6 +394,9 @@ const SlideUnderHood = () => (
       Optional depth — everything above stands without this slide. It balances
       exactly when the mint signed this asset for this secret; the proofs are
       Chaum–Pedersen sigma protocols (commit → challenge → respond → verify).
+      The hidden-asset path commits with Pedersen blinders instead of showing
+      searchable witnesses — an earlier construction was enumerable by the
+      mint; this one isn't, information-theoretically.
     </p>
     <p className="footnote d3" style={{ marginTop: 4 }}>
       Revealing U<sub>s</sub> is safe: its base u′ is freshly randomized for

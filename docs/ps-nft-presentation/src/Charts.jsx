@@ -43,7 +43,7 @@ export function WireSizeChart() {
     () => [
       { name: 'Credential', bytes: 193 },
       { name: 'Presentation', bytes: 321 },
-      { name: 'PrivatePresentation', bytes: 401 },
+      { name: 'PrivatePresentation', bytes: 385 },
     ],
     []
   )
