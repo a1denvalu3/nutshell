@@ -1,0 +1,699 @@
+"""Custodial, public JPG portfolios with browser-authorized owner actions.
+
+Build portfolio_web first, then: poetry run python -m cashu.nft.portfolio
+The ledger, images and collection changes share a single SQLite transaction.
+Profile private keys never enter this process.
+"""
+
+import hashlib
+import os
+import secrets
+import time
+import uuid
+from collections import defaultdict, deque
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Deque, Dict, List, Literal, Optional, cast
+
+import uvicorn
+from coincurve import PublicKeyXOnly
+from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.routing import APIRoute
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, Field, ValidationError
+from starlette.concurrency import run_in_threadpool
+
+from ..core.crypto.bls import curve_order
+from ..core.crypto.ps import (
+    G_NULL,
+    Credential,
+    MintPrivateKeyPS,
+    hash_asset,
+    present,
+    present_showing,
+    prove_owner_secret,
+)
+from ..core.db import Connection, Database, LockOptions
+from .api import create_router
+from .imgmeta import embed_token
+from .ledger import AlreadyMintedError, AlreadySpentError, NFTError, PSLedger
+from .portfolio_jpg import normalize_jpg, split_transfer_jpg, validate_jpg
+from .wallet import SHOW_TOKEN_PREFIX, TOKEN_PREFIX, NFTClient
+
+AUTH_DOMAIN = "Cashu_NFT_Portfolio_Auth_v1"
+CLAIM_DOMAIN = "Cashu_NFT_Portfolio_Claim_v1\n"
+SHOW_DOMAIN = "Cashu_NFT_Portfolio_Show_v1"
+WEB_DIR = Path(__file__).parent / "portfolio_web" / "dist"
+CARD_LOCKS = [
+    LockOptions(table="ps_assets"),
+    LockOptions(table="ps_nullifiers"),
+    LockOptions(table="portfolio_cards"),
+]
+
+
+class ChallengeRequest(BaseModel):
+    pubkey: str = Field(pattern=r"^[0-9a-f]{64}$")
+    method: Literal["POST"]
+    path: str = Field(max_length=1024, pattern=r"^/api/profiles/[0-9a-f]{64}")
+    body_hash: str = Field(pattern=r"^[0-9a-f]{64}$")
+
+
+class ProfileRequest(BaseModel):
+    name: str = Field(default="Collector", min_length=1, max_length=40)
+
+
+class ClaimRequest(BaseModel):
+    signature: str = Field(pattern=r"^[0-9a-f]{128}$")
+    showing: str = Field(max_length=4096)
+
+
+def validate_pubkey(pubkey: str) -> PublicKeyXOnly:
+    try:
+        if len(pubkey) != 64 or pubkey != pubkey.lower():
+            raise ValueError("invalid key length")
+        return PublicKeyXOnly(bytes.fromhex(pubkey))
+    except ValueError:
+        raise HTTPException(400, "Use a valid 64-character public key.")
+
+
+def showing_context(pubkey: str, h: str, keyset_id: str) -> bytes:
+    return f"{SHOW_DOMAIN}\n{pubkey}\n{h}\n{keyset_id}".encode()
+
+
+def make_showing(pubkey: str, cred: Credential) -> str:
+    h = cred.h.to_bytes(32, "big").hex()
+    context = showing_context(pubkey, h, cred.keyset_id)
+    presentation = present_showing(cred, context)
+    return (
+        SHOW_TOKEN_PREFIX
+        + (len(context).to_bytes(2, "big") + context + presentation.to_bytes()).hex()
+    )
+
+
+def claim_digest(showing: str) -> bytes:
+    return hashlib.sha256((CLAIM_DOMAIN + showing).encode()).digest()
+
+
+def auth_message(
+    pubkey: str, method: str, path: str, body_hash: str, nonce: str, expires: int
+) -> str:
+    return f"{AUTH_DOMAIN}\n{pubkey}\n{method}\n{path}\n{body_hash}\n{nonce}\n{expires}"
+
+
+def load_mint_key(data_dir: Path) -> MintPrivateKeyPS:
+    """Persist a randomly generated mint identity, never a demo/default seed."""
+    seed_file = data_dir / "mint.seed"
+    try:
+        fd = os.open(seed_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        seed = seed_file.read_bytes()
+    else:
+        seed = secrets.token_bytes(32)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(seed)
+    if len(seed) != 32:
+        raise ValueError("Invalid portfolio mint seed; restore its backup.")
+    return MintPrivateKeyPS.from_seed(seed)
+
+
+class Portfolio:
+    def __init__(
+        self,
+        data_dir: str,
+        max_jpg_bytes: int = 10 * 1024 * 1024,
+        max_cards: int = 100,
+        max_storage_bytes: int = 1024**3,
+    ):
+        directory = Path(data_dir)
+        directory.mkdir(parents=True, exist_ok=True, mode=0o700)
+        self.db = Database("portfolio", str(directory))
+        self.ledger = PSLedger(self.db, load_mint_key(directory))
+        self.max_jpg_bytes = max_jpg_bytes
+        self.max_cards = max_cards
+        self.max_storage_bytes = max_storage_bytes
+
+    async def migrate(self) -> None:
+        await self.ledger.migrate()
+        async with self.db.get_connection() as conn:
+            for statement in (
+                """CREATE TABLE IF NOT EXISTS portfolio_profiles (
+                    pubkey TEXT PRIMARY KEY, name TEXT NOT NULL, created INTEGER NOT NULL)""",
+                """CREATE TABLE IF NOT EXISTS portfolio_images (
+                    h TEXT PRIMARY KEY, jpg BLOB NOT NULL)""",
+                """CREATE TABLE IF NOT EXISTS portfolio_cards (
+                    id TEXT PRIMARY KEY, pubkey TEXT NOT NULL REFERENCES portfolio_profiles(pubkey),
+                    h TEXT NOT NULL REFERENCES portfolio_images(h), title TEXT NOT NULL,
+                    credential BLOB, showing TEXT NOT NULL, signature TEXT,
+                    status TEXT NOT NULL CHECK(status IN ('owned','ready','sent')),
+                    created INTEGER NOT NULL, sent INTEGER)""",
+                "CREATE UNIQUE INDEX IF NOT EXISTS portfolio_active_asset ON portfolio_cards(h) WHERE status != 'sent'",
+                "CREATE INDEX IF NOT EXISTS portfolio_owner ON portfolio_cards(pubkey)",
+                """CREATE TABLE IF NOT EXISTS portfolio_challenges (
+                    nonce TEXT PRIMARY KEY, pubkey TEXT NOT NULL, message TEXT NOT NULL,
+                    expires INTEGER NOT NULL)""",
+            ):
+                await conn.execute(statement)
+
+    async def capacity(self, conn: Connection, pubkey: str, image_size: int) -> None:
+        profile = await conn.fetchone(
+            "SELECT pubkey FROM portfolio_profiles WHERE pubkey=:p", {"p": pubkey}
+        )
+        if profile is None:
+            raise HTTPException(404, "Create this portfolio first.")
+        count = await conn.fetchone(
+            "SELECT COUNT(*) AS n FROM portfolio_cards WHERE pubkey=:p AND status!='sent'",
+            {"p": pubkey},
+        )
+        if count is None or count["n"] >= self.max_cards:
+            raise HTTPException(409, "This portfolio has reached its collection limit.")
+        total = await conn.fetchone(
+            "SELECT COALESCE(SUM(length(jpg)),0) AS n FROM portfolio_images"
+        )
+        if total is None or total["n"] + image_size > self.max_storage_bytes:
+            raise HTTPException(507, "The mint has reached its image storage limit.")
+
+    @staticmethod
+    def public_card(row: dict) -> dict:
+        # Deliberately whitelist fields: never serialize a credential or owner secret.
+        return {
+            key: row[key]
+            for key in (
+                "id",
+                "pubkey",
+                "h",
+                "title",
+                "showing",
+                "signature",
+                "status",
+                "created",
+                "sent",
+            )
+        }
+
+    async def store_card(
+        self, conn: Connection, pubkey: str, cred: Credential, jpg: bytes, title: str
+    ) -> dict:
+        h = cred.h.to_bytes(32, "big").hex()
+        await conn.execute(
+            "INSERT INTO portfolio_images(h,jpg) VALUES(:h,:jpg) ON CONFLICT(h) DO NOTHING",
+            {"h": h, "jpg": jpg},
+        )
+        row = dict(
+            id=uuid.uuid4().hex,
+            pubkey=pubkey,
+            h=h,
+            title=title,
+            showing=make_showing(pubkey, cred),
+            signature=None,
+            status="owned",
+            created=int(time.time()),
+            sent=None,
+        )
+        await conn.execute(
+            """INSERT INTO portfolio_cards
+            (id,pubkey,h,title,credential,showing,status,created)
+            VALUES(:id,:pubkey,:h,:title,:credential,:showing,:status,:created)""",
+            {**row, "credential": cred.to_bytes()},
+        )
+        return row
+
+    async def mint(self, pubkey: str, data: bytes, title: str) -> dict:
+        jpg = await run_in_threadpool(normalize_jpg, data)
+        if len(jpg) > self.max_jpg_bytes:
+            raise HTTPException(
+                413, "The normalized JPG is too large. Use a smaller image."
+            )
+        h = hash_asset(jpg)
+        secret = secrets.randbelow(curve_order - 1) + 1
+        commitment, proof = prove_owner_secret(secret)
+        async with self.db.get_connection(locks=CARD_LOCKS) as conn:
+            await self.capacity(conn, pubkey, len(jpg))
+            u, v = await self.ledger.issue_nft(h, commitment, proof, conn=conn)
+            cred = Credential(
+                u=u, v=v, h=h, s=secret, keyset_id=self.ledger.keyset.keyset_id
+            )
+            return await self.store_card(conn, pubkey, cred, jpg, title)
+
+    async def receive(self, pubkey: str, data: bytes, title: str) -> dict:
+        jpg, token = split_transfer_jpg(data)
+        await run_in_threadpool(validate_jpg, jpg)
+        if token is None:
+            raise HTTPException(
+                400,
+                "This JPG has no transfer token. Ask for the original transfer JPG.",
+            )
+        old = NFTClient.decode_token(token)
+        if old.h != hash_asset(jpg):
+            raise HTTPException(
+                400,
+                "The embedded token does not belong to this JPG. Nothing was redeemed.",
+            )
+        if old.keyset_id != self.ledger.keyset.keyset_id:
+            raise HTTPException(400, "This NFT belongs to another mint.")
+        secret = secrets.randbelow(curve_order - 1) + 1
+        commitment, proof = prove_owner_secret(secret)
+        presentation = present(old, binding=commitment.format())
+        async with self.db.get_connection(locks=CARD_LOCKS) as conn:
+            h = old.h.to_bytes(32, "big").hex()
+            existing = await conn.fetchone(
+                "SELECT h FROM portfolio_images WHERE h=:h", {"h": h}
+            )
+            await self.capacity(conn, pubkey, 0 if existing else len(jpg))
+            u, v = await self.ledger.transfer(
+                presentation, commitment, proof, conn=conn
+            )
+            await conn.execute(
+                """UPDATE portfolio_cards SET status='sent',sent=:now,credential=NULL
+                WHERE h=:h AND status!='sent'""",
+                {"h": h, "now": int(time.time())},
+            )
+            cred = Credential(u=u, v=v, h=old.h, s=secret, keyset_id=old.keyset_id)
+            return await self.store_card(conn, pubkey, cred, jpg, title)
+
+    async def reconcile(self, conn: Connection, pubkey: str) -> None:
+        rows = await conn.fetchall(
+            "SELECT id,credential FROM portfolio_cards WHERE pubkey=:p AND status!='sent'",
+            {"p": pubkey},
+        )
+        for row in rows:
+            cred = Credential.from_bytes(bytes(row["credential"]))
+            nullifier = (G_NULL * cred.s).format()
+            if await conn.fetchone(
+                "SELECT nullifier FROM ps_nullifiers WHERE nullifier=:n",
+                {"n": nullifier},
+            ):
+                await conn.execute(
+                    "UPDATE portfolio_cards SET status='sent',sent=:t,credential=NULL WHERE id=:id",
+                    {"id": row["id"], "t": int(time.time())},
+                )
+
+    async def profile(self, pubkey: str) -> dict:
+        async with self.db.get_connection(
+            locks=[LockOptions(table="portfolio_cards")]
+        ) as conn:
+            profile = await conn.fetchone(
+                "SELECT * FROM portfolio_profiles WHERE pubkey=:p", {"p": pubkey}
+            )
+            if profile is None:
+                raise HTTPException(404, "This portfolio has not been created yet.")
+            await self.reconcile(conn, pubkey)
+            rows = await conn.fetchall(
+                "SELECT * FROM portfolio_cards WHERE pubkey=:p ORDER BY created DESC,rowid DESC",
+                {"p": pubkey},
+            )
+            return {**dict(profile), "cards": [self.public_card(dict(r)) for r in rows]}
+
+    async def owned_card(self, conn: Connection, pubkey: str, card_id: str) -> dict:
+        row = await conn.fetchone(
+            "SELECT * FROM portfolio_cards WHERE id=:id AND pubkey=:p",
+            {"id": card_id, "p": pubkey},
+        )
+        if row is None:
+            raise HTTPException(404, "Card not found in your portfolio.")
+        if row["status"] == "sent":
+            raise HTTPException(409, "This card has already been transferred.")
+        return dict(row)
+
+    async def export(self, pubkey: str, card_id: str) -> bytes:
+        async with self.db.get_connection(locks=CARD_LOCKS) as conn:
+            await self.reconcile(conn, pubkey)
+            row = await self.owned_card(conn, pubkey, card_id)
+            if row["signature"] is None:
+                raise HTTPException(
+                    409, "Finish signing this card's ownership proof first."
+                )
+            image = await conn.fetchone(
+                "SELECT jpg FROM portfolio_images WHERE h=:h", {"h": row["h"]}
+            )
+            if image is None:
+                raise HTTPException(404, "The JPG is unavailable.")
+            cred = Credential.from_bytes(bytes(row["credential"]))
+            jpg = embed_token(bytes(image["jpg"]), TOKEN_PREFIX + cred.to_bytes().hex())
+            await conn.execute(
+                "UPDATE portfolio_cards SET status='ready' WHERE id=:id",
+                {"id": card_id},
+            )
+            return jpg
+
+    async def cancel(self, pubkey: str, card_id: str) -> dict:
+        async with self.db.get_connection(locks=CARD_LOCKS) as conn:
+            await self.reconcile(conn, pubkey)
+            row = await self.owned_card(conn, pubkey, card_id)
+            if row["status"] != "ready":
+                raise HTTPException(409, "There is no exported transfer to cancel.")
+            old = Credential.from_bytes(bytes(row["credential"]))
+            secret = secrets.randbelow(curve_order - 1) + 1
+            commitment, proof = prove_owner_secret(secret)
+            u, v = await self.ledger.transfer(
+                present(old, binding=commitment.format()), commitment, proof, conn=conn
+            )
+            cred = Credential(u=u, v=v, h=old.h, s=secret, keyset_id=old.keyset_id)
+            showing = make_showing(pubkey, cred)
+            await conn.execute(
+                """UPDATE portfolio_cards SET credential=:c,showing=:s,signature=NULL,status='owned'
+                WHERE id=:id""",
+                {"id": card_id, "c": cred.to_bytes(), "s": showing},
+            )
+            return self.public_card(
+                {**row, "showing": showing, "signature": None, "status": "owned"}
+            )
+
+
+def create_portfolio_app(
+    data_dir: str,
+    *,
+    max_jpg_bytes: int = 10 * 1024 * 1024,
+    max_cards: int = 100,
+    max_storage_bytes: int = 1024**3,
+) -> FastAPI:
+    portfolio = Portfolio(data_dir, max_jpg_bytes, max_cards, max_storage_bytes)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        await portfolio.migrate()
+        yield
+        await portfolio.db.engine.dispose()
+
+    app = FastAPI(
+        title="Cashu NFT portfolio", lifespan=lifespan, docs_url=None, redoc_url=None
+    )
+    app.state.portfolio = portfolio
+    requests: Dict[str, Deque[float]] = defaultdict(deque)
+
+    @app.middleware("http")
+    async def guard(request: Request, call_next):
+        if request.url.path.startswith(("/api/", "/v1/")):
+            address = request.client.host if request.client else "unknown"
+            now = time.monotonic()
+            if address not in requests and len(requests) >= 5000:
+                for old in list(requests):
+                    if not requests[old] or requests[old][-1] < now - 60:
+                        del requests[old]
+            window = requests[address]
+            while window and window[0] < now - 60:
+                window.popleft()
+            if len(window) >= 240:
+                return JSONResponse(
+                    {"detail": "Too many requests. Try again in a minute."},
+                    status_code=429,
+                    headers={"Retry-After": "60"},
+                )
+            window.append(now)
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "same-origin"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+        )
+        response.headers["Permissions-Policy"] = (
+            "camera=(), microphone=(), geolocation=()"
+        )
+        if request.url.path.startswith(("/api/", "/v1/")):
+            response.headers["Cache-Control"] = "no-store"
+        return response
+
+    @app.exception_handler(ValueError)
+    async def invalid_value(request: Request, error: ValueError):
+        return JSONResponse({"detail": str(error)}, status_code=400)
+
+    @app.exception_handler(AlreadyMintedError)
+    async def duplicate(request: Request, error: AlreadyMintedError):
+        return JSONResponse(
+            {"detail": "Already minted. Upload its transfer JPG to receive it."},
+            status_code=409,
+        )
+
+    @app.exception_handler(AlreadySpentError)
+    async def spent(request: Request, error: AlreadySpentError):
+        return JSONResponse(
+            {"detail": "This transfer was already redeemed or canceled."},
+            status_code=409,
+        )
+
+    @app.exception_handler(NFTError)
+    async def invalid_nft(request: Request, error: NFTError):
+        return JSONResponse({"detail": str(error)}, status_code=400)
+
+    async def read_body(request: Request, limit: int) -> bytes:
+        chunks = []
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > limit:
+                raise HTTPException(413, "This upload is too large.")
+            chunks.append(chunk)
+        return b"".join(chunks)
+
+    async def authorize(request: Request, pubkey: str, body: bytes) -> None:
+        key = validate_pubkey(pubkey)
+        nonce = request.headers.get("X-Portfolio-Challenge", "")
+        target = request.url.path + (
+            "?" + request.url.query if request.url.query else ""
+        )
+        async with portfolio.db.get_connection(
+            locks=[LockOptions(table="portfolio_challenges")]
+        ) as conn:
+            row = await conn.fetchone(
+                "SELECT * FROM portfolio_challenges WHERE nonce=:n", {"n": nonce}
+            )
+            if (
+                row is None
+                or row["pubkey"] != pubkey
+                or row["expires"] <= int(time.time())
+            ):
+                raise HTTPException(401, "Unlock your portfolio and try again.")
+            expected = auth_message(
+                pubkey,
+                request.method,
+                target,
+                hashlib.sha256(body).hexdigest(),
+                nonce,
+                row["expires"],
+            )
+            try:
+                signature = bytes.fromhex(
+                    request.headers.get("X-Portfolio-Signature", "")
+                )
+                valid = len(signature) == 64 and key.verify(
+                    signature, hashlib.sha256(expected.encode()).digest()
+                )
+            except ValueError:
+                valid = False
+            if row["message"] != expected or not valid:
+                raise HTTPException(
+                    403, "This action needs a valid signature from the profile key."
+                )
+            await conn.execute(
+                "DELETE FROM portfolio_challenges WHERE nonce=:n", {"n": nonce}
+            )
+
+    @app.get("/api/config")
+    async def config():
+        return {
+            "keyset_id": portfolio.ledger.keyset.keyset_id,
+            "public_key": portfolio.ledger.keyset.to_bytes().hex(),
+            "max_jpg_bytes": max_jpg_bytes,
+            "max_cards": max_cards,
+        }
+
+    @app.post("/api/auth/challenge")
+    async def challenge(body: ChallengeRequest):
+        validate_pubkey(body.pubkey)
+        if not body.path.startswith(f"/api/profiles/{body.pubkey}"):
+            raise HTTPException(400, "Challenge must address your profile.")
+        nonce, expires = secrets.token_hex(32), int(time.time()) + 120
+        message = auth_message(
+            body.pubkey, body.method, body.path, body.body_hash, nonce, expires
+        )
+        async with portfolio.db.get_connection(
+            locks=[LockOptions(table="portfolio_challenges")]
+        ) as conn:
+            await conn.execute(
+                "DELETE FROM portfolio_challenges WHERE expires<=:now",
+                {"now": int(time.time())},
+            )
+            count = await conn.fetchone(
+                "SELECT COUNT(*) AS n FROM portfolio_challenges"
+            )
+            if count is not None and count["n"] >= 10000:
+                raise HTTPException(
+                    429, "Too many pending requests. Try again shortly."
+                )
+            await conn.execute(
+                "INSERT INTO portfolio_challenges VALUES(:n,:p,:m,:e)",
+                {"n": nonce, "p": body.pubkey, "m": message, "e": expires},
+            )
+        return {"nonce": nonce, "expires": expires, "message": message}
+
+    @app.post("/api/profiles/{pubkey}")
+    async def create_profile(pubkey: str, request: Request):
+        raw = await read_body(request, 1024)
+        await authorize(request, pubkey, raw)
+        try:
+            body = ProfileRequest.model_validate_json(raw)
+        except ValidationError:
+            raise HTTPException(
+                400, "Use a collection name between 1 and 40 characters."
+            )
+        async with portfolio.db.get_connection(
+            locks=[LockOptions(table="portfolio_profiles")]
+        ) as conn:
+            exists = await conn.fetchone(
+                "SELECT pubkey FROM portfolio_profiles WHERE pubkey=:p", {"p": pubkey}
+            )
+            if exists is None:
+                count = await conn.fetchone(
+                    "SELECT COUNT(*) AS n FROM portfolio_profiles"
+                )
+                if count is not None and count["n"] >= 1000:
+                    raise HTTPException(409, "The mint has reached its profile limit.")
+                await conn.execute(
+                    "INSERT INTO portfolio_profiles VALUES(:p,:name,:t)",
+                    {
+                        "p": pubkey,
+                        "name": body.name.strip() or "Collector",
+                        "t": int(time.time()),
+                    },
+                )
+        return await portfolio.profile(pubkey)
+
+    @app.get("/api/profiles/{pubkey}")
+    async def get_profile(pubkey: str):
+        validate_pubkey(pubkey)
+        return await portfolio.profile(pubkey)
+
+    @app.post("/api/profiles/{pubkey}/mint")
+    async def mint(
+        pubkey: str,
+        request: Request,
+        title: str = Query(default="Untitled JPG", min_length=1, max_length=80),
+    ):
+        raw = await read_body(request, max_jpg_bytes)
+        await authorize(request, pubkey, raw)
+        return await portfolio.mint(pubkey, raw, title)
+
+    @app.post("/api/profiles/{pubkey}/receive")
+    async def receive(
+        pubkey: str,
+        request: Request,
+        title: str = Query(default="Collected JPG", min_length=1, max_length=80),
+    ):
+        raw = await read_body(request, max_jpg_bytes + 65536)
+        await authorize(request, pubkey, raw)
+        return await portfolio.receive(pubkey, raw, title)
+
+    @app.post("/api/profiles/{pubkey}/cards/{card_id}/claim")
+    async def sign_claim(pubkey: str, card_id: str, request: Request):
+        raw = await read_body(request, 8192)
+        await authorize(request, pubkey, raw)
+        try:
+            body = ClaimRequest.model_validate_json(raw)
+        except ValidationError:
+            raise HTTPException(400, "Invalid ownership signature.")
+        async with portfolio.db.get_connection(locks=CARD_LOCKS) as conn:
+            await portfolio.reconcile(conn, pubkey)
+            row = await portfolio.owned_card(conn, pubkey, card_id)
+            if body.showing != row["showing"] or not validate_pubkey(pubkey).verify(
+                bytes.fromhex(body.signature), claim_digest(body.showing)
+            ):
+                raise HTTPException(
+                    403, "The profile signature does not match this ownership proof."
+                )
+            await conn.execute(
+                "UPDATE portfolio_cards SET signature=:s WHERE id=:id",
+                {"s": body.signature, "id": card_id},
+            )
+            return portfolio.public_card({**row, "signature": body.signature})
+
+    @app.post("/api/profiles/{pubkey}/cards/{card_id}/export")
+    async def export(pubkey: str, card_id: str, request: Request):
+        raw = await read_body(request, 0)
+        await authorize(request, pubkey, raw)
+        jpg = await portfolio.export(pubkey, card_id)
+        return Response(
+            jpg,
+            media_type="image/jpeg",
+            headers={
+                "Content-Disposition": f'attachment; filename="cashu-transfer-{card_id[:8]}.jpg"'
+            },
+        )
+
+    @app.post("/api/profiles/{pubkey}/cards/{card_id}/cancel")
+    async def cancel(pubkey: str, card_id: str, request: Request):
+        raw = await read_body(request, 0)
+        await authorize(request, pubkey, raw)
+        return await portfolio.cancel(pubkey, card_id)
+
+    @app.get("/api/images/{h}.jpg")
+    async def image(h: str):
+        if len(h) != 64 or any(c not in "0123456789abcdef" for c in h):
+            raise HTTPException(404, "Image not found.")
+        row = await portfolio.db.fetchone(
+            "SELECT jpg FROM portfolio_images WHERE h=:h", {"h": h}
+        )
+        if row is None:
+            raise HTTPException(404, "Image not found.")
+        return Response(bytes(row["jpg"]), media_type="image/jpeg")
+
+    # Retain bearer-redemption compatibility, but do not expose unauthenticated
+    # minting: it would bypass the portfolio's upload and storage quotas.
+    router = create_router(portfolio.ledger)
+    allowed = {
+        "/info",
+        "/checkstate",
+        "/asset/{asset_hash}",
+        "/transfer",
+        "/transfer/private/begin",
+        "/transfer/private",
+        "/verify",
+    }
+    # create_router only registers APIRoute endpoints via decorators.
+    api_routes = cast(List[APIRoute], router.routes)
+    router.routes = [route for route in api_routes if route.path in allowed]
+    app.include_router(router, prefix="/v1/nft")
+    if (WEB_DIR / "assets").exists():
+        app.mount(
+            "/assets", StaticFiles(directory=str(WEB_DIR / "assets")), name="assets"
+        )
+
+    @app.get("/")
+    @app.get("/p/{pubkey}")
+    async def frontend(pubkey: Optional[str] = None):
+        if pubkey is not None:
+            validate_pubkey(pubkey)
+        if not (WEB_DIR / "index.html").exists():
+            return JSONResponse(
+                {
+                    "detail": "Build the portfolio frontend with npm ci and npm run build in cashu/nft/portfolio_web."
+                },
+                status_code=503,
+            )
+        return FileResponse(
+            WEB_DIR / "index.html", headers={"Cache-Control": "no-cache"}
+        )
+
+    return app
+
+
+def main() -> None:
+    app = create_portfolio_app(
+        os.environ.get("NFT_PORTFOLIO_DIR", "data/nft-portfolio"),
+        max_jpg_bytes=int(
+            os.environ.get("NFT_PORTFOLIO_MAX_JPG_BYTES", str(10 * 1024 * 1024))
+        ),
+        max_cards=int(os.environ.get("NFT_PORTFOLIO_MAX_CARDS", "100")),
+        max_storage_bytes=int(
+            os.environ.get("NFT_PORTFOLIO_MAX_STORAGE_BYTES", str(1024**3))
+        ),
+    )
+    uvicorn.run(
+        app,
+        host=os.environ.get("NFT_PORTFOLIO_HOST", "127.0.0.1"),
+        port=int(os.environ.get("NFT_PORTFOLIO_PORT", "8401")),
+        proxy_headers=False,
+    )
+
+
+if __name__ == "__main__":
+    main()
