@@ -1,6 +1,11 @@
 import React, { useState, useCallback, useEffect } from 'react'
 import { WireSizeChart } from './Charts'
 import MathTex from './MathTex'
+import {
+  Eye, EyeOff, Envelope, Magnifier, Check, Stamp, Key, Vault,
+  Tombstone, Wallet, Plane, Scale, BlindMint, Database, FileDoc,
+  Credential, Question, XMark, Dash,
+} from './Visuals'
 
 const TITLE = 'Private NFTs, ecash-style'
 
@@ -27,27 +32,6 @@ function SentryGlyph({ size = 32 }) {
   )
 }
 
-/* ── Reusable flow diagram: boxes + arrows + caption ── */
-
-function Flow({ steps, caption }) {
-  return (
-    <>
-      <div className="flow">
-        {steps.map((s, i) => (
-          <React.Fragment key={i}>
-            {i > 0 && <div className="flow-arrow">→</div>}
-            <div className={`flow-box${s.purple ? ' purple' : ''}`}>
-              <div className="flow-title">{s.title}</div>
-              {s.sub && <div className="flow-sub">{s.sub}</div>}
-            </div>
-          </React.Fragment>
-        ))}
-      </div>
-      {caption && <div className="flow-caption">{caption}</div>}
-    </>
-  )
-}
-
 /* ─────────────────────────── Slides ─────────────────────────── */
 
 const SlideTitle = () => (
@@ -71,11 +55,42 @@ const SlideProblem = () => (
     <div className="headline d1">
       NFTs made ownership public. Cash made payments private. This is both.
     </div>
-    <p className="lede d2">
-      A regular NFT publishes every ownership transfer to a public ledger,
-      forever. Ecash is private — but it's only fungible money. This scheme
-      issues unique assets, one per file, with ecash-grade privacy.
-    </p>
+    <div className="splitvis d2">
+      <div className="split-half">
+        <div className="split-title">
+          <Eye size={18} /> regular NFTs — a public ledger
+        </div>
+        <div className="ledger-row">
+          <span className="who">0xA3f1… → 0xB7c2…</span>
+          <span className="watch"><Eye size={16} /> watching</span>
+        </div>
+        <div className="ledger-row">
+          <span className="who">0xB7c2… → 0xD9e4…</span>
+          <span className="watch"><Eye size={16} /> watching</span>
+        </div>
+        <div className="ledger-row" style={{ marginBottom: 0 }}>
+          <span className="who">0xD9e4… → 0xC1a8…</span>
+          <span className="watch"><Eye size={16} /> watching</span>
+        </div>
+      </div>
+      <div className="split-half">
+        <div className="split-title">
+          <Envelope size={18} /> this scheme — sealed envelopes
+        </div>
+        <div className="ledger-row sealed">
+          <span><Envelope size={15} style={{ verticalAlign: '-3px' }} /> sealed transfer</span>
+          <span className="watch"><EyeOff size={16} /></span>
+        </div>
+        <div className="ledger-row sealed">
+          <span><Envelope size={15} style={{ verticalAlign: '-3px' }} /> sealed transfer</span>
+          <span className="watch"><EyeOff size={16} /></span>
+        </div>
+        <div className="ledger-row sealed" style={{ marginBottom: 0 }}>
+          <span><Envelope size={15} style={{ verticalAlign: '-3px' }} /> sealed transfer</span>
+          <span className="watch"><EyeOff size={16} /></span>
+        </div>
+      </div>
+    </div>
   </>
 )
 
@@ -84,14 +99,27 @@ const SlideQualities = () => (
     <div className="headline d1">
       Anyone can check. No one can look you up.
     </div>
-    <p className="lede d2">
-      Anyone can privately verify ownership of an asset — no blockchain
-      lookup, no account, no permission.
-    </p>
-    <p className="lede d2">
-      And transfers are private even from the mint: it notarizes every
-      transfer, and never learns which asset moved.
-    </p>
+    <div className="vrow d2">
+      <div className="vbox">
+        <span className="token-chip">pshow1…</span>
+        <span className="vsub">a published showing token</span>
+      </div>
+      <div className="varrow">→</div>
+      <div className="vbox green">
+        <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          <Magnifier size={26} /><Check size={22} />
+        </span>
+        <span className="vlabel">ownership verified</span>
+        <span className="vsub">offline, no permission</span>
+      </div>
+      <div className="vbox dark">
+        <Database size={28} />
+        <span className="vlabel" style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+          owner registry <EyeOff size={16} />
+        </span>
+        <span className="vsub">doesn't exist</span>
+      </div>
+    </div>
   </>
 )
 
@@ -100,43 +128,64 @@ const SlideCast = () => (
     <div className="headline d1">
       A notary, an owner, and anyone who wants to check.
     </div>
-    <p className="lede d2">
-      <strong>The mint</strong> issues and notarizes — but it is not a
-      blockchain. It keeps no owner ledger, only a list of serial numbers it
-      has seen spent.
-    </p>
-    <p className="lede d2">
-      <strong>The owner</strong> holds a credential plus a secret in their
-      wallet. That pair IS the asset.
-    </p>
-    <p className="lede d2">
-      <strong>Anyone</strong> — say, a buyer — can verify before paying.
-    </p>
-    <div className="callout purple d3">
-      A credential is the mint's unforgeable signature over exactly two
-      things: the asset's fingerprint, and a secret only the owner knows.
+    <div className="triangle-wrap d2">
+      <svg className="triangle-lines" viewBox="0 0 100 62" preserveAspectRatio="none" aria-hidden="true">
+        <path d="M50 6 L14 56 L86 56 Z" fill="none" stroke="var(--purple-light)" strokeWidth="0.7" strokeDasharray="2.5 1.8" />
+      </svg>
+      <div className="role-chip" style={{ left: '50%', top: 0 }}>
+        <Stamp size={26} />
+        <span className="vlabel">the mint</span>
+        <span className="vsub">notarizes — no owner ledger</span>
+      </div>
+      <div className="role-chip" style={{ left: '14%', bottom: 0 }}>
+        <Key size={26} />
+        <span className="vlabel">the owner</span>
+        <span className="vsub">credential + secret</span>
+      </div>
+      <div className="role-chip" style={{ left: '86%', bottom: 0 }}>
+        <Magnifier size={26} />
+        <span className="vlabel">anyone</span>
+        <span className="vsub">verifies before paying</span>
+      </div>
     </div>
+    <p className="lede d3">
+      A credential is the mint's unforgeable signature over two things: the
+      asset's fingerprint, and a secret only the owner knows.
+    </p>
   </>
 )
 
 const SlideMinting = () => (
   <>
     <div className="headline d1">One file, one credential — ever.</div>
-    <div className="d2">
-      <Flow
-        steps={[
-          { title: 'You', sub: 'bring a file; its fingerprint (hash) is the asset id' },
-          { title: 'The Mint', sub: 'checks the asset was never issued before', purple: true },
-          { title: 'Your wallet', sub: 'receives the credential' },
-        ]}
-        caption="You pay a normal Lightning invoice if the mint charges — the file is only needed to get a quote."
-      />
+    <div className="vrow d2">
+      <div className="vbox">
+        <FileDoc size={28} />
+        <span className="vlabel">your file</span>
+      </div>
+      <div className="varrow">→</div>
+      <div className="vbox">
+        <span className="token-chip">a91f…3c</span>
+        <span className="vsub">the fingerprint is the asset id</span>
+      </div>
+      <div className="varrow">→</div>
+      <div className="vbox purple">
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Credential size={28} /><span className="pop" style={{ display: 'flex' }}><Stamp size={26} /></span>
+        </span>
+        <span className="vlabel">mint stamps once</span>
+        <span className="vsub">never-issued-before check</span>
+      </div>
+      <div className="varrow">→</div>
+      <div className="vbox">
+        <Vault size={28} />
+        <span className="vlabel">your wallet</span>
+      </div>
     </div>
     <p className="lede d3">
-      The mint must see the fingerprint to reject duplicates — minting reveals
-      the asset, by design. The credential it issues binds that asset to a
-      secret your wallet just generated, using a Diffie–Hellman trick: the
-      mint never learns the secret, yet the credential provably encodes it.
+      Minting reveals the fingerprint by design — it's how duplicates are
+      rejected. The credential binds the asset to your freshly generated
+      secret via a Diffie–Hellman trick: the mint never learns it.
     </p>
   </>
 )
@@ -146,29 +195,46 @@ const SlideOwnership = () => (
     <div className="headline d1">
       Ownership is a secret you hold, not a row in a database.
     </div>
-    <p className="lede d2">
-      No blockchain, no account, no registry of owners — the credential and
-      its secret are all there is. The mint remembers only spent serial
-      numbers, and each ownership state has exactly one:{' '}
-      <code>serial = secret × public basepoint</code>.
-    </p>
-    <p className="lede d2">
-      Every transfer creates a new secret, hence a new serial — so at any
-      moment exactly one serial per asset is unspent: the current owner's.
-    </p>
-    <div className="callout purple d3">
-      "Is this serial spent?" is the whole ownership question.
+    <div className="vrow d2">
+      <div className="vbox">
+        <span style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <Vault size={30} /><Key size={24} />
+        </span>
+        <span className="vlabel">credential + secret</span>
+        <span className="vsub">serial = secret × public basepoint</span>
+      </div>
     </div>
+    <div className="serial-strip d3">
+      <span className="serial-chip spent"><XMark size={13} /> serial 1 · spent</span>
+      <span className="serial-chip spent"><XMark size={13} /> serial 2 · spent</span>
+      <span className="serial-chip spent"><XMark size={13} /> serial 3 · spent</span>
+      <span className="serial-chip unspent"><Check size={13} /> serial 4 · unspent = current owner</span>
+    </div>
+    <p className="lede d3">
+      Every transfer creates a new secret, hence a new serial — exactly one is
+      unspent at any moment. "Is this serial spent?" is the whole ownership
+      question.
+    </p>
   </>
 )
 
 const SlidePullquote = () => (
   <div className="pullquote">
-    <div className="headline d1">
+    <div className="vrow d1" style={{ marginTop: 0 }}>
+      <Wallet size={26} />
+      <span className="varrow">→</span>
+      <Credential size={30} />
+      <span className="varrow">→</span>
+      <Wallet size={26} />
+      <span style={{ color: 'var(--muted)', display: 'flex', alignItems: 'center', gap: 6, marginLeft: 12 }}>
+        <BlindMint size={28} /> the mint, blindfolded
+      </span>
+    </div>
+    <div className="headline d2">
       "The mint sees a credential die and a new one be born. It cannot link
       them — and it cannot name the asset."
     </div>
-    <p className="lede muted d2">Every default transfer, in one sentence.</p>
+    <p className="lede muted d3">Every default transfer, in one sentence.</p>
   </div>
 )
 
@@ -177,20 +243,42 @@ const SlideTransfer = () => (
     <div className="headline d1">
       Hand it over like cash. Swap it before it's spent twice.
     </div>
-    <div className="d2">
-      <Flow
-        steps={[
-          { title: 'Sender', sub: 'copies the credential out as an offline token, like an ecash token' },
-          { title: 'Receiver', sub: 'swaps it at the mint for a fresh credential under a new secret', purple: true },
-          { title: 'The Mint', sub: 'old serial spent, new credential born' },
-        ]}
-        caption="The token is a bearer instrument until the receiver swaps — swap promptly, like unredeemed ecash."
-      />
+    <div className="vrow d2">
+      <div className="vbox">
+        <Wallet size={26} />
+        <span className="vlabel">sender</span>
+      </div>
+      <div className="varrow">→</div>
+      <div className="vbox">
+        <Plane size={26} />
+        <span className="vlabel">offline token</span>
+        <span className="vsub">bearer until swapped — swap promptly</span>
+      </div>
+      <div className="varrow">→</div>
+      <div className="vbox">
+        <Wallet size={26} />
+        <span className="vlabel">receiver</span>
+      </div>
+      <div className="varrow">→</div>
+      <div className="vbox purple">
+        <span style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <span style={{ color: 'var(--semantic-red)', display: 'flex', alignItems: 'center', gap: 3 }}>
+            <Credential size={22} /><XMark size={15} />
+          </span>
+          <span title="same asset, never named" style={{ display: 'flex', alignItems: 'center', gap: 3, color: 'var(--purple)' }}>
+            <Scale size={18} /><Question size={15} />
+          </span>
+          <span style={{ color: 'var(--semantic-green)', display: 'flex', alignItems: 'center', gap: 3 }}>
+            <Credential size={22} /><Check size={15} />
+          </span>
+        </span>
+        <span className="vlabel">the mint swaps</span>
+        <span className="vsub">old spent · new born · asset hidden</span>
+      </div>
     </div>
     <p className="lede d3">
-      The receiver's wallet proves the new credential is for the same asset as
-      the old one — without naming it. (A public mode exists if you WANT to
-      reveal the asset; burning needs it.)
+      The receiver's wallet proves old and new credential carry the same asset
+      — without naming it. (A public mode exists if you WANT to reveal it.)
     </p>
   </>
 )
@@ -198,15 +286,21 @@ const SlideTransfer = () => (
 const SlideBurn = () => (
   <>
     <div className="headline d1">Burning is final — and public by necessity.</div>
-    <div className="d2">
-      <Flow
-        steps={[
-          { title: 'Owner', sub: 'asks the mint to retire the asset forever' },
-          { title: 'The Mint', sub: 'spends the serial with no successor', purple: true },
-          { title: 'Asset', sub: 'tombstoned — anyone who asks gets "burned"' },
-        ]}
-        caption='"Burned" stays distinguishable from merely "transferred" for anyone asking about that asset.'
-      />
+    <div className="vrow d2">
+      <div className="vbox">
+        <Credential size={28} />
+        <span className="vlabel">owner retires it</span>
+      </div>
+      <div className="varrow">→</div>
+      <div className="vbox purple">
+        <Tombstone size={28} />
+        <span className="vlabel">serial spent, no successor</span>
+      </div>
+      <div className="varrow">→</div>
+      <div className="vbox red">
+        <span className="vlabel">asset status: "burned"</span>
+        <span className="vsub">distinguishable from "transferred"</span>
+      </div>
     </div>
     <p className="lede d3">
       The mint must know what it's tombstoning — a burn always reveals the
@@ -220,44 +314,27 @@ const SlideShowing = () => (
     <div className="headline d1">
       Prove you own it without giving it away.
     </div>
-    <div className="d2">
-      <Flow
-        steps={[
-          { title: 'Owner', sub: 'publishes a showing token (pshow1…)' },
-          { title: 'Verifier', sub: 'checks the signature and the secret — offline', purple: true },
-          { title: 'The Mint', sub: 'one query: is this serial still unspent?' },
-        ]}
-      />
-    </div>
-    <div className="steps d3">
-      <div className="step">
-        <div className="step-num">1</div>
-        <div className="step-body">
-          <p>The mint really signed this asset.</p>
-        </div>
+    <div className="vrow d2">
+      <div className="vbox">
+        <span className="token-chip">pshow1…</span>
+        <span className="vsub">purpose-bound: verification only, unspendable</span>
       </div>
-      <div className="step">
-        <div className="step-num">2</div>
-        <div className="step-body">
-          <p>
-            The publisher actually holds the secret — not a copy of someone
-            else's signature.
-          </p>
-        </div>
-      </div>
-      <div className="step">
-        <div className="step-num">3</div>
-        <div className="step-body">
-          <p>They still own it right now.</p>
-        </div>
+      <div className="varrow">→</div>
+      <div className="vbox purple">
+        <Magnifier size={24} />
+        <span className="vlabel">verifier</span>
+        <span className="vsub">mint query: "spent?" → no</span>
       </div>
     </div>
-    <div className="callout purple d3">
-      Safe to publish: the showing is purpose-bound — verification only. The
-      mint rejects it for transfers and burns; a copied showing is worthless.
-      One caveat: "unspent" is a snapshot, so in a sale you settle by swapping
-      the token before paying.
+    <div className="badge-row d3">
+      <span className="badge"><Check size={16} /> the mint really signed this asset</span>
+      <span className="badge"><Check size={16} /> the publisher holds the secret</span>
+      <span className="badge"><Check size={16} /> still owned right now</span>
     </div>
+    <p className="lede d3" style={{ marginTop: 12 }}>
+      A copied showing is worthless. One caveat: "unspent" is a snapshot — in
+      a sale, settle by swapping the token before paying.
+    </p>
   </>
 )
 
@@ -270,30 +347,30 @@ const SlideWhoLearns = () => (
       <thead>
         <tr>
           <th></th>
-          <th>The mint learns</th>
-          <th>The public learns</th>
+          <th>The mint</th>
+          <th>The public</th>
         </tr>
       </thead>
       <tbody>
         <tr>
           <td><strong>Minting</strong></td>
-          <td>the asset id + payment</td>
-          <td>nothing</td>
+          <td><Eye size={16} style={{ verticalAlign: '-3px' }} /> asset id + payment</td>
+          <td><Dash size={16} style={{ verticalAlign: '-3px' }} /> nothing</td>
         </tr>
         <tr>
           <td><strong>Transfer</strong></td>
-          <td>"some credential moved" — not which asset, not who</td>
-          <td>nothing</td>
+          <td><EyeOff size={16} style={{ verticalAlign: '-3px' }} /> "a credential moved" — not which, not who</td>
+          <td><Dash size={16} style={{ verticalAlign: '-3px' }} /> nothing</td>
         </tr>
         <tr>
           <td><strong>Burn</strong></td>
-          <td>the asset id</td>
-          <td>can query the asset's burned status</td>
+          <td><Eye size={16} style={{ verticalAlign: '-3px' }} /> the asset id</td>
+          <td><Eye size={16} style={{ verticalAlign: '-3px' }} /> burned status queryable</td>
         </tr>
         <tr>
           <td><strong>Showing</strong></td>
-          <td>someone asked about a serial it can't map to anything</td>
-          <td>the verifier learns asset + possession + still-owned</td>
+          <td><EyeOff size={16} style={{ verticalAlign: '-3px' }} /> an unmappable serial query</td>
+          <td><Check size={16} style={{ verticalAlign: '-3px' }} /> verifier: asset + possession + still-owned</td>
         </tr>
       </tbody>
     </table>
@@ -303,57 +380,52 @@ const SlideWhoLearns = () => (
 const SlideUnderHood = () => (
   <>
     <div className="headline d1">One equation does the checking.</div>
-    <p className="lede muted d2">
-      Optional depth — everything above stands without this slide.
-    </p>
-    <div className="math d2">
-      <MathTex
-        display
-        tex={"e(v',\\ g_2) = e(u',\\ X_2 + h\\cdot Y_{h2}) \\cdot e(U_s,\\ Y_{s2})"}
-      />
+    <div className="spotlight d2">
+      <div className="math big">
+        <MathTex
+          display
+          tex={"e(v',\\ g_2) = e(u',\\ X_2 + h\\cdot Y_{h2}) \\cdot e(U_s,\\ Y_{s2})"}
+        />
+      </div>
     </div>
     <p className="lede d3">
-      The mint's signature is a point on a pairing-friendly curve (BLS12-381);
-      this pairing balances exactly when the mint signed this asset for this
-      secret, and anyone can evaluate it with the mint's public parameters.
-      The same-asset and same-secret proofs are Chaum–Pedersen sigma proofs —{' '}
-      <strong>commit → challenge → respond → verify</strong> — and the mint's
-      secret attributes live only in the second curve group, so credentials
-      can't be rescaled to other assets.
+      Optional depth — everything above stands without this slide. It balances
+      exactly when the mint signed this asset for this secret; the proofs are
+      Chaum–Pedersen sigma protocols (commit → challenge → respond → verify).
     </p>
+    <div className="chart-wrap d3">
+      <WireSizeChart />
+      <p style={{ fontSize: '0.8rem', color: 'var(--muted)', textAlign: 'center', marginTop: 4 }}>
+        On the wire: serialized credential and presentation sizes (bytes)
+      </p>
+    </div>
   </>
 )
 
 const SlideWrap = () => (
   <>
     <div className="headline d1">Cash-grade privacy for unique assets.</div>
-    <div className="cols d2">
-      <div className="col">
-        <p className="lede">
-          Honestly: tokens are bearer instruments until swapped; freshness
-          answers come from the mint and are point-in-time — the same trust as
-          ecash <code>check_state</code>; the mint sees the asset at minting
-          time and learns timing; and showings of one ownership state share
-          one serial — linkable to each other, to nothing else.
-        </p>
-        <div className="callout purple d3" style={{ marginTop: 14 }}>
-          <strong>
-            Anyone can privately verify ownership; transfers are private even
-            from the mint.
-          </strong>{' '}
-          Code: <strong>cashu/core/crypto/ps.py</strong> +{' '}
-          <strong>cashu/nft/</strong>.
-        </div>
+    <div className="emblem-grid d2">
+      <div className="emblem">
+        <span className="icon-wrap">
+          <Magnifier size={24} />
+        </span>
+        <span className="big">Anyone can verify ownership — privately.</span>
       </div>
-      <div className="col">
-        <div className="chart-wrap d3">
-          <WireSizeChart />
-          <p style={{ fontSize: '0.8rem', color: 'var(--muted)', textAlign: 'center', marginTop: 8 }}>
-            On the wire: serialized credential and presentation sizes (bytes)
-          </p>
-        </div>
+      <div className="emblem">
+        <span className="icon-wrap">
+          <EyeOff size={24} />
+        </span>
+        <span className="big">Transfers are private even from the mint.</span>
       </div>
     </div>
+    <p className="footnote d3">
+      Honestly: tokens are bearer until swapped · freshness answers come from
+      the mint, point-in-time (same trust as ecash check_state) · the mint
+      sees the asset at minting and learns timing · showings of one ownership
+      state share one serial — linkable to each other, to nothing else.
+      Code: cashu/core/crypto/ps.py + cashu/nft/.
+    </p>
   </>
 )
 
@@ -390,7 +462,7 @@ function Nav({ cur, total, go, setCur }) {
   )
 }
 
-const WIDE = new Set([4, 7, 8, 9, 10, 12])
+const WIDE = new Set([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12])
 
 export default function App() {
   const [cur, setCur] = useState(0)
