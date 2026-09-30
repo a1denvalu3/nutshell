@@ -34,6 +34,7 @@ from ..core.crypto.bls import PublicKey
 from ..core.crypto.ps import (
     PS_BURN_BINDING,
     DlogEqProof,
+    LinearProof,
     MintPrivateKeyPS,
     MintPublicKeyPS,
     Presentation,
@@ -382,24 +383,27 @@ class PSLedger:
     async def transfer_private(
         self,
         pres: PrivatePresentation,
-        w_h: PublicKey,
-        proof: DlogEqProof,
+        B: PublicKey,
+        proof_eq: LinearProof,
         S_new: PublicKey,
         pok_new: DlogEqProof,
         conn: Optional[Connection] = None,
     ) -> Tuple[PublicKey, PublicKey]:
         """Atomically spend a hidden-h presentation and blindly re-issue
-        the same asset to S_new. The asset hash never reaches the mint, so
-        no asset row can be touched here; ownership is implicit in the
-        nullifier set — only an unspent nullifier can pass, and the burn
-        path spends the nullifier too, so a burned asset cannot transfer."""
+        the same asset to S_new. The asset hash never reaches the mint --
+        kappa_h and B are Pedersen commitments, so it cannot even be
+        enumerated -- so no asset row can be touched here; ownership is
+        implicit in the nullifier set: only an unspent nullifier can pass,
+        and the burn path spends the nullifier too, so a burned asset
+        cannot transfer. Returns (u2, v2_raw); the caller strips the
+        blinding term with unblind_issued."""
         if not verify_owner_secret(S_new, pok_new):
             raise InvalidProofError("invalid new owner secret proof")
         if pres.keyset_id and pres.keyset_id != self.keyset.keyset_id:
             raise InvalidProofError("unknown keyset")
         k2, u2 = blind_base_for_nullifier(self.mint_key, pres.nullifier.format())
         if not verify_blind_transfer(
-            self.keyset, pres, w_h, proof, u2, binding=S_new.format()
+            self.keyset, pres, B, proof_eq, u2, binding=S_new.format()
         ):
             raise InvalidProofError("invalid private transfer proof")
         async with self.db.get_connection(
@@ -417,4 +421,4 @@ class PSLedger:
                 """,
                 {"n": pres.nullifier.format(), "spent": self.db.timestamp_now_str()},
             )
-        return u2, issue_blind(self.mint_key, k2, u2, w_h, S_new)
+        return u2, issue_blind(self.mint_key, k2, u2, B, S_new)

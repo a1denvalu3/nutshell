@@ -92,7 +92,7 @@ def test_info(client):
     body = resp.json()
     assert len(body["keyset_id"]) == 66 and body["keyset_id"].startswith("03")
     assert body["payment_required"] is True
-    assert len(body["public_key"]) == 576
+    assert len(body["public_key"]) == 672
 
 
 def test_mint_and_verify_and_checkstate(client):

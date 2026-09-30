@@ -7,11 +7,14 @@ Experimental. A credential signs two attributes:
     s -- owner secret, never revealed to the mint, bound into the credential
          during issuance with a Diffie-Hellman trick.
 
-Mint secret key: (x, y_h, y_s). Public parameters live in G2 only:
-    X2 = g2^x, Y_h2 = g2^{y_h}, Y_s2 = g2^{y_s}
-Publishing the y values in G2 (never in G1) is what prevents the exponent
-rescaling forgery: moving a credential from h1 to h2 would require u^{y_h},
-which is exactly what the mint withholds.
+Mint secret key: (x, y_h, y_s). Public parameters live in G2, plus one G1
+point needed for blind re-issuance:
+    X2 = g2^x, Y_h2 = g2^{y_h}, Y_s2 = g2^{y_s}, Y_h1 = g1^{y_h}
+Publishing the y values in G2 is what prevents the exponent rescaling
+forgery: moving a credential from h1 to h2 would require u^{y_h}, which is
+exactly what the mint withholds. Y_h1 in G1 does not change that: g1^{y_h}
+does not yield u^{y_h} without solving CDH in G1 (a type-3 pairing gives
+no G1<->G2 homomorphism). y_s stays G2-only.
 
 Issuance (blind in s):
     user sends S = g1^s with a proof of knowledge of s
@@ -97,6 +100,24 @@ def _add_p1(a: PublicKey, b: PublicKey) -> PublicKey:
 
 def _neg_p1(a: PublicKey) -> PublicKey:
     return PublicKey(point=-a.point, group="G1")
+
+
+def _add_pk(a: PublicKey, b: PublicKey) -> PublicKey:
+    return PublicKey(point=a.point + b.point, group=a.group)
+
+
+def _neg_pk(a: PublicKey) -> PublicKey:
+    return PublicKey(point=-a.point, group=a.group)
+
+
+def _infinity(group: str) -> PublicKey:
+    point = pyblst.BlstP1Element() if group == "G1" else pyblst.BlstP2Element()
+    return PublicKey(point=point, group=group)
+
+
+# G2 generator as a PublicKey (bls.G2 is the raw pyblst element, used in
+# miller loops)
+G2_PK = PublicKey(point=G2, group="G2")
 
 
 def hash_asset(asset: bytes) -> int:
@@ -220,6 +241,122 @@ def verify_dlog_eq(
     return expected == proof.challenge
 
 
+# A linear statement: point == sum of base * witness[index] over terms.
+# Bases and the point must share a group, but different statements may use
+# different groups (G1 and G2 both have order r; the scalar math is shared).
+LinearStatement = Tuple[PublicKey, List[Tuple[PublicKey, int]]]
+
+
+@dataclass
+class LinearProof:
+    """Multi-witness sigma proof (Fiat-Shamir): knowledge of witnesses
+    w_0..w_{n-1} satisfying every statement simultaneously, proving the
+    SAME witness values across statements (e.g. one h in both a G2
+    commitment and a G1 commitment)."""
+
+    challenge: int
+    responses: List[int]
+
+    def to_bytes(self) -> bytes:
+        return _scalar_bytes(self.challenge) + b"".join(
+            _scalar_bytes(r) for r in self.responses
+        )
+
+    @classmethod
+    def from_bytes(cls, raw: bytes) -> "LinearProof":
+        if len(raw) < 64 or len(raw) % 32 != 0:
+            raise ValueError("LinearProof is 32 * (n + 1) bytes")
+        return cls(
+            challenge=_scalar_from_bytes(raw[:32]),
+            responses=[
+                _scalar_from_bytes(raw[i : i + 32]) for i in range(32, len(raw), 32)
+            ],
+        )
+
+
+def _linear_num_witnesses(statements: List[LinearStatement]) -> int:
+    n = 0
+    for _, terms in statements:
+        for _, witness_index in terms:
+            n = max(n, witness_index + 1)
+    return n
+
+
+def _linear_combine(terms: List[Tuple[PublicKey, int]], scalars: List[int]) -> PublicKey:
+    acc = _infinity(terms[0][0].group)
+    for base, i in terms:
+        acc = _add_pk(acc, base * scalars[i])
+    return acc
+
+
+def _linear_transcript(
+    dst: bytes,
+    binding: bytes,
+    statements: List[LinearStatement],
+    commitments: List[PublicKey],
+) -> bytes:
+    transcript = dst + len(binding).to_bytes(2, "big") + binding
+    for (point, terms), commitment in zip(statements, commitments):
+        for p in (point, commitment):
+            serialized = p.format()
+            transcript += len(serialized).to_bytes(2, "big") + serialized
+        for base, witness_index in terms:
+            serialized = base.format()
+            transcript += (
+                len(serialized).to_bytes(2, "big")
+                + serialized
+                + witness_index.to_bytes(2, "big")
+            )
+    return transcript
+
+
+def prove_linear(
+    statements: List[LinearStatement],
+    witnesses: List[int],
+    dst: bytes,
+    binding: bytes = b"",
+) -> LinearProof:
+    if not statements:
+        raise ValueError("need at least one statement")
+    if _linear_num_witnesses(statements) != len(witnesses):
+        raise ValueError("witness count does not match the statements")
+    if any(not 0 <= w < curve_order for w in witnesses):
+        raise ValueError("witnesses must be scalars")
+    nonces = [_random_scalar() for _ in witnesses]
+    commitments = [_linear_combine(terms, nonces) for _, terms in statements]
+    challenge = _challenge(_linear_transcript(dst, binding, statements, commitments))
+    responses = [
+        (nonce + challenge * w) % curve_order
+        for nonce, w in zip(nonces, witnesses)
+    ]
+    return LinearProof(challenge=challenge, responses=responses)
+
+
+def verify_linear(
+    statements: List[LinearStatement],
+    proof: LinearProof,
+    dst: bytes,
+    binding: bytes = b"",
+) -> bool:
+    if not statements:
+        return False
+    if len(proof.responses) != _linear_num_witnesses(statements):
+        return False
+    if not 0 <= proof.challenge < curve_order:
+        return False
+    if any(not 0 <= r < curve_order for r in proof.responses):
+        return False
+    commitments = [
+        _add_pk(
+            _linear_combine(terms, proof.responses),
+            _neg_pk(point * proof.challenge),
+        )
+        for point, terms in statements
+    ]
+    expected = _challenge(_linear_transcript(dst, binding, statements, commitments))
+    return expected == proof.challenge
+
+
 PS_KEY_DST = b"Cashu_PS_Key_v1"
 
 
@@ -269,28 +406,46 @@ class MintPrivateKeyPS:
             X2=self.x.get_g2_public_key(),
             Y_h2=self.y_h.get_g2_public_key(),
             Y_s2=self.y_s.get_g2_public_key(),
+            Y_h1=G1 * self.y_h.scalar,
         )
 
 
 class MintPublicKeyPS:
-    """Mint public parameters. The y values exist in G2 only, by construction."""
+    """Mint public parameters.
 
-    def __init__(self, X2: PublicKey, Y_h2: PublicKey, Y_s2: PublicKey):
+    Y_h1 = y_h * g1 lives in G1 so the owner can strip the re-issuance
+    correction term after a blind transfer (unblind_issued). Publishing it
+    does not weaken forgery resistance: moving a credential between assets
+    still requires u^{y_h}, and g1^{y_h} does not yield that without
+    solving CDH in G1 (a type-3 pairing gives no G1<->G2 homomorphism).
+    y_s remains G2-only. The other values exist in G2 only, by construction.
+    """
+
+    def __init__(
+        self, X2: PublicKey, Y_h2: PublicKey, Y_s2: PublicKey, Y_h1: PublicKey
+    ):
         self.X2 = X2
         self.Y_h2 = Y_h2
         self.Y_s2 = Y_s2
+        self.Y_h1 = Y_h1
 
     def to_bytes(self) -> bytes:
-        return self.X2.format() + self.Y_h2.format() + self.Y_s2.format()
+        return (
+            self.X2.format()
+            + self.Y_h2.format()
+            + self.Y_s2.format()
+            + self.Y_h1.format()
+        )
 
     @classmethod
     def from_bytes(cls, raw: bytes) -> "MintPublicKeyPS":
-        if len(raw) != 288:
-            raise ValueError("MintPublicKeyPS is 288 bytes")
+        if len(raw) != 336:
+            raise ValueError("MintPublicKeyPS is 336 bytes")
         return cls(
             X2=_g2_from_bytes(raw[:96]),
             Y_h2=_g2_from_bytes(raw[96:192]),
-            Y_s2=_g2_from_bytes(raw[192:]),
+            Y_s2=_g2_from_bytes(raw[192:288]),
+            Y_h1=_g1_from_bytes(raw[288:]),
         )
 
     @property
@@ -298,12 +453,15 @@ class MintPublicKeyPS:
         """Version-03 identifier of this parameter set, derived the same
         way as v3 ecash keysets: a full 32-byte SHA-256 hash behind a
         version byte, committing to a length-framed preimage of the three
-        G2 points (see keys.derive_keyset_id_psnft).
+        G2 points and the G1 point Y_h1 (see keys.derive_keyset_id_psnft).
 
         Credentials and presentations carry it so verifiers can select the
         right parameters across key rotations."""
         return derive_keyset_id_psnft(
-            self.X2.format(), self.Y_h2.format(), self.Y_s2.format()
+            self.X2.format(),
+            self.Y_h2.format(),
+            self.Y_s2.format(),
+            self.Y_h1.format(),
         )
 
 
@@ -521,24 +679,45 @@ def verify_presentation_keysets(
     return verify_presentation(keysets[pres.keyset_id], pres)
 
 
-# --- Hidden-h private transfers -------------------------------------------
+# --- Hidden-h private transfers (PS16/Coconut-style blinded aggregates) ----
 #
-# A private presentation never reveals the asset hash. Instead of checking
-# e(u', Y_h2^h) the verifier checks e(U_h, Y_h2) with the witness
-# U_h = h * u', and a Chaum-Pedersen proof ties h to that base. Re-issuance
-# is blind: the mint derives a fresh base u2 deterministically from the
-# nullifier, the owner shows W_h = h * u2 with a dlog-eq proof that the
-# same h sits in U_h and W_h, and the mint computes
-# v2 = u2^x * W_h^{y_h} * S_new^{k2 * y_s} without ever learning h.
+# A private presentation commits to the asset hash instead of revealing it:
 #
-# Privacy scope: h leaves the owner's wallet in no message. The mint still
+#     u'  = rho * u                        (randomized base, as before)
+#     v'' = rho * v + o * u'               (rerandomized MAC, blinded by o)
+#     kappa_h = h * Y_h2 + o * g2          (G2 Pedersen commitment to h)
+#     U_s = s * u', N = s * G_NULL, pi_s   (unchanged ownership proof)
+#
+# and the verifier checks
+#     e(v'', g2) == e(u', X2) * e(u', kappa_h) * e(U_s, Y_s2)
+# which closes because e(u', kappa_h) supplies exactly the rho*y_h*h + rho*o
+# terms of v''. kappa_h needs no proof of its own: every G2 point is a valid
+# commitment, the pairing binds it to the credential, and the transfer-time
+# equality proof below proves knowledge of its opening.
+#
+# Crucially this is NOT searchable: for any candidate h_i there exists a
+# consistent blinding o_i with kappa_h = h_i * Y_h2 + o_i * g2, so a mint
+# holding every minted h_i cannot enumerate the presentation. (The previous
+# U_h = h*u' construction failed this: U_h == h_i*u' was a one-pairing-free
+# test per candidate.)
+#
+# Re-issuance is blind:
+#     owner:  B = h * u2 + t * g1          (G1 Pedersen commitment to h)
+#             pi_eq: one multi-witness sigma proof with witnesses (h, o, t)
+#             showing the SAME h opens kappa_h (bases Y_h2, g2) and B
+#             (bases u2, g1)
+#     mint:   v2_raw = x*u2 + y_h*B + (k2*y_s)*S_new
+#                       = credential + t * y_h * g1
+#     owner:  v2 = v2_raw - t * Y_h1       (unblind_issued; needs Y_h1 in G1)
+#
+# Privacy scope: h leaves the owner's wallet only inside Pedersen
+# commitments, so the mint learns nothing about which asset moved --
+# enumeration is information-theoretically impossible. The mint still
 # learns *that* a transfer happened and sees the spent nullifier; since the
 # previous generation's nullifier is claimed on every transfer, the mint
-# can tell when a given credential generation dies. This is
-# honest-but-curious privacy for the asset id, not full KVAC anonymity.
+# can tell when a given credential generation dies.
 
-PS_PRIVATE_DST = b"Cashu_PS_Private_v1"
-PS_BLIND_DST = b"Cashu_PS_Blind_v1"
+PS_COMMIT_DST = b"Cashu_PS_CommitEq_v1"
 PS_K2_DST = b"Cashu_PS_TransferK2_v1"
 
 
@@ -568,14 +747,14 @@ def blind_base_for_nullifier(
 
 @dataclass
 class PrivatePresentation:
-    """A randomized credential presentation that keeps h hidden."""
+    """A randomized credential presentation that commits to h (kappa_h in
+    G2) instead of revealing it."""
 
     u: PublicKey
     v: PublicKey
-    u_h: PublicKey  # h * u
+    kappa_h: PublicKey  # G2: h * Y_h2 + o * g2
     u_s: PublicKey  # s * u
     nullifier: PublicKey  # N = G_NULL^s
-    proof_h: DlogEqProof
     proof_s: DlogEqProof
     keyset_id: str = ""
 
@@ -584,32 +763,36 @@ class PrivatePresentation:
             _keyset_id_to_bytes(self.keyset_id)
             + self.u.format()
             + self.v.format()
-            + self.u_h.format()
+            + self.kappa_h.format()
             + self.u_s.format()
             + self.nullifier.format()
-            + self.proof_h.to_bytes()
             + self.proof_s.to_bytes()
         )
 
     @classmethod
     def from_bytes(cls, raw: bytes) -> "PrivatePresentation":
-        if len(raw) != 401:
-            raise ValueError("PrivatePresentation is 401 bytes")
+        if len(raw) != 385:
+            raise ValueError("PrivatePresentation is 385 bytes")
         return cls(
             keyset_id=_keyset_id_from_bytes(raw[:33]),
             u=_g1_from_bytes(raw[33:81]),
             v=_g1_from_bytes(raw[81:129]),
-            u_h=_g1_from_bytes(raw[129:177]),
-            u_s=_g1_from_bytes(raw[177:225]),
-            nullifier=_g1_from_bytes(raw[225:273]),
-            proof_h=DlogEqProof.from_bytes(raw[273:337]),
-            proof_s=DlogEqProof.from_bytes(raw[337:]),
+            kappa_h=_g2_from_bytes(raw[129:225]),
+            u_s=_g1_from_bytes(raw[225:273]),
+            nullifier=_g1_from_bytes(raw[273:321]),
+            proof_s=DlogEqProof.from_bytes(raw[321:]),
         )
 
 
 def present_private(
-    cred: Credential, rho: Optional[int] = None, binding: bytes = b""
-) -> PrivatePresentation:
+    mint_public: MintPublicKeyPS,
+    cred: Credential,
+    rho: Optional[int] = None,
+    binding: bytes = b"",
+) -> Tuple[PrivatePresentation, int]:
+    """Randomize the credential into a hidden-h presentation. Returns
+    (presentation, o): the fresh blinding o is needed again at re-issuance
+    time (blind_transfer_commit), so the caller must keep it."""
     if not 0 < cred.h < curve_order:
         raise ValueError("h must be in Fr* for a private presentation")
     if not 0 < cred.s < curve_order:
@@ -617,22 +800,24 @@ def present_private(
     rho = rho or _random_scalar()
     if not 0 < rho < curve_order:
         raise ValueError("rho must be in Fr*")
+    o = _random_scalar()
     u_r = cred.u * rho
-    v_r = cred.v * rho
-    u_h = u_r * cred.h
+    v_rr = _add_p1(cred.v * rho, u_r * o)
+    kappa_h = _add_pk(mint_public.Y_h2 * cred.h, G2_PK * o)
     u_s = u_r * cred.s
     N = G_NULL * cred.s
-    proof_h = prove_dlog_eq([u_r], [u_h], cred.h, PS_PRIVATE_DST, binding)
     proof_s = prove_dlog_eq([G_NULL, u_r], [N, u_s], cred.s, PS_PRESENT_DST, binding)
-    return PrivatePresentation(
-        u=u_r,
-        v=v_r,
-        u_h=u_h,
-        u_s=u_s,
-        nullifier=N,
-        proof_h=proof_h,
-        proof_s=proof_s,
-        keyset_id=cred.keyset_id,
+    return (
+        PrivatePresentation(
+            u=u_r,
+            v=v_rr,
+            kappa_h=kappa_h,
+            u_s=u_s,
+            nullifier=N,
+            proof_s=proof_s,
+            keyset_id=cred.keyset_id,
+        ),
+        o,
     )
 
 
@@ -642,16 +827,12 @@ def verify_private_presentation(
     for p in (
         pres.u,
         pres.v,
-        pres.u_h,
+        pres.kappa_h,
         pres.u_s,
         pres.nullifier,
     ):
         if p.is_infinity():
             return False
-    if not verify_dlog_eq(
-        [pres.u], [pres.u_h], pres.proof_h, PS_PRIVATE_DST, binding
-    ):
-        return False
     if not verify_dlog_eq(
         [G_NULL, pres.u],
         [pres.nullifier, pres.u_s],
@@ -662,52 +843,93 @@ def verify_private_presentation(
         return False
     miller = pyblst.miller_loop(-pres.v.point, G2)
     miller = miller * pyblst.miller_loop(pres.u.point, mint_public.X2.point)
-    miller = miller * pyblst.miller_loop(pres.u_h.point, mint_public.Y_h2.point)
+    miller = miller * pyblst.miller_loop(pres.u.point, pres.kappa_h.point)
     miller = miller * pyblst.miller_loop(pres.u_s.point, mint_public.Y_s2.point)
     return pyblst.final_verify(miller, pyblst.BlstFP12Element())
 
 
-def blind_transfer_witness(
-    cred: Credential, u_r: PublicKey, u2: PublicKey, binding: bytes = b""
-) -> Tuple[PublicKey, DlogEqProof]:
-    """Owner side of blind re-issuance: W_h = h * u2 and a proof that the
-    same h sits in the presentation's U_h (base u') and W_h (base u2)."""
+def _commit_statements(
+    mint_public: MintPublicKeyPS, kappa_h: PublicKey, B: PublicKey, u2: PublicKey
+) -> List[LinearStatement]:
+    return [
+        (kappa_h, [(mint_public.Y_h2, 0), (G2_PK, 1)]),
+        (B, [(u2, 0), (G1, 2)]),
+    ]
+
+
+def blind_transfer_commit(
+    mint_public: MintPublicKeyPS,
+    h: int,
+    o: int,
+    kappa_h: PublicKey,
+    u2: PublicKey,
+    binding: bytes = b"",
+) -> Tuple[PublicKey, int, LinearProof]:
+    """Owner side of blind re-issuance: B = h * u2 + t * g1 plus one
+    multi-witness proof (pi_eq) that the same h opens both kappa_h and B.
+    Returns (B, t, proof); the owner keeps t to unblind the issued
+    credential (unblind_issued)."""
     if u2.is_infinity():
         raise ValueError("u2 must not be the point at infinity")
-    w_h = u2 * cred.h
-    proof = prove_dlog_eq([u_r, u2], [u_r * cred.h, w_h], cred.h, PS_BLIND_DST, binding)
-    return w_h, proof
+    if not 0 < h < curve_order:
+        raise ValueError("h must be in Fr*")
+    if not 0 < o < curve_order:
+        raise ValueError("o must be in Fr*")
+    t = _random_scalar()
+    B = _add_p1(u2 * h, G1 * t)
+    proof = prove_linear(
+        _commit_statements(mint_public, kappa_h, B, u2),
+        [h, o, t],
+        PS_COMMIT_DST,
+        binding,
+    )
+    return B, t, proof
 
 
 def verify_blind_transfer(
     mint_public: MintPublicKeyPS,
     pres: PrivatePresentation,
-    w_h: PublicKey,
-    proof: DlogEqProof,
+    B: PublicKey,
+    proof: LinearProof,
     u2: PublicKey,
     binding: bytes = b"",
 ) -> bool:
-    if u2.is_infinity() or w_h.is_infinity():
+    if u2.is_infinity() or B.is_infinity():
         return False
     if not verify_private_presentation(mint_public, pres, binding=binding):
         return False
-    return verify_dlog_eq([pres.u, u2], [pres.u_h, w_h], proof, PS_BLIND_DST, binding)
+    return verify_linear(
+        _commit_statements(mint_public, pres.kappa_h, B, u2),
+        proof,
+        PS_COMMIT_DST,
+        binding,
+    )
 
 
 def issue_blind(
-    mint_key: MintPrivateKeyPS, k2: int, u2: PublicKey, w_h: PublicKey, S_new: PublicKey
+    mint_key: MintPrivateKeyPS, k2: int, u2: PublicKey, B: PublicKey, S_new: PublicKey
 ) -> PublicKey:
-    """v2 = u2^{x + y_h * h + y_s * s_new}, computed without learning h:
-    u2^{y_h * h} = W_h^{y_h}."""
+    """v2_raw = x*u2 + y_h*B + (k2*y_s)*S_new, computed without learning h.
+    B commits to h * u2, so y_h * B contributes y_h * h * u2 (the credential
+    term) plus t * y_h * g1, which the owner strips with unblind_issued."""
     if not 0 < k2 < curve_order:
         raise ValueError("k2 must be in Fr*")
-    for p in (u2, w_h, S_new):
+    for p in (u2, B, S_new):
         if p.is_infinity():
             raise ValueError("points must not be the point at infinity")
     return _add_p1(
-        _add_p1(u2 * mint_key.x.scalar, w_h * mint_key.y_h.scalar),
+        _add_p1(u2 * mint_key.x.scalar, B * mint_key.y_h.scalar),
         S_new * ((k2 * mint_key.y_s.scalar) % curve_order),
     )
+
+
+def unblind_issued(
+    v2_raw: PublicKey, t: int, mint_public: MintPublicKeyPS
+) -> PublicKey:
+    """Owner side: strip the blinding term, v2 = v2_raw - t * Y_h1."""
+    if not 0 < t < curve_order:
+        raise ValueError("t must be in Fr*")
+    return _add_p1(v2_raw, _neg_p1(mint_public.Y_h1 * t))
 
 
 PS_BATCH_DST = b"Cashu_PS_Batch_v1"

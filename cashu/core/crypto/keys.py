@@ -315,13 +315,13 @@ def derive_keyset_id_v3(
     return keyset_id
 
 
-def derive_keyset_id_psnft(X2: bytes, Y_h2: bytes, Y_s2: bytes) -> str:
+def derive_keyset_id_psnft(X2: bytes, Y_h2: bytes, Y_s2: bytes, Y_h1: bytes) -> str:
     """Deterministic derivation of the PS-NFT keyset id (version 03).
 
     Follows the v3 convention: a length-framed preimage and a full
     32-byte SHA-256 hash behind a version byte. The PS parameter set is
-    exactly three G2 points; there is no amount map, unit, or fee to
-    commit to, so the preimage is the three framed points plus a scheme
+    three G2 points plus Y_h1 in G1; there is no amount map, unit, or fee
+    to commit to, so the preimage is the four framed points plus a scheme
     tag to domain-separate it from ecash keysets.
     """
 
@@ -331,5 +331,9 @@ def derive_keyset_id_psnft(X2: bytes, Y_h2: bytes, Y_s2: bytes) -> str:
     for point in (X2, Y_h2, Y_s2):
         if len(point) != 96:
             raise ValueError("PS-NFT public parameters are 96-byte G2 points")
-    preimage = framed(X2) + framed(Y_h2) + framed(Y_s2) + framed(b"psnft")
+    if len(Y_h1) != 48:
+        raise ValueError("PS-NFT Y_h1 is a 48-byte G1 point")
+    preimage = (
+        framed(X2) + framed(Y_h2) + framed(Y_s2) + framed(Y_h1) + framed(b"psnft")
+    )
     return "03" + hashlib.sha256(preimage).hexdigest()

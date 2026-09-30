@@ -24,12 +24,13 @@ from ..core.crypto.ps import (
     Credential,
     DlogEqProof,
     Presentation,
-    blind_transfer_witness,
+    blind_transfer_commit,
     hash_asset,
     present,
     present_private,
     present_showing,
     prove_owner_secret,
+    unblind_issued,
     verify_presentation,
     verify_showing,
 )
@@ -470,10 +471,12 @@ class NFTClient:
     def _transfer_private_cred(
         self, cred: Credential, new_owner_commitment: bytes, new_proof: bytes
     ) -> Tuple[PublicKey, PublicKey]:
-        """Hidden-h variant of the swap: the mint never sees the asset
-        hash. The blind witness proves the new credential binds the same
-        h as the presented one. Returns the blind-issued credential."""
-        pres = present_private(cred, binding=new_owner_commitment)
+        """Hidden-h variant of the swap: h reaches the mint only inside
+        Pedersen commitments (kappa_h in the presentation, B at
+        re-issuance), so the mint cannot learn or enumerate it. The mint's
+        v2_raw still carries the blinding term t * Y_h1; we strip it with
+        unblind_issued before returning the credential."""
+        pres, o = present_private(self.keyset, cred, binding=new_owner_commitment)
         begin = self._checked(
             self.http.post(
                 f"{NFT_API_PREFIX}/transfer/private/begin",
@@ -481,22 +484,23 @@ class NFTClient:
             )
         ).json()
         u2 = self._g1(begin["u"])
-        w_h, proof = blind_transfer_witness(
-            cred, pres.u, u2, binding=new_owner_commitment
+        B, t, proof = blind_transfer_commit(
+            self.keyset, cred.h, o, pres.kappa_h, u2, binding=new_owner_commitment
         )
         resp = self._checked(
             self.http.post(
                 f"{NFT_API_PREFIX}/transfer/private",
                 json={
                     "presentation": pres.to_bytes().hex(),
-                    "w_h": w_h.format().hex(),
+                    "b": B.format().hex(),
                     "proof": proof.to_bytes().hex(),
                     "new_owner_commitment": new_owner_commitment.hex(),
                     "new_proof": new_proof.hex(),
                 },
             )
         ).json()
-        return self._g1(resp["u"]), self._g1(resp["v"])
+        v2 = unblind_issued(self._g1(resp["v"]), t, self.keyset)
+        return self._g1(resp["u"]), v2
 
     def transfer_private(
         self, wallet: NFTWallet, h: int, new_owner_commitment: bytes, new_proof: bytes

@@ -18,6 +18,7 @@ from pydantic import BaseModel
 from ..core.crypto.bls import PublicKey, curve_order
 from ..core.crypto.ps import (
     DlogEqProof,
+    LinearProof,
     Presentation,
     PrivatePresentation,
     verify_presentation,
@@ -72,9 +73,9 @@ class CheckStateRequest(BaseModel):
 
 
 class PrivateTransferRequest(BaseModel):
-    presentation: str  # 401-byte PrivatePresentation, hex
-    w_h: str  # 48-byte compressed G1 point, hex
-    proof: str  # 64-byte DlogEqProof, hex
+    presentation: str  # 385-byte PrivatePresentation, hex
+    b: str  # 48-byte G1 Pedersen commitment B = h*u2 + t*g1, hex
+    proof: str  # 128-byte LinearProof (pi_eq over h, o, t), hex
     new_owner_commitment: str
     new_proof: str
 
@@ -105,6 +106,13 @@ def _parse_g1(raw: str) -> PublicKey:
 def _parse_proof(raw: str) -> DlogEqProof:
     try:
         return DlogEqProof.from_bytes(bytes.fromhex(raw))
+    except ValueError:
+        raise HTTPException(400, "invalid proof encoding")
+
+
+def _parse_linear_proof(raw: str) -> LinearProof:
+    try:
+        return LinearProof.from_bytes(bytes.fromhex(raw))
     except ValueError:
         raise HTTPException(400, "invalid proof encoding")
 
@@ -216,10 +224,10 @@ def create_router(ledger: PSLedger) -> APIRouter:
     @router.post("/transfer/private", response_model=IssueResponse)
     async def transfer_private(req: PrivateTransferRequest):
         try:
-            u2, v2 = await ledger.transfer_private(
+            u2, v2_raw = await ledger.transfer_private(
                 pres=PrivatePresentation.from_bytes(bytes.fromhex(req.presentation)),
-                w_h=_parse_g1(req.w_h),
-                proof=_parse_proof(req.proof),
+                B=_parse_g1(req.b),
+                proof_eq=_parse_linear_proof(req.proof),
                 S_new=_parse_g1(req.new_owner_commitment),
                 pok_new=_parse_proof(req.new_proof),
             )
@@ -227,8 +235,12 @@ def create_router(ledger: PSLedger) -> APIRouter:
             raise HTTPException(400, "invalid presentation encoding")
         except NFTError as e:
             raise _http_error(e)
+        # v2_raw still carries the owner's blinding term (t * Y_h1); the
+        # owner strips it client-side with unblind_issued
         return IssueResponse(
-            u=u2.format().hex(), v=v2.format().hex(), keyset_id=ledger.keyset.keyset_id
+            u=u2.format().hex(),
+            v=v2_raw.format().hex(),
+            keyset_id=ledger.keyset.keyset_id,
         )
 
     @router.post("/verify")
