@@ -238,7 +238,7 @@ details.fallback[open] summary { margin-bottom: 10px; }
 }
 
 /* --- asset cards ------------------------------------------------ */
-#assets { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
+#assets { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 10px; }
 .card {
   border: 1px solid var(--line);
   background: var(--panel-lite);
@@ -273,7 +273,7 @@ svg.ident { width: 96px; height: 96px; }
   color: var(--dim); font-size: 11px; margin-top: 3px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.card .card-foot { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
+.card .card-foot { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
 .empty-state {
   border: 1px dashed var(--line);
   padding: 34px 20px; text-align: center;
