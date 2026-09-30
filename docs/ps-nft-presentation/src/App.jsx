@@ -477,10 +477,12 @@ const SlideShowing = () => (
         <div className="step-num">1</div>
         <div className="step-body">
           <p>
-            <code>nft show &lt;h&gt; --context sale-to-bob</code> → blob{' '}
-            <MathTex tex={'\\{\\text{context},\\ \\text{presentation}\\}'} />{' '}
-            bound to the showing domain + context — mathematically
-            unspendable: the mint rejects it for transfer and burn.
+            <code>nft show &lt;h&gt; --context sale-to-bob</code> → prints a{' '}
+            <span className="mi">pshow1</span> token:{' '}
+            <code>"pshow1" + hex(context ‖ presentation)</code> — mirroring
+            the <span className="mi">psnft1</span> bearer tokens — bound to
+            the showing domain + context. Mathematically unspendable: the mint
+            rejects it for transfer and burn.
           </p>
         </div>
       </div>
@@ -488,7 +490,7 @@ const SlideShowing = () => (
         <div className="step-num">2</div>
         <div className="step-body">
           <p>
-            <code>nft inspect &lt;blob&gt;</code>, offline: pairing +{' '}
+            <code>nft inspect &lt;token&gt;</code>, offline: pairing +{' '}
             <MathTex tex={'\\pi'} /> → the mint signed this{' '}
             <MathTex tex={'h'} /> AND the publisher knows{' '}
             <MathTex tex={'s'} /> AND <MathTex tex={'N'} /> belongs to this
