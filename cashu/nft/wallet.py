@@ -43,6 +43,9 @@ WALLET_SECRET_DST = b"Cashu_PS_Wallet_v1"
 # bearer token prefix, cashu-style ("cashuA..." analog)
 TOKEN_PREFIX = "psnft1"
 
+# verify-only showing token prefix
+SHOW_TOKEN_PREFIX = "pshow1"
+
 
 def _derive_owner_secret(seed: bytes, index: int) -> int:
     s = 0
@@ -412,26 +415,47 @@ class NFTClient:
         ).json()
         return str(resp["status"])
 
-    def show(self, wallet: NFTWallet, h: int, context: bytes = b"") -> dict:
+    def show(self, wallet: NFTWallet, h: int, context: bytes = b"") -> str:
         """Publish a verify-only showing for an asset: a presentation whose
         proof is bound to a showing context, so it verifies offline but is
-        rejected by the mint's spend endpoints. The context travels next to
-        the presentation in the blob; it defaults to a fresh random nonce."""
+        rejected by the mint's spend endpoints. Returns a pshow1 token
+        carrying the context next to the presentation; the context defaults
+        to a fresh random nonce."""
         if not context:
             context = os.urandom(16)
         pres = present_showing(wallet.get_credential(h), context)
-        return {"context": context.hex(), "presentation": pres.to_bytes().hex()}
+        payload = len(context).to_bytes(2, "big") + context + pres.to_bytes()
+        return SHOW_TOKEN_PREFIX + payload.hex()
 
-    def verify_showing_blob(self, blob: dict) -> dict:
-        """Third-party check of a showing blob: offline signature/context
+    @staticmethod
+    def decode_showing(token: str) -> Tuple[bytes, Presentation]:
+        """Parse a pshow1 token into (context, presentation)."""
+        t = token.strip()
+        if t.startswith(SHOW_TOKEN_PREFIX):
+            t = t[len(SHOW_TOKEN_PREFIX) :]
+        else:
+            raise ValueError("invalid showing token")
+        try:
+            raw = bytes.fromhex(t)
+        except ValueError:
+            raise ValueError("invalid showing token")
+        if len(raw) < 2:
+            raise ValueError("invalid showing token")
+        context_len = int.from_bytes(raw[:2], "big")
+        context, presentation = raw[2 : 2 + context_len], raw[2 + context_len :]
+        if len(context) != context_len:
+            raise ValueError("invalid showing token")
+        try:
+            return context, Presentation.from_bytes(presentation)
+        except ValueError:
+            raise ValueError("invalid showing token")
+
+    def verify_showing_token(self, token: str) -> dict:
+        """Third-party check of a showing token: offline signature/context
         verification plus the mint's spent and status answers. The spent
         check is the ownership check -- only the current holder's nullifier
         is unspent."""
-        try:
-            context = bytes.fromhex(blob["context"])
-            pres = Presentation.from_bytes(bytes.fromhex(blob["presentation"]))
-        except (KeyError, ValueError):
-            raise ValueError("invalid showing blob")
+        context, pres = self.decode_showing(token)
         valid = pres.keyset_id in ("", self.keyset_id) and verify_showing(
             self.keyset, pres, context
         )

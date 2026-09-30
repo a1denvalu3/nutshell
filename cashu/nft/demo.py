@@ -246,12 +246,13 @@ class Demo:
     def show(self, wallet: str, mint_id: str, h: int, context: str) -> Dict[str, str]:
         client = self.client(mint_id)
         with self.lock, self.open_wallet(wallet) as w:
-            return client.show(w, h, context.encode() if context else b"")
+            token = client.show(w, h, context.encode() if context else b"")
+        return {"token": token}
 
-    def inspect(self, mint_id: str, blob: Dict[str, str]) -> Dict[str, Any]:
+    def inspect(self, mint_id: str, token: str) -> Dict[str, Any]:
         client = self.client(mint_id)
         try:
-            return client.verify_showing_blob(blob)  # type: ignore[no-any-return]
+            return client.verify_showing_token(token)  # type: ignore[no-any-return]
         except ValueError as e:
             raise HTTPException(400, str(e))
 
@@ -382,10 +383,9 @@ def create_demo_app(data_dir: str) -> FastAPI:
     @app.post("/api/inspect")
     async def post_inspect(request: Request):
         body = await request.json()
-        blob = body.get("blob")
-        if not isinstance(blob, dict):
-            raise HTTPException(400, "blob must be a showing object")
-        return await run_in_threadpool(demo.inspect, str(body.get("mint", "")), blob)
+        return await run_in_threadpool(
+            demo.inspect, str(body.get("mint", "")), str(body.get("token", ""))
+        )
 
     @app.post("/api/verify")
     async def post_verify(request: Request):

@@ -18,7 +18,7 @@ from cashu.core.crypto.ps import (
 from cashu.core.db import Database
 from cashu.nft.api import NFT_API_PREFIX, create_app
 from cashu.nft.ledger import PSLedger
-from cashu.nft.wallet import NFTClient, NFTWallet
+from cashu.nft.wallet import SHOW_TOKEN_PREFIX, NFTClient, NFTWallet
 
 
 @pytest.fixture(scope="function")
@@ -93,17 +93,22 @@ def test_transfer_presentation_bound_to_exact_new_owner(service, tmp_path):
     assert transfer_attempt(client, blob, 111).status_code == 200
 
 
-def test_showing_blob_inspection_and_burn_flow(service, tmp_path):
+def test_showing_token_inspection_and_burn_flow(service, tmp_path):
     client = service
     alice = NFTWallet(str(tmp_path / "alice.sqlite3"), seed=b"a" * 32)
     cred = client.mint(alice, b"nft bytes")
     h = cred.h
 
-    blob = client.show(alice, h, b"sale-context")
-    assert blob["context"] == b"sale-context".hex()
+    token = client.show(alice, h, b"sale-context")
+    assert token.startswith(SHOW_TOKEN_PREFIX)
 
-    # a third party inspects the blob: valid, unspent, active
-    result = client.verify_showing_blob(blob)
+    # roundtrip: the token decodes back to context + presentation
+    context, pres = NFTClient.decode_showing(token)
+    assert context == b"sale-context"
+    assert pres.h == h
+
+    # a third party inspects the token: valid, unspent, active
+    result = client.verify_showing_token(token)
     assert result == {
         "valid": True,
         "spent": False,
@@ -112,16 +117,40 @@ def test_showing_blob_inspection_and_burn_flow(service, tmp_path):
     }
 
     # a tampered context fails the offline check
-    tampered = dict(blob, context=b"evil-context".hex())
-    assert client.verify_showing_blob(tampered)["valid"] is False
+    evil = b"evil-context"
+    tampered = SHOW_TOKEN_PREFIX + (
+        len(evil).to_bytes(2, "big") + evil + pres.to_bytes()
+    ).hex()
+    assert client.verify_showing_token(tampered)["valid"] is False
 
     # the showing cannot burn; the wallet burn flow works
-    assert burn_attempt(client, blob["presentation"]).status_code == 403
+    assert burn_attempt(client, pres.to_bytes().hex()).status_code == 403
     client.burn(alice, h)
-    result = client.verify_showing_blob(blob)
+    result = client.verify_showing_token(token)
     assert result["valid"] is True  # signature and context still check out
     assert result["spent"] is True
     assert result["asset_status"] == "burned"
+
+
+def test_malformed_showing_tokens(service, tmp_path):
+    client = service
+    alice = NFTWallet(str(tmp_path / "alice.sqlite3"), seed=b"a" * 32)
+    cred = client.mint(alice, b"nft bytes")
+    token = client.show(alice, cred.h, b"ctx")
+    payload = token[len(SHOW_TOKEN_PREFIX) :]
+
+    for bad in (
+        "wrongprefix" + payload,  # bad prefix
+        SHOW_TOKEN_PREFIX + "zz",  # not hex
+        SHOW_TOKEN_PREFIX + payload[:10],  # truncated
+        SHOW_TOKEN_PREFIX + "ffff" + payload[4:],  # impossible context length
+        SHOW_TOKEN_PREFIX + payload[:-2],  # truncated presentation
+        "",  # empty
+    ):
+        with pytest.raises(ValueError, match="invalid showing token"):
+            NFTClient.decode_showing(bad)
+        with pytest.raises(ValueError, match="invalid showing token"):
+            client.verify_showing_token(bad)
 
 
 def test_showing_goes_stale_after_transfer(service, tmp_path):
@@ -129,12 +158,12 @@ def test_showing_goes_stale_after_transfer(service, tmp_path):
     alice = NFTWallet(str(tmp_path / "alice.sqlite3"), seed=b"a" * 32)
     client.mint(alice, b"nft bytes")
     h = hash_asset(b"nft bytes")
-    blob = client.show(alice, h)  # random context
-    assert client.verify_showing_blob(blob)["spent"] is False
+    token = client.show(alice, h)  # random context
+    assert client.verify_showing_token(token)["spent"] is False
 
     client.transfer_to_self(alice, h)
     # the old showing's nullifier is spent: the publisher no longer holds
-    result = client.verify_showing_blob(blob)
+    result = client.verify_showing_token(token)
     assert result["valid"] is True
     assert result["spent"] is True
     assert result["asset_status"] == "active"

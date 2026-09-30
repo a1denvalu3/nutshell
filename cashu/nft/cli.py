@@ -15,7 +15,7 @@ Typical flow (cashu-style, sending is offline):
     cashu nft receive <token>            # receiver: swap the token at the mint
     cashu nft verify <h>                 # offline verify + mint spent/status check
     cashu nft show <h>                   # publish a verify-only showing
-    cashu nft inspect <blob>             # third party: check a showing
+    cashu nft inspect <token>            # third party: check a showing
     cashu nft burn <h>                   # retire the asset
 
 The mint URL defaults to settings.mint_url (the same default as every
@@ -23,7 +23,6 @@ other cashu command); override with --mint-url or NFT_MINT_URL.
 """
 
 import functools
-import json
 import os
 import secrets
 from typing import Optional
@@ -294,22 +293,18 @@ def nft_show(ctx: click.Context, asset_hash: str, context: Optional[str]):
     client = _make_client(ctx.obj["NFT_MINT_URL"])
     wallet = _open_wallet(ctx.obj["NFT_WALLET_DB"])
     h = _resolve_h(wallet, asset_hash)
-    blob = client.show(wallet, h, context.encode() if context else b"")
+    token = client.show(wallet, h, context.encode() if context else b"")
     print("showing (verify-only, bound to context; cannot be spent):")
-    print(json.dumps(blob))
+    print(token)
 
 
-@nft.command("inspect", help="Third-party check of a showing blob.")
-@click.argument("blob_json", type=str)
+@nft.command("inspect", help="Third-party check of a showing token.")
+@click.argument("token", type=str)
 @click.pass_context
 @_cli_errors
-def nft_inspect(ctx: click.Context, blob_json: str):
+def nft_inspect(ctx: click.Context, token: str):
     client = _make_client(ctx.obj["NFT_MINT_URL"])
-    try:
-        blob = json.loads(blob_json)
-    except ValueError:
-        raise click.UsageError("blob must be the JSON printed by `cashu nft show`")
-    result = client.verify_showing_blob(blob)
+    result = client.verify_showing_token(token)
     print(f"asset hash:               {result['asset_hash']}")
     print(f"signature valid:          {result['valid']}")
     print(f"publisher knows the secret: {result['valid']}")

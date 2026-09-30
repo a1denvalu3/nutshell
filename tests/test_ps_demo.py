@@ -57,12 +57,12 @@ def test_full_flow(client):
     assets = client.get("/api/assets", params={"wallet": "bob", "mint": "local"})
     assert assets.json()[0]["asset_status"] == "active"
 
-    # bob publishes a showing; a third party inspects it
-    blob = client.post(
+    # bob publishes a showing token; a third party inspects it
+    token = client.post(
         "/api/show", json={"wallet": "bob", "mint": "local", "h": h, "context": "ctx-1"}
-    ).json()
-    assert set(blob.keys()) == {"context", "presentation"}
-    result = client.post("/api/inspect", json={"mint": "local", "blob": blob}).json()
+    ).json()["token"]
+    assert token.startswith("pshow1")
+    result = client.post("/api/inspect", json={"mint": "local", "token": token}).json()
     assert result == {
         "valid": True,
         "spent": False,
@@ -73,10 +73,15 @@ def test_full_flow(client):
     # bob burns; the showing now reports spent + burned
     resp = client.post("/api/burn", json={"wallet": "bob", "mint": "local", "h": h})
     assert resp.json() == {"status": "burned"}
-    result = client.post("/api/inspect", json={"mint": "local", "blob": blob}).json()
+    result = client.post("/api/inspect", json={"mint": "local", "token": token}).json()
     assert result["spent"] is True
     assert result["asset_status"] == "burned"
     assert client.get("/api/assets", params={"wallet": "bob", "mint": "local"}).json() == []
+
+
+def test_inspect_rejects_malformed_token(client):
+    resp = client.post("/api/inspect", json={"mint": "local", "token": "garbage"})
+    assert resp.status_code == 400
 
 
 def test_multipart_mint(client):
