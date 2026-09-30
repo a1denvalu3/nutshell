@@ -329,6 +329,7 @@ nav button:disabled { opacity: 0.2; cursor: default; }
   display: flex; flex-direction: column; align-items: center; gap: 10px;
 }
 .emblem .big { font-size: 1.05rem; font-weight: 700; letter-spacing: -0.01em; }
+.emblem .small { font-size: 0.78rem; color: var(--muted); line-height: 1.5; }
 .emblem .icon-wrap {
   width: 54px; height: 54px; border-radius: 50%;
   background: var(--purple-bg); color: var(--purple);

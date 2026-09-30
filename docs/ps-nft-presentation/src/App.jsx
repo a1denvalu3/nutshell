@@ -429,6 +429,10 @@ const SlideWrap = () => (
           <EyeOff size={24} />
         </span>
         <span className="big">Transfers are private even from the mint.</span>
+        <span className="small">
+          The asset rides in a Pedersen commitment — guessing can&apos;t
+          work, in principle, not just in practice.
+        </span>
       </div>
     </div>
     <p className="footnote d3">
