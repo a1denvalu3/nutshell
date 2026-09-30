@@ -523,6 +523,14 @@ class NFTClient:
         wallet.delete_asset(h)
         return TOKEN_PREFIX + cred.to_bytes().hex()
 
+    def export_token(self, wallet: NFTWallet, h: int) -> str:
+        """The psnft1 bearer token WITHOUT deleting the asset from the
+        wallet (unlike send_token). Anyone holding the exported token can
+        spend the NFT; the exporter keeps full control until someone swaps
+        it."""
+        cred = wallet.get_credential(h)
+        return TOKEN_PREFIX + cred.to_bytes().hex()
+
     @staticmethod
     def decode_token(token: str) -> Credential:
         t = token.strip()

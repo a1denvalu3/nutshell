@@ -199,8 +199,8 @@ button.busy::after {
 }
 @keyframes spin { to { transform: rotate(360deg); } }
 
-/* --- drop zone ------------------------------------------------- */
-#drop-zone {
+/* --- drop zones ------------------------------------------------ */
+.drop-zone {
   border: 1px dashed var(--line-bright);
   padding: 18px 14px;
   text-align: center;
@@ -210,13 +210,37 @@ button.busy::after {
   cursor: pointer;
   transition: border-color .15s, background .15s, color .15s;
 }
-#drop-zone:hover { border-color: var(--amber-dim); color: var(--text); }
-#drop-zone.drag {
+.drop-zone:hover { border-color: var(--amber-dim); color: var(--text); }
+.drop-zone.drag {
   border-color: var(--amber);
   background: rgba(245,166,35,.06);
   color: var(--amber);
 }
-#drop-zone .file-name { color: var(--green); }
+.drop-zone .file-name { color: var(--green); }
+
+/* --- embedded-token download choices ------------------------------ */
+.dl-choices {
+  margin-top: 8px;
+  border-top: 1px dotted var(--line);
+  padding-top: 8px;
+  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
+}
+.dl-warn {
+  flex-basis: 100%;
+  color: var(--red);
+  font-size: 10px; letter-spacing: .08em;
+}
+#bearer-warning {
+  display: none;
+  border: 1px solid var(--red);
+  color: var(--red);
+  padding: 10px 12px;
+  margin-top: 12px;
+  font-size: 11px; letter-spacing: .06em;
+  word-break: break-all;
+}
+#bearer-warning .hash { color: #e5b0a8; cursor: pointer; }
+#inspect-msg { display: none; margin-top: 12px; color: var(--dim); font-size: 11px; letter-spacing: .1em; }
 
 /* --- asset cards ------------------------------------------------ */
 #assets { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
@@ -395,7 +419,7 @@ table.result td.k { color: var(--dim); width: 55%; font-size: 10px; letter-spaci
       </div>
       <div class="field">
         <label class="micro">or drop a file</label>
-        <div id="drop-zone">
+        <div id="drop-zone" class="drop-zone">
           <span id="drop-label">drop file here · or click to browse</span>
           <input type="file" id="mint-file" style="display:none">
         </div>
@@ -476,11 +500,24 @@ table.result td.k { color: var(--dim); width: 55%; font-size: 10px; letter-spaci
     <section>
       <div class="sec-title"><span class="idx">06</span>inspect · third party</div>
       <div class="field">
-        <label class="micro">showing token</label>
+        <label class="micro">drop an image with an embedded token</label>
+        <div id="inspect-drop" class="drop-zone">
+          <span id="inspect-drop-label">drop image here · or click to browse</span>
+          <input type="file" id="inspect-file" style="display:none" accept="image/*">
+        </div>
+      </div>
+      <div class="field">
+        <label class="micro">or paste a showing token</label>
         <textarea id="inspect-token" rows="3" placeholder="pshow1..."></textarea>
       </div>
       <div class="row">
         <span class="shrink"><button id="btn-inspect" class="primary">inspect</button></span>
+      </div>
+      <div id="inspect-msg"></div>
+      <div id="bearer-warning">
+        ⚠ this file carries spendable ownership — anyone holding it can move the asset<br>
+        <span class="micro">asset hash</span> <span class="hash" id="bw-hash"></span>
+        · <span class="micro">nullifier spent</span> <span id="bw-spent"></span>
       </div>
       <table class="result" id="inspect-result" style="display:none">
         <tr><td class="k">asset hash</td><td id="ir-hash"></td></tr>
@@ -879,6 +916,8 @@ async function refreshAssets() {
     const iconHtml = a.has_image
       ? `<img class="ident thumb" src="/api/content/${a.h}" loading="lazy" alt="">`
       : identicon(a.h);
+    const dlBtn = a.has_image
+      ? `<button class="mini" data-act="download">download</button>` : "";
     card.innerHTML = `
       ${iconHtml}
       <div class="card-body">
@@ -889,7 +928,14 @@ async function refreshAssets() {
           <span style="flex:1"></span>
           <button class="mini" data-act="send">send</button>
           <button class="mini" data-act="show">show</button>
+          ${dlBtn}
           <button class="mini danger" data-act="burn">burn</button>
+        </div>
+        <div class="dl-choices" style="display:none">
+          <span class="micro">embed token:</span>
+          <button class="mini" data-dl="showing">proof · verify-only</button>
+          <button class="mini danger" data-dl="bearer">bearer · spendable</button>
+          <div class="dl-warn">⚠ bearer: anyone holding the downloaded file can spend this nft</div>
         </div>
       </div>`;
     const img = card.querySelector("img.thumb");
@@ -902,14 +948,17 @@ async function refreshAssets() {
     hashEl.textContent = a.h.slice(0, 12) + "…" + a.h.slice(-6);
     hashEl.addEventListener("click", () => copyText(a.h, "asset hash"));
     card.querySelector(".desc").textContent = a.description || "";
-    card.querySelectorAll("button").forEach((btn) => {
-      btn.addEventListener("click", () => assetAction(btn.dataset.act, a, btn));
+    card.querySelectorAll("button[data-act]").forEach((btn) => {
+      btn.addEventListener("click", () => assetAction(btn.dataset.act, a, btn, card));
+    });
+    card.querySelectorAll("button[data-dl]").forEach((btn) => {
+      btn.addEventListener("click", () => downloadEmbedded(a, btn.dataset.dl, btn));
     });
     box.appendChild(card);
   }
 }
 
-async function assetAction(act, a, btn) {
+async function assetAction(act, a, btn, card) {
   const base = { wallet: state.wallet, mint: state.mint, h: a.h };
   try {
     if (act === "send") {
@@ -925,6 +974,9 @@ async function assetAction(act, a, btn) {
       });
       $("show-out").textContent = r.token;
       log(`showing published for ${a.h.slice(0, 12)}… (verify-only)`, "ok");
+    } else if (act === "download") {
+      const choices = card.querySelector(".dl-choices");
+      choices.style.display = choices.style.display === "none" ? "" : "none";
     } else if (act === "burn") {
       if (!confirm(`burn ${a.h.slice(0, 18)}… ? this retires the asset`)) return;
       await api("/api/burn", { method: "POST", body: base, btn });
@@ -932,6 +984,44 @@ async function assetAction(act, a, btn) {
       refreshAssets();
     }
   } catch (e) { /* logged */ }
+}
+
+async function downloadEmbedded(a, kind, btn) {
+  setBusy(btn, true);
+  let resp;
+  try {
+    resp = await fetch("/api/embed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ wallet: state.wallet, mint: state.mint, h: a.h, kind }),
+    });
+  } catch (e) {
+    setBusy(btn, false);
+    log(`network error: ${e.message}`, "err");
+    return;
+  }
+  setBusy(btn, false);
+  if (!resp.ok) {
+    let detail = `HTTP ${resp.status}`;
+    try { detail = (await resp.json()).detail || detail; } catch (e) { /* no body */ }
+    log(`embed -> ${detail}`, "err");
+    return;
+  }
+  const blob = await resp.blob();
+  const cd = resp.headers.get("content-disposition") || "";
+  const m = cd.match(/filename="([^"]+)"/);
+  const fname = m ? m[1] : `nft-${a.h.slice(0, 8)}.img`;
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fname;
+  link.click();
+  URL.revokeObjectURL(url);
+  if (kind === "bearer") {
+    log(`downloaded ${fname} — bearer token inside, the file itself spends the nft`, "err");
+  } else {
+    log(`downloaded ${fname} — verify-only proof embedded`, "ok");
+  }
 }
 
 /* --- receive ------------------------------------------------------------------------ */
@@ -957,28 +1047,79 @@ $("btn-receive").addEventListener("click", async () => {
 });
 
 /* --- inspect -------------------------------------------------------------------------- */
+function showInspectResult(r) {
+  $("bearer-warning").style.display = "none";
+  $("inspect-msg").style.display = "none";
+  $("inspect-result").style.display = "";
+  $("ir-hash").textContent = r.asset_hash.slice(0, 24) + "…";
+  $("ir-hash").title = r.asset_hash;
+  $("ir-hash").style.cursor = "pointer";
+  $("ir-hash").onclick = () => copyText(r.asset_hash, "asset hash");
+  setBool("ir-valid", r.valid);
+  setBool("ir-secret", r.valid);
+  setBool("ir-spent", r.spent);
+  $("ir-status").textContent = r.asset_status;
+  $("ir-status").className = r.asset_status === "active" ? "v-true" : r.asset_status === "burned" ? "v-false" : "";
+}
+
 $("btn-inspect").addEventListener("click", async () => {
   const token = $("inspect-token").value.trim();
-  if (!token) { log("paste a showing token first", "err"); return; }
+  if (!token) { log("paste a showing token or drop an image first", "err"); return; }
   try {
     const r = await api("/api/inspect", {
       method: "POST",
       body: { mint: state.mint, token },
       btn: $("btn-inspect"),
     });
-    $("inspect-result").style.display = "";
-    $("ir-hash").textContent = r.asset_hash.slice(0, 24) + "…";
-    $("ir-hash").title = r.asset_hash;
-    $("ir-hash").style.cursor = "pointer";
-    $("ir-hash").onclick = () => copyText(r.asset_hash, "asset hash");
-    setBool("ir-valid", r.valid);
-    setBool("ir-secret", r.valid);
-    setBool("ir-spent", r.spent);
-    $("ir-status").textContent = r.asset_status;
-    $("ir-status").className = r.asset_status === "active" ? "v-true" : r.asset_status === "burned" ? "v-false" : "";
+    showInspectResult(r);
     log(`inspect: valid=${r.valid} spent=${r.spent} status=${r.asset_status}`, r.valid ? "ok" : "err");
   } catch (e) { /* logged */ }
 });
+
+const inspectDrop = $("inspect-drop");
+inspectDrop.addEventListener("click", () => $("inspect-file").click());
+inspectDrop.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  inspectDrop.classList.add("drag");
+});
+inspectDrop.addEventListener("dragleave", () => inspectDrop.classList.remove("drag"));
+inspectDrop.addEventListener("drop", (e) => {
+  e.preventDefault();
+  inspectDrop.classList.remove("drag");
+  if (e.dataTransfer.files.length) extractFromFile(e.dataTransfer.files[0]);
+});
+$("inspect-file").addEventListener("change", () => {
+  if ($("inspect-file").files.length) extractFromFile($("inspect-file").files[0]);
+});
+
+async function extractFromFile(file) {
+  $("inspect-drop-label").textContent = `file: ${file.name} (${file.size} B)`;
+  const form = new FormData();
+  form.append("mint", state.mint);
+  form.append("file", file);
+  try {
+    const r = await api("/api/extract", { method: "POST", form });
+    $("inspect-result").style.display = "none";
+    if (!r.found) {
+      $("bearer-warning").style.display = "none";
+      $("inspect-msg").style.display = "";
+      $("inspect-msg").textContent = "no token embedded in this file";
+      log(`extract: ${file.name} — no token embedded`, "info");
+    } else if (r.kind === "showing") {
+      showInspectResult(r.result);
+      const res = r.result;
+      log(`extract: ${file.name} carries a showing — valid=${res.valid} spent=${res.spent}`, res.valid ? "ok" : "err");
+    } else {
+      $("inspect-msg").style.display = "none";
+      $("bearer-warning").style.display = "";
+      $("bw-hash").textContent = r.asset_hash.slice(0, 18) + "…";
+      $("bw-hash").title = r.asset_hash;
+      $("bw-hash").onclick = () => copyText(r.asset_hash, "asset hash");
+      setBool("bw-spent", r.spent);
+      log(`extract: ${file.name} carries a SPENDABLE bearer token — handle with care`, "err");
+    }
+  } catch (e) { /* logged */ }
+}
 
 function setBool(id, v) {
   const el = $(id);

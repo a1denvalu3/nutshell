@@ -31,11 +31,12 @@ from starlette.datastructures import UploadFile
 from starlette.testclient import TestClient
 
 from ..core.crypto.bls import curve_order
-from ..core.crypto.ps import MintPrivateKeyPS
+from ..core.crypto.ps import MintPrivateKeyPS, present
 from ..core.db import Database
 from .api import create_app, create_router
+from .imgmeta import embed_token, extract_token
 from .ledger import PSLedger
-from .wallet import NFTClient, NFTWallet
+from .wallet import SHOW_TOKEN_PREFIX, TOKEN_PREFIX, NFTClient, NFTWallet
 
 LOCAL_MINT_ID = "local"
 WALLETS = ["alice", "bob"]
@@ -264,6 +265,77 @@ class Demo:
             raise HTTPException(404, "stored content is not an image")
         return data, media_type
 
+    def embed(
+        self, wallet: str, mint_id: str, h: int, kind: str
+    ) -> Tuple[bytes, str, str]:
+        """The stored image with an NFT token embedded in its metadata.
+        Returns (bytes, media_type, download filename)."""
+        if kind not in ("showing", "bearer"):
+            raise HTTPException(400, "kind must be 'showing' or 'bearer'")
+        client = self.client(mint_id)
+        path = os.path.join(self.content_dir, f"{h:064x}")
+        if not os.path.exists(path):
+            raise HTTPException(404, "no content stored for this asset")
+        with open(path, "rb") as f:
+            data = f.read()
+        with self.lock, self.open_wallet(wallet) as w:
+            if kind == "showing":
+                token = client.show(w, h)
+            else:
+                token = client.export_token(w, h)
+            description = next((a.description for a in w.assets() if a.h == h), "")
+        try:
+            embedded = embed_token(data, token)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        media_type = _sniff_image(embedded[:4096])
+        if media_type not in ("image/jpeg", "image/png"):
+            raise HTTPException(400, "stored content is not a JPEG or PNG image")
+        return embedded, media_type, self._download_name(description, media_type, kind)
+
+    @staticmethod
+    def _download_name(description: str, media_type: str, kind: str) -> str:
+        base = "".join(
+            c if c.isalnum() or c in "-_" else "-" for c in description.strip()
+        )[:40].strip("-")
+        if not base:
+            base = "asset"
+        ext = ".jpg" if media_type == "image/jpeg" else ".png"
+        suffix = "proof" if kind == "showing" else "bearer"
+        return f"{base}-{suffix}{ext}"
+
+    def extract(self, mint_id: str, data: bytes) -> Dict[str, Any]:
+        """Pull an embedded token out of an uploaded image and report what
+        it proves: a showing gets the full inspection, a bearer token gets
+        the asset hash and its spent state."""
+        client = self.client(mint_id)
+        try:
+            token = extract_token(data)
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        if token is None:
+            return {"found": False}
+        if token.startswith(SHOW_TOKEN_PREFIX):
+            try:
+                result = client.verify_showing_token(token)
+            except ValueError:
+                return {"found": False}
+            return {"found": True, "kind": "showing", "result": result}
+        if token.startswith(TOKEN_PREFIX):
+            try:
+                cred = NFTClient.decode_token(token)
+            except ValueError:
+                return {"found": False}
+            pres = present(cred)
+            spent = client.check_state(pres.nullifier.format()) == "SPENT"
+            return {
+                "found": True,
+                "kind": "bearer",
+                "asset_hash": cred.h.to_bytes(32, "big").hex(),
+                "spent": spent,
+            }
+        return {"found": False}
+
     def quote(self, mint_id: str, asset: bytes) -> Dict[str, Any]:
         client = self.client(mint_id)
         if not client.payment_required:
@@ -379,6 +451,37 @@ def create_demo_app(data_dir: str) -> FastAPI:
             # content-addressed: the bytes behind an h never change
             headers={"Cache-Control": "public, max-age=31536000, immutable"},
         )
+
+    @app.post("/api/embed")
+    async def post_embed(request: Request):
+        body = await request.json()
+        embedded, media_type, filename = await run_in_threadpool(
+            demo.embed,
+            str(body.get("wallet", "")),
+            str(body.get("mint", "")),
+            Demo.parse_h(str(body.get("h", ""))),
+            str(body.get("kind", "")),
+        )
+        return Response(
+            content=embedded,
+            media_type=media_type,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                # embedded tokens (bearer ones especially) must not be cached
+                "Cache-Control": "no-store",
+            },
+        )
+
+    @app.post("/api/extract")
+    async def post_extract(request: Request):
+        form = await request.form()
+        file = form.get("file")
+        if not isinstance(file, UploadFile) or not file.filename:
+            raise HTTPException(400, "upload an image file")
+        data = await file.read()
+        mint = form.get("mint")
+        mint_id = mint if isinstance(mint, str) and mint else LOCAL_MINT_ID
+        return await run_in_threadpool(demo.extract, mint_id, data)
 
     @app.post("/api/mint")
     async def post_mint(request: Request):

@@ -2,6 +2,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from cashu.nft.demo import create_demo_app
+from cashu.nft.imgmeta import extract_token
 
 # minimal valid PNG (1x1) with correct magic bytes
 PNG_BYTES = (
@@ -143,6 +144,101 @@ def test_image_content_served_and_shared(client):
 def test_content_unknown_hash_404(client):
     h = "00" * 32
     assert client.get(f"/api/content/{h}").status_code == 404
+
+
+def mint_png(client, wallet: str = "alice") -> str:
+    resp = client.post(
+        "/api/mint",
+        data={"wallet": wallet, "mint": "local", "description": "pix"},
+        files={"file": ("pix.png", PNG_BYTES, "image/png")},
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["h"]
+
+
+def test_embed_showing_and_extract(client):
+    h = mint_png(client)
+    resp = client.post(
+        "/api/embed",
+        json={"wallet": "alice", "mint": "local", "h": h, "kind": "showing"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert resp.headers["content-type"] == "image/png"
+    assert "pix-proof.png" in resp.headers["content-disposition"]
+    # the token is in the metadata, not the pixels; file still a valid PNG
+    embedded = resp.content
+    token = extract_token(embedded)
+    assert token is not None and token.startswith("pshow1")
+
+    resp = client.post(
+        "/api/extract", files={"file": ("pix.png", embedded, "image/png")}
+    )
+    body = resp.json()
+    assert body["found"] is True
+    assert body["kind"] == "showing"
+    assert body["result"] == {
+        "valid": True,
+        "spent": False,
+        "asset_status": "active",
+        "asset_hash": h,
+    }
+
+
+def test_embed_bearer_and_extract(client):
+    h = mint_png(client)
+    resp = client.post(
+        "/api/embed",
+        json={"wallet": "alice", "mint": "local", "h": h, "kind": "bearer"},
+    )
+    assert resp.status_code == 200, resp.text
+    assert "pix-bearer.png" in resp.headers["content-disposition"]
+    token = extract_token(resp.content)
+    assert token is not None and token.startswith("psnft1")
+    # bearer export does not remove the asset from the wallet
+    assets = client.get("/api/assets", params={"wallet": "alice", "mint": "local"})
+    assert [a["h"] for a in assets.json()] == [h]
+
+    resp = client.post(
+        "/api/extract", files={"file": ("pix.png", resp.content, "image/png")}
+    )
+    body = resp.json()
+    assert body["found"] is True
+    assert body["kind"] == "bearer"
+    assert body["asset_hash"] == h
+    assert body["spent"] is False
+
+
+def test_embed_and_extract_errors(client):
+    # unknown content hash
+    resp = client.post(
+        "/api/embed",
+        json={"wallet": "alice", "mint": "local", "h": "00" * 32, "kind": "showing"},
+    )
+    assert resp.status_code == 404
+
+    # stored but not JPEG/PNG (JSON text mint)
+    resp = client.post(
+        "/api/mint",
+        json={"wallet": "alice", "mint": "local", "description": "t", "text": "plain"},
+    )
+    h_text = resp.json()["h"]
+    resp = client.post(
+        "/api/embed",
+        json={"wallet": "alice", "mint": "local", "h": h_text, "kind": "showing"},
+    )
+    assert resp.status_code == 400
+
+    # extract from a non-image
+    resp = client.post(
+        "/api/extract", files={"file": ("a.txt", b"hello", "text/plain")}
+    )
+    assert resp.status_code == 400
+
+    # clean image without a token
+    resp = client.post(
+        "/api/extract", files={"file": ("pix.png", PNG_BYTES, "image/png")}
+    )
+    assert resp.json() == {"found": False}
 
 
 def test_quote_on_free_mint(client):
