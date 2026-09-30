@@ -19,7 +19,6 @@
   --amber: #9a6206;
   --amber-strong: #b07208;
   --amber-btn: #e2a62c;
-  --amber-dim: #b07208;
   --green: #1e7a4e;
   --red: #b2382f;
   --mono: "IBM Plex Mono", ui-monospace, monospace;
@@ -100,22 +99,10 @@ header {
   font-size: 10px; letter-spacing: .22em; text-transform: uppercase;
   color: var(--dim);
 }
-
-/* --- wallet tabs -------------------------------------------- */
-.tabs {
-  display: flex;
-  border-bottom: 1px solid var(--line);
-  padding: 0 24px;
+.explain {
+  font-size: 11px; color: var(--dim); letter-spacing: .06em;
+  margin: -8px 0 14px;
 }
-.tab {
-  background: none; border: none; color: var(--dim);
-  padding: 11px 24px; cursor: pointer;
-  font-size: 12px; letter-spacing: .18em; text-transform: uppercase;
-  border-bottom: 2px solid transparent;
-  transition: color .15s;
-}
-.tab:hover { color: var(--text); }
-.tab.active { color: var(--amber); border-bottom-color: var(--amber); }
 
 /* --- layout -------------------------------------------------- */
 main {
@@ -139,8 +126,6 @@ section:nth-child(1) { animation-delay: .05s; }
 section:nth-child(2) { animation-delay: .12s; }
 section:nth-child(3) { animation-delay: .19s; }
 section:nth-child(4) { animation-delay: .26s; }
-section:nth-child(5) { animation-delay: .33s; }
-section:nth-child(6) { animation-delay: .40s; }
 @keyframes rise {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -216,7 +201,7 @@ button.busy::after {
 /* --- drop zones ------------------------------------------------ */
 .drop-zone {
   border: 1px dashed var(--line-bright);
-  padding: 18px 14px;
+  padding: 22px 14px;
   text-align: center;
   color: var(--dim);
   font-size: 11px;
@@ -232,43 +217,40 @@ button.busy::after {
 }
 .drop-zone .file-name { color: var(--green); }
 
-/* --- embedded-token download choices ------------------------------ */
-.dl-choices {
+/* --- paste fallbacks ---------------------------------------------- */
+details.fallback { margin-top: 10px; }
+details.fallback summary {
+  cursor: pointer;
+  font-size: 10px; letter-spacing: .2em; text-transform: uppercase;
+  color: var(--dim);
+}
+details.fallback summary:hover { color: var(--amber); }
+details.fallback[open] summary { margin-bottom: 10px; }
+
+/* --- bearer send confirm ------------------------------------------- */
+.send-confirm {
   margin-top: 8px;
-  border-top: 1px dotted var(--line);
-  padding-top: 8px;
-  display: flex; gap: 6px; align-items: center; flex-wrap: wrap;
-}
-.dl-warn {
-  flex-basis: 100%;
-  color: var(--red);
-  font-size: 10px; letter-spacing: .08em;
-}
-#bearer-warning {
-  display: none;
   border: 1px solid var(--red);
+  padding: 8px 10px;
+  display: flex; gap: 8px; align-items: center; flex-wrap: wrap;
+  font-size: 10px; letter-spacing: .06em;
   color: var(--red);
-  padding: 10px 12px;
-  margin-top: 12px;
-  font-size: 11px; letter-spacing: .06em;
-  word-break: break-all;
 }
-#bearer-warning .hash { color: #8c2c25; cursor: pointer; }
-#inspect-msg { display: none; margin-top: 12px; color: var(--dim); font-size: 11px; letter-spacing: .1em; }
 
 /* --- asset cards ------------------------------------------------ */
-#assets { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+#assets { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 10px; }
 .card {
   border: 1px solid var(--line);
   background: var(--panel-lite);
   padding: 12px;
-  display: flex; gap: 12px; align-items: flex-start;
+  display: flex; gap: 14px; align-items: flex-start;
   transition: border-color .15s, box-shadow .15s;
 }
 .card:hover { border-color: var(--line-bright); box-shadow: 0 2px 14px rgba(60,52,32,.08); }
 /* --- identicon / thumbnails ------------------------------------------- */
 .card .ident { flex: 0 0 auto; border: 1px solid var(--line); background: #efece2; display: block; }
-img.thumb { width: 44px; height: 44px; object-fit: cover; cursor: zoom-in; }
+img.thumb { width: 96px; height: 96px; object-fit: cover; cursor: zoom-in; }
+svg.ident { width: 96px; height: 96px; }
 #overlay {
   display: none;
   position: fixed; inset: 0; z-index: 1100;
@@ -291,7 +273,7 @@ img.thumb { width: 44px; height: 44px; object-fit: cover; cursor: zoom-in; }
   color: var(--dim); font-size: 11px; margin-top: 3px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
-.card .card-foot { display: flex; align-items: center; gap: 6px; margin-top: 9px; }
+.card .card-foot { display: flex; align-items: center; gap: 6px; margin-top: 10px; }
 .empty-state {
   border: 1px dashed var(--line);
   padding: 34px 20px; text-align: center;
@@ -307,7 +289,9 @@ img.thumb { width: 44px; height: 44px; object-fit: cover; cursor: zoom-in; }
 .badge.burned  { color: var(--red);   border-color: rgba(178,56,47,.45); }
 .badge.unknown { color: var(--dim);   border-color: var(--line); }
 
-/* --- outputs ------------------------------------------------- */
+/* --- quote box ----------------------------------------------- */
+#quote-box { display: none; margin-top: 12px; }
+#quote-box.show { display: block; }
 .out-frame { border: 1px solid var(--line); background: #f2eee1; }
 .out-head {
   display: flex; justify-content: space-between; align-items: center;
@@ -323,11 +307,6 @@ img.thumb { width: 44px; height: 44px; object-fit: cover; cursor: zoom-in; }
   white-space: pre-wrap;
 }
 .mono-block:empty::before { content: "—"; color: var(--dim); }
-.copied { color: var(--green) !important; border-color: rgba(30,122,78,.55) !important; }
-
-/* --- quote box ----------------------------------------------- */
-#quote-box { display: none; margin-top: 12px; }
-#quote-box.show { display: block; }
 
 /* --- inspect result ------------------------------------------ */
 table.result { width: 100%; border-collapse: collapse; margin-top: 12px; }
@@ -338,6 +317,17 @@ table.result td {
 table.result td.k { color: var(--dim); width: 55%; font-size: 10px; letter-spacing: .16em; text-transform: uppercase; }
 .v-true { color: var(--green); }
 .v-false { color: var(--red); }
+#bearer-warning {
+  display: none;
+  border: 1px solid var(--red);
+  color: var(--red);
+  padding: 10px 12px;
+  margin-top: 12px;
+  font-size: 11px; letter-spacing: .06em;
+  word-break: break-all;
+}
+#bearer-warning .hash { color: #8c2c25; cursor: pointer; }
+#inspect-msg { display: none; margin-top: 12px; color: var(--dim); font-size: 11px; letter-spacing: .1em; }
 
 /* --- activity log -------------------------------------------- */
 .col-right { position: sticky; top: 0; max-height: 100vh; display: flex; flex-direction: column; }
@@ -364,7 +354,7 @@ table.result td.k { color: var(--dim); width: 55%; font-size: 10px; letter-spaci
   max-width: 380px;
 }
 .toast {
-  background: var(--panel);
+  background: var(--panel-lite);
   border: 1px solid var(--line-bright);
   border-left: 2px solid var(--amber);
   padding: 9px 14px;
@@ -416,27 +406,22 @@ table.result td.k { color: var(--dim); width: 55%; font-size: 10px; letter-spaci
   </div>
 </header>
 
-<div class="tabs">
-  <button class="tab active" data-wallet="alice">alice</button>
-  <button class="tab" data-wallet="bob">bob</button>
-</div>
-
 <main>
   <div class="col-left">
 
     <section>
       <div class="sec-title"><span class="idx">01</span>mint</div>
       <div class="field">
-        <label class="micro">asset text</label>
-        <textarea id="mint-text" rows="3" placeholder="asset payload — hashed client-side into h"></textarea>
-        <div class="char-count" id="mint-count">0 bytes</div>
-      </div>
-      <div class="field">
-        <label class="micro">or drop a file</label>
+        <label class="micro">drop an image (or any file)</label>
         <div id="drop-zone" class="drop-zone">
           <span id="drop-label">drop file here · or click to browse</span>
           <input type="file" id="mint-file" style="display:none">
         </div>
+      </div>
+      <div class="field">
+        <label class="micro">or asset text</label>
+        <textarea id="mint-text" rows="3" placeholder="asset payload — hashed client-side into h"></textarea>
+        <div class="char-count" id="mint-count">0 bytes</div>
       </div>
       <div class="field">
         <label class="micro">description</label>
@@ -463,25 +448,17 @@ table.result td.k { color: var(--dim); width: 55%; font-size: 10px; letter-spaci
     </section>
 
     <section>
-      <div class="sec-title"><span class="idx">03</span>send · bearer token</div>
-      <div class="out-frame">
-        <div class="out-head">
-          <span class="micro">offline send — hand this token to the receiver</span>
-          <button class="mini" data-copy="send-out">copy</button>
-        </div>
-        <div class="mono-block" id="send-out"></div>
-      </div>
-    </section>
-
-    <section>
-      <div class="sec-title"><span class="idx">04</span>receive</div>
+      <div class="sec-title"><span class="idx">03</span>receive</div>
+      <p class="explain">images carry their own tokens — drop one in</p>
       <div class="field">
-        <label class="micro">token</label>
-        <textarea id="recv-token" rows="3" placeholder="psnft1..."></textarea>
+        <div id="recv-drop" class="drop-zone">
+          <span id="recv-drop-label">drop an image with an embedded bearer token · or a .psnft.txt</span>
+          <input type="file" id="recv-file" style="display:none">
+        </div>
       </div>
       <div class="field row">
         <div>
-          <label class="micro">description</label>
+          <label class="micro">description (default: filename)</label>
           <input type="text" id="recv-desc" placeholder="optional label">
         </div>
         <div class="shrink">
@@ -489,44 +466,31 @@ table.result td.k { color: var(--dim); width: 55%; font-size: 10px; letter-spaci
           <span class="chk"><input type="checkbox" id="recv-public"> public swap (reveal h)</span>
         </div>
       </div>
-      <div class="row" style="margin-top:6px">
-        <span class="shrink"><button id="btn-receive" class="primary">receive (hidden-h)</button></span>
-      </div>
+      <details class="fallback">
+        <summary>paste a token instead</summary>
+        <div class="field">
+          <textarea id="recv-token" rows="2" placeholder="psnft1..."></textarea>
+        </div>
+        <button id="btn-receive-paste" class="mini">receive pasted token</button>
+      </details>
     </section>
 
     <section>
-      <div class="sec-title"><span class="idx">05</span>show · verify-only token</div>
-      <div class="field row">
-        <div>
-          <label class="micro">context (empty = random nonce)</label>
-          <input type="text" id="show-context" placeholder="e.g. buyer-1234">
-        </div>
-      </div>
-      <div class="out-frame">
-        <div class="out-head">
-          <span class="micro">pshow1 token — verifiable, cannot be spent</span>
-          <button class="mini" data-copy="show-out">copy</button>
-        </div>
-        <div class="mono-block" id="show-out"></div>
-      </div>
-    </section>
-
-    <section>
-      <div class="sec-title"><span class="idx">06</span>inspect · third party</div>
+      <div class="sec-title"><span class="idx">04</span>inspect · third party</div>
+      <p class="explain">images carry their own tokens — drop one in</p>
       <div class="field">
-        <label class="micro">drop an image with an embedded token</label>
         <div id="inspect-drop" class="drop-zone">
-          <span id="inspect-drop-label">drop image here · or click to browse</span>
-          <input type="file" id="inspect-file" style="display:none" accept="image/*">
+          <span id="inspect-drop-label">drop an image or a .pshow.txt · or click to browse</span>
+          <input type="file" id="inspect-file" style="display:none" accept="image/*,.txt">
         </div>
       </div>
-      <div class="field">
-        <label class="micro">or paste a showing token</label>
-        <textarea id="inspect-token" rows="3" placeholder="pshow1..."></textarea>
-      </div>
-      <div class="row">
-        <span class="shrink"><button id="btn-inspect" class="primary">inspect</button></span>
-      </div>
+      <details class="fallback">
+        <summary>paste a showing token instead</summary>
+        <div class="field">
+          <textarea id="inspect-token" rows="2" placeholder="pshow1..."></textarea>
+        </div>
+        <button id="btn-inspect-paste" class="mini">inspect pasted token</button>
+      </details>
       <div id="inspect-msg"></div>
       <div id="bearer-warning">
         ⚠ this file carries spendable ownership — anyone holding it can move the asset<br>
@@ -557,14 +521,13 @@ table.result td.k { color: var(--dim); width: 55%; font-size: 10px; letter-spaci
 "use strict";
 
 const state = {
-  wallet: "alice",
   mint: "local",
   mints: [],
   paymentRequired: false,
   pendingQuote: null,   // {id, amount, request}
   quotePaid: false,
   quoteTimer: null,
-  droppedFile: null,    // File chosen via drag-and-drop
+  droppedFile: null,    // File chosen via drag-and-drop (mint)
 };
 
 const $ = (id) => document.getElementById(id);
@@ -631,28 +594,16 @@ async function api(path, { method = "GET", body, form, btn } = {}) {
 }
 
 /* --- copy helpers ----------------------------------------------------- */
-function copyText(text, what, btn) {
+function copyText(text, what) {
   if (!text) return;
   navigator.clipboard.writeText(text).then(
-    () => {
-      log(`copied ${what}`, "ok");
-      if (btn) {
-        const old = btn.textContent;
-        btn.textContent = "copied";
-        btn.classList.add("copied");
-        setTimeout(() => { btn.textContent = old; btn.classList.remove("copied"); }, 1200);
-      }
-    },
+    () => log(`copied ${what}`, "ok"),
     () => log("clipboard unavailable", "err"),
   );
 }
-document.querySelectorAll("[data-copy]").forEach((btn) => {
-  btn.addEventListener("click", () =>
-    copyText($(btn.dataset.copy).textContent, btn.dataset.copy.replace("-", " "), btn));
-});
 
 /* --- identicon: deterministic 5x5 mirrored grid from h ----------------- */
-function identicon(h, size = 44) {
+function identicon(h) {
   const hue = parseInt(h.slice(0, 4), 16) % 360;
   let cells = "";
   for (let y = 0; y < 5; y++) {
@@ -663,7 +614,7 @@ function identicon(h, size = 44) {
                `<rect x="${4 - x}" y="${y}" width="1" height="1" fill="${fill}"/>`;
     }
   }
-  return `<svg class="ident" viewBox="0 0 5 5" width="${size}" height="${size}" shape-rendering="crispEdges">${cells}</svg>`;
+  return `<svg class="ident" viewBox="0 0 5 5" shape-rendering="crispEdges">${cells}</svg>`;
 }
 
 /* --- mint selection ----------------------------------------------------- */
@@ -783,16 +734,6 @@ $("btn-del-mint").addEventListener("click", async () => {
   }
 });
 
-/* --- wallet tabs ----------------------------------------------------------- */
-document.querySelectorAll(".tab").forEach((tab) => {
-  tab.addEventListener("click", () => {
-    document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
-    tab.classList.add("active");
-    state.wallet = tab.dataset.wallet;
-    refreshAssets();
-  });
-});
-
 /* --- mint section ------------------------------------------------------------ */
 $("mint-text").addEventListener("input", () => {
   const n = new TextEncoder().encode($("mint-text").value).length;
@@ -833,7 +774,6 @@ function mintPayload() {
   const description = $("mint-desc").value;
   if (state.droppedFile) {
     const form = new FormData();
-    form.append("wallet", state.wallet);
     form.append("mint", state.mint);
     form.append("description", description);
     if (state.pendingQuote) form.append("quote", state.pendingQuote.id);
@@ -842,7 +782,7 @@ function mintPayload() {
   }
   const text = $("mint-text").value;
   if (!text) return null;
-  const body = { wallet: state.wallet, mint: state.mint, description, text };
+  const body = { mint: state.mint, description, text };
   if (state.pendingQuote) body.quote = state.pendingQuote.id;
   return { body };
 }
@@ -852,7 +792,7 @@ $("btn-mint").addEventListener("click", async () => {
   if (!payload) { log("give asset text or choose a file", "err"); return; }
   try {
     const r = await api("/api/mint", { method: "POST", ...payload, btn: $("btn-mint") });
-    log(`minted ${r.h.slice(0, 18)}… for ${state.wallet}`, "ok");
+    log(`minted ${r.h.slice(0, 18)}…`, "ok");
     state.pendingQuote = null;
     state.quotePaid = false;
     $("quote-box").classList.remove("show");
@@ -916,7 +856,7 @@ function badge(status) {
 async function refreshAssets() {
   let assets;
   try {
-    assets = await api(`/api/assets?wallet=${state.wallet}&mint=${state.mint}`);
+    assets = await api(`/api/assets?mint=${state.mint}`);
   } catch (e) { return; }
   const box = $("assets");
   box.innerHTML = "";
@@ -930,8 +870,6 @@ async function refreshAssets() {
     const iconHtml = a.has_image
       ? `<img class="ident thumb" src="/api/content/${a.h}" loading="lazy" alt="">`
       : identicon(a.h);
-    const dlBtn = a.has_image
-      ? `<button class="mini" data-act="download">download</button>` : "";
     card.innerHTML = `
       ${iconHtml}
       <div class="card-body">
@@ -940,16 +878,14 @@ async function refreshAssets() {
         <div class="card-foot">
           ${badge(a.asset_status)}
           <span style="flex:1"></span>
-          <button class="mini" data-act="send">send</button>
-          <button class="mini" data-act="show">show</button>
-          ${dlBtn}
+          <button class="mini" data-act="send" title="download with a bearer token embedded">⇓ send</button>
+          <button class="mini" data-act="show" title="download with a verify-only proof embedded">⇓ show</button>
           <button class="mini danger" data-act="burn">burn</button>
         </div>
-        <div class="dl-choices" style="display:none">
-          <span class="micro">embed token:</span>
-          <button class="mini" data-dl="showing">proof · verify-only</button>
-          <button class="mini danger" data-dl="bearer">bearer · spendable</button>
-          <div class="dl-warn">⚠ bearer: anyone holding the downloaded file can spend this nft</div>
+        <div class="send-confirm" style="display:none">
+          ⚠ the downloaded file IS the nft — anyone holding it can spend it
+          <button class="mini danger" data-confirm="bearer">download bearer file</button>
+          <button class="mini" data-confirm="cancel">cancel</button>
         </div>
       </div>`;
     const img = card.querySelector("img.thumb");
@@ -965,35 +901,26 @@ async function refreshAssets() {
     card.querySelectorAll("button[data-act]").forEach((btn) => {
       btn.addEventListener("click", () => assetAction(btn.dataset.act, a, btn, card));
     });
-    card.querySelectorAll("button[data-dl]").forEach((btn) => {
-      btn.addEventListener("click", () => downloadEmbedded(a, btn.dataset.dl, btn));
+    card.querySelectorAll("button[data-confirm]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        card.querySelector(".send-confirm").style.display = "none";
+        if (btn.dataset.confirm === "bearer") downloadEmbedded(a, "bearer", btn);
+      });
     });
     box.appendChild(card);
   }
 }
 
 async function assetAction(act, a, btn, card) {
-  const base = { wallet: state.wallet, mint: state.mint, h: a.h };
   try {
     if (act === "send") {
-      const r = await api("/api/send", { method: "POST", body: base, btn });
-      $("send-out").textContent = r.token;
-      log(`token out for ${a.h.slice(0, 12)}… (bearer — keep safe)`, "ok");
-      refreshAssets();
+      const row = card.querySelector(".send-confirm");
+      row.style.display = row.style.display === "none" ? "" : "none";
     } else if (act === "show") {
-      const r = await api("/api/show", {
-        method: "POST",
-        body: { ...base, context: $("show-context").value },
-        btn,
-      });
-      $("show-out").textContent = r.token;
-      log(`showing published for ${a.h.slice(0, 12)}… (verify-only)`, "ok");
-    } else if (act === "download") {
-      const choices = card.querySelector(".dl-choices");
-      choices.style.display = choices.style.display === "none" ? "" : "none";
+      await downloadEmbedded(a, "showing", btn);
     } else if (act === "burn") {
       if (!confirm(`burn ${a.h.slice(0, 18)}… ? this retires the asset`)) return;
-      await api("/api/burn", { method: "POST", body: base, btn });
+      await api("/api/burn", { method: "POST", body: { mint: state.mint, h: a.h }, btn });
       log(`burned ${a.h.slice(0, 12)}…`, "ok");
       refreshAssets();
     }
@@ -1007,7 +934,7 @@ async function downloadEmbedded(a, kind, btn) {
     resp = await fetch("/api/embed", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ wallet: state.wallet, mint: state.mint, h: a.h, kind }),
+      body: JSON.stringify({ mint: state.mint, h: a.h, kind }),
     });
   } catch (e) {
     setBusy(btn, false);
@@ -1032,29 +959,60 @@ async function downloadEmbedded(a, kind, btn) {
   link.click();
   URL.revokeObjectURL(url);
   if (kind === "bearer") {
-    log(`downloaded ${fname} — bearer token inside, the file itself spends the nft`, "err");
+    log(`downloaded ${fname} — the bearer copy is out; your wallet still holds the asset until someone swaps it`, "err");
   } else {
     log(`downloaded ${fname} — verify-only proof embedded`, "ok");
   }
 }
 
 /* --- receive ------------------------------------------------------------------------ */
-$("btn-receive").addEventListener("click", async () => {
+const recvDrop = $("recv-drop");
+recvDrop.addEventListener("click", () => $("recv-file").click());
+recvDrop.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  recvDrop.classList.add("drag");
+});
+recvDrop.addEventListener("dragleave", () => recvDrop.classList.remove("drag"));
+recvDrop.addEventListener("drop", (e) => {
+  e.preventDefault();
+  recvDrop.classList.remove("drag");
+  if (e.dataTransfer.files.length) receiveFile(e.dataTransfer.files[0]);
+});
+$("recv-file").addEventListener("change", () => {
+  if ($("recv-file").files.length) receiveFile($("recv-file").files[0]);
+});
+
+async function receiveFile(file) {
+  $("recv-drop-label").textContent = `file: ${file.name} (${file.size} B)`;
+  const form = new FormData();
+  form.append("mint", state.mint);
+  form.append("description", $("recv-desc").value);
+  if ($("recv-public").checked) form.append("public", "true");
+  form.append("file", file);
+  try {
+    const r = await api("/api/receive", { method: "POST", form });
+    log(`received ${r.h.slice(0, 18)}… (${file.name})`, "ok");
+    $("recv-drop-label").textContent = "drop an image with an embedded bearer token · or a .psnft.txt";
+    $("recv-file").value = "";
+    refreshAssets();
+  } catch (e) { /* logged */ }
+}
+
+$("btn-receive-paste").addEventListener("click", async () => {
   const token = $("recv-token").value.trim();
   if (!token) { log("paste a token first", "err"); return; }
   try {
     const r = await api("/api/receive", {
       method: "POST",
       body: {
-        wallet: state.wallet,
         mint: state.mint,
         token,
         description: $("recv-desc").value,
         public: $("recv-public").checked,
       },
-      btn: $("btn-receive"),
+      btn: $("btn-receive-paste"),
     });
-    log(`received ${r.h.slice(0, 18)}… into ${state.wallet}`, "ok");
+    log(`received ${r.h.slice(0, 18)}…`, "ok");
     $("recv-token").value = "";
     refreshAssets();
   } catch (e) { /* logged */ }
@@ -1075,20 +1033,6 @@ function showInspectResult(r) {
   $("ir-status").textContent = r.asset_status;
   $("ir-status").className = r.asset_status === "active" ? "v-true" : r.asset_status === "burned" ? "v-false" : "";
 }
-
-$("btn-inspect").addEventListener("click", async () => {
-  const token = $("inspect-token").value.trim();
-  if (!token) { log("paste a showing token or drop an image first", "err"); return; }
-  try {
-    const r = await api("/api/inspect", {
-      method: "POST",
-      body: { mint: state.mint, token },
-      btn: $("btn-inspect"),
-    });
-    showInspectResult(r);
-    log(`inspect: valid=${r.valid} spent=${r.spent} status=${r.asset_status}`, r.valid ? "ok" : "err");
-  } catch (e) { /* logged */ }
-});
 
 const inspectDrop = $("inspect-drop");
 inspectDrop.addEventListener("click", () => $("inspect-file").click());
@@ -1134,6 +1078,20 @@ async function extractFromFile(file) {
     }
   } catch (e) { /* logged */ }
 }
+
+$("btn-inspect-paste").addEventListener("click", async () => {
+  const token = $("inspect-token").value.trim();
+  if (!token) { log("paste a showing token first", "err"); return; }
+  try {
+    const r = await api("/api/inspect", {
+      method: "POST",
+      body: { mint: state.mint, token },
+      btn: $("btn-inspect-paste"),
+    });
+    showInspectResult(r);
+    log(`inspect: valid=${r.valid} spent=${r.spent} status=${r.asset_status}`, r.valid ? "ok" : "err");
+  } catch (e) { /* logged */ }
+});
 
 function setBool(id, v) {
   const el = $(id);
