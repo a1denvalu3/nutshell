@@ -20,6 +20,10 @@
 
 * { box-sizing: border-box; }
 
+/* scale the whole deck with the viewport: 18px on small laptops,
+   up to 22px on large screens/projectors (rem-based design) */
+html { font-size: clamp(18px, 1.2vw, 22px); }
+
 body {
   margin: 0;
   font-family: 'Rubik', system-ui, -apple-system, sans-serif;
