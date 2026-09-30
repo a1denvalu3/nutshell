@@ -241,6 +241,24 @@ nav button:disabled { opacity: 0.2; cursor: default; }
   display: block; margin-bottom: 4px;
 }
 
+/* ── Statement cards ── */
+.statement {
+  background: #fff; border: 1px solid var(--border);
+  border-left: 4px solid var(--purple);
+  border-radius: 10px; padding: 16px 20px; margin-bottom: 12px;
+}
+.statement .claim {
+  font-size: 1.12rem; font-weight: 600;
+  letter-spacing: -0.01em; line-height: 1.45;
+}
+.statement .proven-to {
+  font-size: 0.68rem; font-weight: 600;
+  text-transform: uppercase; letter-spacing: 0.08em;
+  color: var(--muted); margin-top: 6px;
+}
+.statement.green { border-left-color: var(--semantic-green); }
+.statement.amber { border-left-color: var(--semantic-amber); }
+
 /* ── Visual components ── */
 .vrow { display: flex; align-items: center; justify-content: center; gap: 14px; margin: 18px 0 6px; }
 .vbox {
