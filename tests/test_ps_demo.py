@@ -3,6 +3,14 @@ from fastapi.testclient import TestClient
 
 from cashu.nft.demo import create_demo_app
 
+# minimal valid PNG (1x1) with correct magic bytes
+PNG_BYTES = (
+    b"\x89PNG\r\n\x1a\n"
+    b"\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00"
+    b"\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00\x00\x05\x00\x01"
+    b"\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82"
+)
+
 
 @pytest.fixture(scope="function")
 def client(tmp_path):
@@ -35,6 +43,9 @@ def test_full_flow(client):
     assert [a["h"] for a in assets.json()] == [h]
     assert assets.json()[0]["asset_status"] == "active"
     assert assets.json()[0]["description"] == "note"
+    # text assets have no image preview
+    assert assets.json()[0]["has_image"] is False
+    assert client.get(f"/api/content/{h}").status_code == 404
 
     # verify: valid, unspent, active
     v = client.post("/api/verify", json={"wallet": "alice", "mint": "local", "h": h})
@@ -95,6 +106,43 @@ def test_multipart_mint(client):
     assets = client.get("/api/assets", params={"wallet": "alice", "mint": "local"})
     assert assets.json()[0]["h"] == h
     assert assets.json()[0]["description"] == "file asset"
+    # plain text content is not served as an image
+    assert assets.json()[0]["has_image"] is False
+    assert client.get(f"/api/content/{h}").status_code == 404
+
+
+def test_image_content_served_and_shared(client):
+    # multipart-mint a real PNG
+    resp = client.post(
+        "/api/mint",
+        data={"wallet": "alice", "mint": "local", "description": "png"},
+        files={"file": ("pix.png", PNG_BYTES, "image/png")},
+    )
+    assert resp.status_code == 200, resp.text
+    h = resp.json()["h"]
+
+    assets = client.get("/api/assets", params={"wallet": "alice", "mint": "local"})
+    assert assets.json()[0]["has_image"] is True
+
+    resp = client.get(f"/api/content/{h}")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"] == "image/png"
+    assert resp.content == PNG_BYTES
+    assert "immutable" in resp.headers["cache-control"]
+
+    # after alice -> bob, the same content endpoint still serves the bytes
+    token = client.post(
+        "/api/send", json={"wallet": "alice", "mint": "local", "h": h}
+    ).json()["token"]
+    client.post("/api/receive", json={"wallet": "bob", "mint": "local", "token": token})
+    assets = client.get("/api/assets", params={"wallet": "bob", "mint": "local"})
+    assert assets.json()[0]["has_image"] is True
+    assert client.get(f"/api/content/{h}").content == PNG_BYTES
+
+
+def test_content_unknown_hash_404(client):
+    h = "00" * 32
+    assert client.get(f"/api/content/{h}").status_code == 404
 
 
 def test_quote_on_free_mint(client):

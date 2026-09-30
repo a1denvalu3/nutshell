@@ -228,7 +228,22 @@ button.busy::after {
   transition: border-color .15s;
 }
 .card:hover { border-color: var(--line-bright); }
+/* --- identicon / thumbnails ------------------------------------------- */
 .card .ident { flex: 0 0 auto; border: 1px solid var(--line); background: #0a0c0f; display: block; }
+img.thumb { width: 44px; height: 44px; object-fit: cover; cursor: zoom-in; }
+#overlay {
+  display: none;
+  position: fixed; inset: 0; z-index: 1100;
+  background: rgba(6, 8, 10, .92);
+  align-items: center; justify-content: center;
+  cursor: zoom-out;
+}
+#overlay.show { display: flex; }
+#overlay img {
+  max-width: 90vw; max-height: 90vh;
+  border: 1px solid var(--line-bright);
+  box-shadow: 0 20px 80px rgba(0,0,0,.6);
+}
 .card .card-body { flex: 1; min-width: 0; }
 .card .hash {
   color: var(--amber); cursor: pointer; font-size: 12px; display: inline-block;
@@ -338,6 +353,7 @@ table.result td.k { color: var(--dim); width: 55%; font-size: 10px; letter-spaci
 <body>
 
 <div id="toasts"></div>
+<div id="overlay"><img id="overlay-img" alt=""></div>
 
 <header>
   <div class="wordmark">ps·nft lab</div>
@@ -860,8 +876,11 @@ async function refreshAssets() {
   for (const a of assets) {
     const card = document.createElement("div");
     card.className = "card";
+    const iconHtml = a.has_image
+      ? `<img class="ident thumb" src="/api/content/${a.h}" loading="lazy" alt="">`
+      : identicon(a.h);
     card.innerHTML = `
-      ${identicon(a.h)}
+      ${iconHtml}
       <div class="card-body">
         <span class="hash" title="click to copy full hash"></span>
         <div class="desc"></div>
@@ -873,6 +892,12 @@ async function refreshAssets() {
           <button class="mini danger" data-act="burn">burn</button>
         </div>
       </div>`;
+    const img = card.querySelector("img.thumb");
+    if (img) {
+      // stored content went missing or is not an image: identicon fallback
+      img.addEventListener("error", () => { img.outerHTML = identicon(a.h); });
+      img.addEventListener("click", () => openOverlay(a.h));
+    }
     const hashEl = card.querySelector(".hash");
     hashEl.textContent = a.h.slice(0, 12) + "…" + a.h.slice(-6);
     hashEl.addEventListener("click", () => copyText(a.h, "asset hash"));
@@ -960,6 +985,16 @@ function setBool(id, v) {
   el.textContent = v ? "true" : "false";
   el.className = v ? "v-true" : "v-false";
 }
+
+/* --- full-size image overlay -------------------------------------------- */
+function openOverlay(h) {
+  $("overlay-img").src = `/api/content/${h}`;
+  $("overlay").classList.add("show");
+}
+$("overlay").addEventListener("click", () => $("overlay").classList.remove("show"));
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") $("overlay").classList.remove("show");
+});
 
 /* --- boot ------------------------------------------------------------------------------ */
 (async function boot() {

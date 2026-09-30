@@ -23,7 +23,7 @@ from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 import httpx
 import uvicorn
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from loguru import logger
 from starlette.concurrency import run_in_threadpool
@@ -42,12 +42,29 @@ WALLETS = ["alice", "bob"]
 DEMO_HTML = os.path.join(os.path.dirname(__file__), "demo.html")
 
 
+def _sniff_image(data: bytes) -> Optional[str]:
+    """Magic-byte image detection. Anything else must not be served."""
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith((b"GIF87a", b"GIF89a")):
+        return "image/gif"
+    if len(data) >= 12 and data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data.lstrip().startswith(b"<svg"):
+        return "image/svg+xml"
+    return None
+
+
 class Demo:
     """Holds the demo state: embedded mint, wallet files, external mints."""
 
     def __init__(self, data_dir: str):
         os.makedirs(data_dir, exist_ok=True)
         self.data_dir = data_dir
+        self.content_dir = os.path.join(data_dir, "assets")
+        os.makedirs(self.content_dir, exist_ok=True)
         self.lock = threading.Lock()
 
         self.seeds = self._load_or_create_seeds()
@@ -193,11 +210,13 @@ class Demo:
                 status = client.asset_status(a.h)
             except Exception:
                 status = "unknown"
+            hex_h = a.h.to_bytes(32, "big").hex()
             result.append(
                 {
-                    "h": a.h.to_bytes(32, "big").hex(),
+                    "h": hex_h,
                     "description": a.description,
                     "asset_status": status,
+                    "has_image": self._stored_image_type(hex_h) is not None,
                 }
             )
         return result
@@ -215,10 +234,35 @@ class Demo:
             raise HTTPException(400, "this mint requires a paid quote")
         with self.lock, self.open_wallet(wallet) as w:
             cred = client.mint(w, asset, quote=quote, description=description)
-        return {
-            "h": cred.h.to_bytes(32, "big").hex(),
-            "description": description,
-        }
+        hex_h = cred.h.to_bytes(32, "big").hex()
+        # content-addressed store: the asset bytes stay available to both
+        # demo wallets (tokens carry no bytes) and to the thumbnail endpoint
+        with open(os.path.join(self.content_dir, hex_h), "wb") as f:
+            f.write(asset)
+        return {"h": hex_h, "description": description}
+
+    def _content_path(self, raw_h: str) -> str:
+        # parse first so the filename can never leave the content dir
+        return os.path.join(self.content_dir, f"{self.parse_h(raw_h):064x}")
+
+    def _stored_image_type(self, hex_h: str) -> Optional[str]:
+        path = os.path.join(self.content_dir, hex_h)
+        if not os.path.exists(path):
+            return None
+        with open(path, "rb") as f:
+            return _sniff_image(f.read(4096))
+
+    def content(self, raw_h: str) -> Tuple[bytes, str]:
+        """Stored asset bytes if (and only if) they sniff as an image."""
+        path = self._content_path(raw_h)
+        if not os.path.exists(path):
+            raise HTTPException(404, "no content stored for this asset")
+        with open(path, "rb") as f:
+            data = f.read()
+        media_type = _sniff_image(data[:4096])
+        if media_type is None:
+            raise HTTPException(404, "stored content is not an image")
+        return data, media_type
 
     def quote(self, mint_id: str, asset: bytes) -> Dict[str, Any]:
         client = self.client(mint_id)
@@ -325,6 +369,16 @@ def create_demo_app(data_dir: str) -> FastAPI:
     @app.get("/api/assets")
     async def get_assets(wallet: str, mint: str):
         return await run_in_threadpool(demo.assets, wallet, mint)
+
+    @app.get("/api/content/{h}")
+    async def get_content(h: str):
+        data, media_type = await run_in_threadpool(demo.content, h)
+        return Response(
+            content=data,
+            media_type=media_type,
+            # content-addressed: the bytes behind an h never change
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
 
     @app.post("/api/mint")
     async def post_mint(request: Request):
