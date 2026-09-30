@@ -37,29 +37,61 @@ body::after {
   content: "";
   position: fixed; inset: 0;
   pointer-events: none;
-  z-index: 999;
+  z-index: 900;
   opacity: .05;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='120' height='120'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='120' height='120' filter='url(%23n)' opacity='0.55'/%3E%3C/svg%3E");
 }
 a { color: var(--amber); }
 button, input, textarea, select { font-family: var(--mono); font-size: 12px; }
+:focus-visible { outline: 1px solid var(--amber); outline-offset: 2px; }
+::selection { background: rgba(245,166,35,.25); }
 
 /* --- top bar ------------------------------------------------ */
 header {
   border-bottom: 1px solid var(--line);
-  padding: 14px 22px;
-  display: flex; align-items: baseline; gap: 22px; flex-wrap: wrap;
+  padding: 16px 24px;
+  display: flex; align-items: baseline; gap: 24px; flex-wrap: wrap;
+  position: relative;
 }
 .wordmark {
   font-family: var(--display);
-  font-size: 26px;
+  font-size: 27px;
   color: var(--amber);
   letter-spacing: 2px;
   text-shadow: 0 0 18px rgba(245,166,35,.25);
+  user-select: none;
 }
-.mintbar { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.mint-info { color: var(--dim); font-size: 11px; letter-spacing: .06em; }
-.mint-info b { color: var(--text); font-weight: 500; }
+.mintbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.mint-meta { display: flex; align-items: center; gap: 8px; }
+.mint-keyset { color: var(--dim); font-size: 11px; letter-spacing: .06em; cursor: pointer; }
+.mint-keyset:hover { color: var(--text); }
+.pay-badge {
+  font-size: 9px; letter-spacing: .2em; text-transform: uppercase;
+  border: 1px solid; padding: 2px 7px;
+}
+.pay-badge.free { color: var(--green); border-color: rgba(61,220,132,.35); }
+.pay-badge.paid { color: var(--amber); border-color: var(--amber-dim); }
+.pay-badge.down { color: var(--red); border-color: rgba(209,96,79,.4); }
+
+/* add-mint popover */
+#mint-popover {
+  display: none;
+  position: absolute;
+  top: 100%;
+  left: 220px;
+  z-index: 50;
+  background: var(--panel);
+  border: 1px solid var(--line-bright);
+  box-shadow: 0 12px 40px rgba(0,0,0,.55);
+  padding: 14px 16px;
+  width: 340px;
+  animation: rise .25s ease both;
+}
+#mint-popover.show { display: block; }
+#mint-popover .micro { margin-bottom: 10px; display: block; }
+#mint-popover input { margin-bottom: 8px; }
+#mint-popover .pop-actions { display: flex; gap: 8px; margin-top: 4px; }
+#mint-form-error { color: var(--red); font-size: 11px; min-height: 15px; margin-top: 6px; }
 
 .micro {
   font-size: 10px; letter-spacing: .22em; text-transform: uppercase;
@@ -68,15 +100,16 @@ header {
 
 /* --- wallet tabs -------------------------------------------- */
 .tabs {
-  display: flex; gap: 0;
+  display: flex;
   border-bottom: 1px solid var(--line);
-  padding: 0 22px;
+  padding: 0 24px;
 }
 .tab {
   background: none; border: none; color: var(--dim);
-  padding: 10px 22px; cursor: pointer;
+  padding: 11px 24px; cursor: pointer;
   font-size: 12px; letter-spacing: .18em; text-transform: uppercase;
   border-bottom: 2px solid transparent;
+  transition: color .15s;
 }
 .tab:hover { color: var(--text); }
 .tab.active { color: var(--amber); border-bottom-color: var(--amber); }
@@ -84,16 +117,18 @@ header {
 /* --- layout -------------------------------------------------- */
 main {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 340px;
-  gap: 0;
+  grid-template-columns: minmax(0, 1fr) 360px;
   align-items: start;
 }
-@media (max-width: 980px) { main { grid-template-columns: 1fr; } }
+@media (max-width: 1100px) {
+  main { grid-template-columns: 1fr; }
+  .col-left { border-right: none; }
+  .col-right { position: static; max-height: none; }
+}
 .col-left { border-right: 1px solid var(--line); min-width: 0; }
-@media (max-width: 980px) { .col-left { border-right: none; } }
 
 section {
-  padding: 18px 22px 22px;
+  padding: 20px 24px 24px;
   border-bottom: 1px solid var(--line);
   animation: rise .5s ease both;
 }
@@ -110,7 +145,7 @@ section:nth-child(6) { animation-delay: .40s; }
 .sec-title {
   font-size: 11px; letter-spacing: .28em; text-transform: uppercase;
   color: var(--amber);
-  margin-bottom: 14px;
+  margin-bottom: 16px;
 }
 .sec-title .idx { color: var(--dim); margin-right: 8px; }
 
@@ -123,16 +158,19 @@ textarea, input[type=text], select {
   padding: 8px 10px;
   outline: none;
   border-radius: 0;
+  transition: border-color .15s;
 }
 textarea:focus, input[type=text]:focus, select:focus { border-color: var(--amber-dim); }
 textarea { resize: vertical; min-height: 64px; }
-.field { margin-bottom: 10px; }
-.field label { display: block; margin-bottom: 5px; }
+.field { margin-bottom: 12px; }
+.field label { display: block; margin-bottom: 6px; }
+.char-count { color: var(--dim); font-size: 10px; text-align: right; margin-top: 3px; letter-spacing: .1em; }
 .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .row > * { flex: 1; }
 .row > .shrink { flex: 0 0 auto; }
 
 button {
+  position: relative;
   background: transparent;
   border: 1px solid var(--line-bright);
   color: var(--text);
@@ -149,20 +187,65 @@ button:disabled { opacity: .35; cursor: not-allowed; }
 button.primary { border-color: var(--amber-dim); color: var(--amber); }
 button.danger:hover:not(:disabled) { border-color: var(--red); color: var(--red); box-shadow: 0 0 12px rgba(209,96,79,.12); }
 button.mini { padding: 3px 9px; font-size: 10px; }
+button.busy { color: transparent !important; pointer-events: none; }
+button.busy::after {
+  content: "";
+  position: absolute; inset: 0; margin: auto;
+  width: 11px; height: 11px;
+  border: 1px solid var(--amber-dim);
+  border-top-color: var(--amber);
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
 
-/* --- assets -------------------------------------------------- */
-.asset {
+/* --- drop zone ------------------------------------------------- */
+#drop-zone {
+  border: 1px dashed var(--line-bright);
+  padding: 18px 14px;
+  text-align: center;
+  color: var(--dim);
+  font-size: 11px;
+  letter-spacing: .12em;
+  cursor: pointer;
+  transition: border-color .15s, background .15s, color .15s;
+}
+#drop-zone:hover { border-color: var(--amber-dim); color: var(--text); }
+#drop-zone.drag {
+  border-color: var(--amber);
+  background: rgba(245,166,35,.06);
+  color: var(--amber);
+}
+#drop-zone .file-name { color: var(--green); }
+
+/* --- asset cards ------------------------------------------------ */
+#assets { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.card {
   border: 1px solid var(--line);
-  padding: 10px 12px;
-  margin-bottom: 8px;
-  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: rgba(255,255,255,.012);
+  padding: 12px;
+  display: flex; gap: 12px; align-items: flex-start;
+  transition: border-color .15s;
 }
-.asset:hover { border-color: var(--line-bright); }
-.asset .hash {
-  color: var(--amber); cursor: pointer; font-size: 12px;
+.card:hover { border-color: var(--line-bright); }
+.card .ident { flex: 0 0 auto; border: 1px solid var(--line); background: #0a0c0f; display: block; }
+.card .card-body { flex: 1; min-width: 0; }
+.card .hash {
+  color: var(--amber); cursor: pointer; font-size: 12px; display: inline-block;
 }
-.asset .hash:hover { text-shadow: 0 0 8px rgba(245,166,35,.4); }
-.asset .desc { color: var(--dim); flex: 1; min-width: 80px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card .hash:hover { text-shadow: 0 0 8px rgba(245,166,35,.4); }
+.card .desc {
+  color: var(--dim); font-size: 11px; margin-top: 3px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.card .card-foot { display: flex; align-items: center; gap: 6px; margin-top: 9px; }
+.empty-state {
+  border: 1px dashed var(--line);
+  padding: 34px 20px; text-align: center;
+  color: var(--dim);
+}
+.empty-state .glyph { font-size: 30px; color: var(--line-bright); display: block; margin-bottom: 10px; }
+
 .badge {
   font-size: 10px; letter-spacing: .18em; text-transform: uppercase;
   border: 1px solid; padding: 2px 8px;
@@ -172,9 +255,13 @@ button.mini { padding: 3px 9px; font-size: 10px; }
 .badge.unknown { color: var(--dim);   border-color: var(--line); }
 
 /* --- outputs ------------------------------------------------- */
+.out-frame { border: 1px solid var(--line); background: #0a0c0f; }
+.out-head {
+  display: flex; justify-content: space-between; align-items: center;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line);
+}
 .mono-block {
-  background: #0a0c0f;
-  border: 1px solid var(--line);
   padding: 10px 12px;
   font-size: 11px; line-height: 1.6;
   word-break: break-all;
@@ -183,17 +270,17 @@ button.mini { padding: 3px 9px; font-size: 10px; }
   white-space: pre-wrap;
 }
 .mono-block:empty::before { content: "—"; color: var(--dim); }
-.out-head { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 8px; }
+.copied { color: var(--green) !important; border-color: rgba(61,220,132,.5) !important; }
 
 /* --- quote box ----------------------------------------------- */
-#quote-box { display: none; margin-top: 10px; }
+#quote-box { display: none; margin-top: 12px; }
 #quote-box.show { display: block; }
 
 /* --- inspect result ------------------------------------------ */
-table.result { width: 100%; border-collapse: collapse; margin-top: 10px; }
+table.result { width: 100%; border-collapse: collapse; margin-top: 12px; }
 table.result td {
   border-top: 1px solid var(--line);
-  padding: 6px 4px; font-size: 12px;
+  padding: 7px 4px; font-size: 12px;
 }
 table.result td.k { color: var(--dim); width: 55%; font-size: 10px; letter-spacing: .16em; text-transform: uppercase; }
 .v-true { color: var(--green); }
@@ -202,12 +289,13 @@ table.result td.k { color: var(--dim); width: 55%; font-size: 10px; letter-spaci
 /* --- activity log -------------------------------------------- */
 .col-right { position: sticky; top: 0; max-height: 100vh; display: flex; flex-direction: column; }
 #log-head {
-  padding: 16px 18px 10px;
-  font-size: 11px; letter-spacing: .28em; text-transform: uppercase; color: var(--amber);
+  padding: 18px 20px 12px;
+  display: flex; justify-content: space-between; align-items: center;
   border-bottom: 1px solid var(--line);
 }
+#log-head .sec-title { margin-bottom: 0; }
 #log {
-  padding: 12px 18px; overflow-y: auto; flex: 1;
+  padding: 12px 20px; overflow-y: auto; flex: 1;
   font-size: 11px; line-height: 1.7;
 }
 #log .entry { border-bottom: 1px dotted var(--line); padding: 4px 0; word-break: break-all; }
@@ -216,29 +304,61 @@ table.result td.k { color: var(--dim); width: 55%; font-size: 10px; letter-spaci
 #log .err { color: var(--red); }
 #log .info { color: var(--text); }
 
-/* --- add mint form ------------------------------------------- */
-#add-mint { display: none; gap: 8px; align-items: center; }
-#add-mint.show { display: flex; }
-#add-mint input { width: 150px; }
-#add-mint input.url { width: 230px; }
+/* --- toasts ---------------------------------------------------- */
+#toasts {
+  position: fixed; top: 16px; right: 16px; z-index: 1000;
+  display: flex; flex-direction: column; gap: 8px;
+  max-width: 380px;
+}
+.toast {
+  background: var(--panel);
+  border: 1px solid var(--line-bright);
+  border-left: 2px solid var(--amber);
+  padding: 9px 14px;
+  font-size: 11px;
+  letter-spacing: .04em;
+  box-shadow: 0 8px 30px rgba(0,0,0,.5);
+  animation: toast-in .25s ease both;
+  word-break: break-all;
+}
+.toast.err { border-left-color: var(--red); color: #e5b0a8; }
+.toast.ok { border-left-color: var(--green); }
+.toast.out { animation: toast-out .3s ease both; }
+@keyframes toast-in {
+  from { opacity: 0; transform: translateX(14px); }
+  to   { opacity: 1; transform: translateX(0); }
+}
+@keyframes toast-out {
+  to { opacity: 0; transform: translateX(14px); }
+}
+
 .chk { display: flex; align-items: center; gap: 6px; color: var(--dim); font-size: 11px; }
 </style>
 </head>
 <body>
+
+<div id="toasts"></div>
 
 <header>
   <div class="wordmark">ps·nft lab</div>
   <div class="mintbar">
     <span class="micro">mint</span>
     <select id="mint-select" style="width:auto"></select>
-    <button class="mini" id="btn-add-mint-toggle" title="add external mint">+ add</button>
-    <span id="add-mint">
-      <input type="text" id="new-mint-name" placeholder="name">
-      <input type="text" id="new-mint-url" class="url" placeholder="http://host:port">
-      <button class="mini" id="btn-add-mint">connect</button>
-      <button class="mini danger" id="btn-del-mint" title="remove selected mint">remove</button>
+    <span class="mint-meta">
+      <span class="mint-keyset" id="mint-keyset" title="click to copy keyset id"></span>
+      <span class="pay-badge free" id="mint-pay"></span>
     </span>
-    <span class="mint-info" id="mint-info"></span>
+    <button class="mini" id="btn-add-mint-toggle" title="add external mint">+ mint</button>
+  </div>
+  <div id="mint-popover">
+    <span class="micro">connect external mint</span>
+    <input type="text" id="new-mint-name" placeholder="name">
+    <input type="text" id="new-mint-url" placeholder="http://host:port">
+    <div class="pop-actions">
+      <button class="mini primary" id="btn-add-mint">connect</button>
+      <button class="mini danger" id="btn-del-mint" title="remove selected mint">remove selected</button>
+    </div>
+    <div id="mint-form-error"></div>
   </div>
 </header>
 
@@ -255,27 +375,31 @@ table.result td.k { color: var(--dim); width: 55%; font-size: 10px; letter-spaci
       <div class="field">
         <label class="micro">asset text</label>
         <textarea id="mint-text" rows="3" placeholder="asset payload — hashed client-side into h"></textarea>
+        <div class="char-count" id="mint-count">0 bytes</div>
       </div>
-      <div class="field row">
-        <div>
-          <label class="micro">or file</label>
-          <input type="file" id="mint-file" style="width:100%;color:var(--dim)">
+      <div class="field">
+        <label class="micro">or drop a file</label>
+        <div id="drop-zone">
+          <span id="drop-label">drop file here · or click to browse</span>
+          <input type="file" id="mint-file" style="display:none">
         </div>
-        <div>
-          <label class="micro">description</label>
-          <input type="text" id="mint-desc" placeholder="optional label">
-        </div>
+      </div>
+      <div class="field">
+        <label class="micro">description</label>
+        <input type="text" id="mint-desc" placeholder="optional label">
       </div>
       <div class="row" style="margin-top:6px">
         <span class="shrink"><button id="btn-quote" class="primary" style="display:none">request quote</button></span>
         <span class="shrink"><button id="btn-mint" class="primary">mint</button></span>
       </div>
       <div id="quote-box">
-        <div class="out-head">
-          <span class="micro">quote <span id="quote-state"></span></span>
-          <span class="micro" id="quote-amount"></span>
+        <div class="out-frame">
+          <div class="out-head">
+            <span class="micro">quote <span id="quote-state"></span></span>
+            <span class="micro" id="quote-amount"></span>
+          </div>
+          <div class="mono-block" id="quote-request"></div>
         </div>
-        <div class="mono-block" id="quote-request"></div>
       </div>
     </section>
 
@@ -286,11 +410,13 @@ table.result td.k { color: var(--dim); width: 55%; font-size: 10px; letter-spaci
 
     <section>
       <div class="sec-title"><span class="idx">03</span>send · bearer token</div>
-      <div class="out-head">
-        <span class="micro">offline send — hand this token to the receiver</span>
-        <button class="mini" data-copy="send-out">copy</button>
+      <div class="out-frame">
+        <div class="out-head">
+          <span class="micro">offline send — hand this token to the receiver</span>
+          <button class="mini" data-copy="send-out">copy</button>
+        </div>
+        <div class="mono-block" id="send-out"></div>
       </div>
-      <div class="mono-block" id="send-out"></div>
     </section>
 
     <section>
@@ -315,25 +441,27 @@ table.result td.k { color: var(--dim); width: 55%; font-size: 10px; letter-spaci
     </section>
 
     <section>
-      <div class="sec-title"><span class="idx">05</span>show · verify-only blob</div>
+      <div class="sec-title"><span class="idx">05</span>show · verify-only token</div>
       <div class="field row">
         <div>
           <label class="micro">context (empty = random nonce)</label>
           <input type="text" id="show-context" placeholder="e.g. buyer-1234">
         </div>
       </div>
-      <div class="out-head">
-        <span class="micro">bound to context — verifiable, cannot be spent</span>
-        <button class="mini" data-copy="show-out">copy</button>
+      <div class="out-frame">
+        <div class="out-head">
+          <span class="micro">pshow1 token — verifiable, cannot be spent</span>
+          <button class="mini" data-copy="show-out">copy</button>
+        </div>
+        <div class="mono-block" id="show-out"></div>
       </div>
-      <div class="mono-block" id="show-out"></div>
     </section>
 
     <section>
       <div class="sec-title"><span class="idx">06</span>inspect · third party</div>
       <div class="field">
-        <label class="micro">showing blob (JSON)</label>
-        <textarea id="inspect-blob" rows="3" placeholder='{"context":"...","presentation":"..."}'></textarea>
+        <label class="micro">showing token</label>
+        <textarea id="inspect-token" rows="3" placeholder="pshow1..."></textarea>
       </div>
       <div class="row">
         <span class="shrink"><button id="btn-inspect" class="primary">inspect</button></span>
@@ -350,7 +478,10 @@ table.result td.k { color: var(--dim); width: 55%; font-size: 10px; letter-spaci
   </div>
 
   <div class="col-right">
-    <div id="log-head">activity</div>
+    <div id="log-head">
+      <div class="sec-title">activity</div>
+      <button class="mini" id="btn-clear-log">clear</button>
+    </div>
     <div id="log"></div>
   </div>
 </main>
@@ -366,22 +497,47 @@ const state = {
   pendingQuote: null,   // {id, amount, request}
   quotePaid: false,
   quoteTimer: null,
+  droppedFile: null,    // File chosen via drag-and-drop
 };
 
 const $ = (id) => document.getElementById(id);
 
-/* --- activity log -------------------------------------------- */
+/* --- toasts ------------------------------------------------------ */
+function toast(msg, kind = "ok") {
+  const el = document.createElement("div");
+  el.className = `toast ${kind}`;
+  el.textContent = msg;
+  $("toasts").appendChild(el);
+  setTimeout(() => {
+    el.classList.add("out");
+    setTimeout(() => el.remove(), 320);
+  }, 4200);
+}
+
+/* --- activity log ------------------------------------------------- */
 function log(msg, kind = "info") {
   const ts = new Date().toTimeString().slice(0, 8);
   const entry = document.createElement("div");
   entry.className = "entry";
   entry.innerHTML = `<span class="ts">${ts}</span><span class="${kind}"></span>`;
   entry.querySelector("span." + kind).textContent = msg;
-  $("log").prepend(entry);
+  const box = $("log");
+  box.prepend(entry);
+  box.scrollTop = 0;
+  if (kind !== "info") toast(msg, kind);
+}
+$("btn-clear-log").addEventListener("click", () => { $("log").innerHTML = ""; });
+
+/* --- busy buttons --------------------------------------------------- */
+function setBusy(btn, on) {
+  if (!btn) return;
+  btn.classList.toggle("busy", on);
+  btn.disabled = on || (btn.id === "btn-mint" && state.paymentRequired && !state.quotePaid);
 }
 
-/* --- fetch helper --------------------------------------------- */
-async function api(path, { method = "GET", body, form } = {}) {
+/* --- fetch helper ---------------------------------------------------- */
+async function api(path, { method = "GET", body, form, btn } = {}) {
+  setBusy(btn, true);
   const opts = { method, headers: {} };
   if (form) { opts.body = form; }
   else if (body !== undefined) {
@@ -392,11 +548,13 @@ async function api(path, { method = "GET", body, form } = {}) {
   try {
     resp = await fetch(path, opts);
   } catch (e) {
+    setBusy(btn, false);
     log(`network error: ${e.message}`, "err");
     throw e;
   }
   let data = null;
   try { data = await resp.json(); } catch (e) { /* no body */ }
+  setBusy(btn, false);
   if (!resp.ok) {
     const detail = (data && data.detail) ? data.detail : `HTTP ${resp.status}`;
     log(`${method} ${path} -> ${detail}`, "err");
@@ -405,19 +563,43 @@ async function api(path, { method = "GET", body, form } = {}) {
   return data;
 }
 
-/* --- copy helpers ---------------------------------------------- */
-function copyText(text, what) {
+/* --- copy helpers ----------------------------------------------------- */
+function copyText(text, what, btn) {
   if (!text) return;
   navigator.clipboard.writeText(text).then(
-    () => log(`copied ${what}`, "ok"),
+    () => {
+      log(`copied ${what}`, "ok");
+      if (btn) {
+        const old = btn.textContent;
+        btn.textContent = "copied";
+        btn.classList.add("copied");
+        setTimeout(() => { btn.textContent = old; btn.classList.remove("copied"); }, 1200);
+      }
+    },
     () => log("clipboard unavailable", "err"),
   );
 }
 document.querySelectorAll("[data-copy]").forEach((btn) => {
-  btn.addEventListener("click", () => copyText($(btn.dataset.copy).textContent, btn.dataset.copy.replace("-", " ")));
+  btn.addEventListener("click", () =>
+    copyText($(btn.dataset.copy).textContent, btn.dataset.copy.replace("-", " "), btn));
 });
 
-/* --- mint selection -------------------------------------------- */
+/* --- identicon: deterministic 5x5 mirrored grid from h ----------------- */
+function identicon(h, size = 44) {
+  const hue = parseInt(h.slice(0, 4), 16) % 360;
+  let cells = "";
+  for (let y = 0; y < 5; y++) {
+    for (let x = 0; x < 3; x++) {
+      const on = parseInt(h[2 + y * 3 + x], 16) > 7;
+      const fill = on ? `hsl(${hue},70%,55%)` : "rgba(255,255,255,0.04)";
+      cells += `<rect x="${x}" y="${y}" width="1" height="1" fill="${fill}"/>` +
+               `<rect x="${4 - x}" y="${y}" width="1" height="1" fill="${fill}"/>`;
+    }
+  }
+  return `<svg class="ident" viewBox="0 0 5 5" width="${size}" height="${size}" shape-rendering="crispEdges">${cells}</svg>`;
+}
+
+/* --- mint selection ----------------------------------------------------- */
 async function loadState() {
   const s = await api("/api/state");
   state.mints = s.mints;
@@ -445,19 +627,34 @@ function renderMintInfo() {
   state.quotePaid = false;
   stopQuotePolling();
   $("quote-box").classList.remove("show");
-  let info = "";
-  if (m.unreachable) info = "unreachable";
-  else if (m.keyset_id) info = `keyset ${m.keyset_id.slice(0, 14)}… · ` +
-    (m.payment_required ? `paid mint · ${m.mint_price_sats} sat` : "free mint");
-  $("mint-info").textContent = info;
+  const keyEl = $("mint-keyset");
+  const payEl = $("mint-pay");
+  if (m.unreachable) {
+    keyEl.textContent = "";
+    payEl.textContent = "unreachable";
+    payEl.className = "pay-badge down";
+  } else if (m.keyset_id) {
+    keyEl.textContent = `keyset ${m.keyset_id.slice(0, 12)}…`;
+    keyEl.onclick = () => copyText(m.keyset_id, "keyset id");
+    if (m.payment_required) {
+      payEl.textContent = `paid · ${m.mint_price_sats} sat`;
+      payEl.className = "pay-badge paid";
+    } else {
+      payEl.textContent = "free";
+      payEl.className = "pay-badge free";
+    }
+  } else {
+    keyEl.textContent = "";
+    payEl.textContent = "";
+  }
   $("btn-quote").style.display = m.payment_required ? "" : "none";
   updateMintButton();
 }
 
 function updateMintButton() {
   const btn = $("btn-mint");
-  if (!state.paymentRequired) { btn.disabled = false; return; }
-  btn.disabled = !(state.pendingQuote && state.quotePaid);
+  if (btn.classList.contains("busy")) return;
+  btn.disabled = state.paymentRequired && !(state.pendingQuote && state.quotePaid);
 }
 
 $("mint-select").addEventListener("change", (e) => {
@@ -466,39 +663,60 @@ $("mint-select").addEventListener("change", (e) => {
   refreshAssets();
 });
 
-$("btn-add-mint-toggle").addEventListener("click", () => {
-  $("add-mint").classList.toggle("show");
+/* --- add-mint popover ----------------------------------------------------- */
+$("btn-add-mint-toggle").addEventListener("click", (e) => {
+  e.stopPropagation();
+  $("mint-popover").classList.toggle("show");
+  $("mint-form-error").textContent = "";
+});
+document.addEventListener("click", (e) => {
+  const pop = $("mint-popover");
+  if (pop.classList.contains("show") && !pop.contains(e.target) && e.target.id !== "btn-add-mint-toggle") {
+    pop.classList.remove("show");
+  }
 });
 
 $("btn-add-mint").addEventListener("click", async () => {
   const name = $("new-mint-name").value.trim();
   const url = $("new-mint-url").value.trim();
-  if (!name || !url) { log("mint name and url required", "err"); return; }
+  const errEl = $("mint-form-error");
+  if (!name || !url) { errEl.textContent = "name and url are required"; return; }
+  if (!/^https?:\/\//.test(url)) { errEl.textContent = "url must start with http:// or https://"; return; }
+  errEl.textContent = "";
   try {
-    const m = await api("/api/mints", { method: "POST", body: { name, url } });
+    const m = await api("/api/mints", { method: "POST", body: { name, url }, btn: $("btn-add-mint") });
     log(`mint added: ${m.name} (${m.url})`, "ok");
     $("new-mint-name").value = "";
     $("new-mint-url").value = "";
+    $("mint-popover").classList.remove("show");
     await loadState();
     state.mint = m.id;
     $("mint-select").value = m.id;
     renderMintInfo();
     refreshAssets();
-  } catch (e) { /* logged */ }
+  } catch (e) {
+    errEl.textContent = e.message;
+  }
 });
 
 $("btn-del-mint").addEventListener("click", async () => {
-  if (state.mint === "local") { log("cannot remove the local mint", "err"); return; }
+  if (state.mint === "local") {
+    $("mint-form-error").textContent = "cannot remove the local mint";
+    return;
+  }
   try {
     await api(`/api/mints/${state.mint}`, { method: "DELETE" });
     log(`mint removed: ${state.mint}`, "ok");
     state.mint = "local";
+    $("mint-popover").classList.remove("show");
     await loadState();
     refreshAssets();
-  } catch (e) { /* logged */ }
+  } catch (e) {
+    $("mint-form-error").textContent = e.message;
+  }
 });
 
-/* --- wallet tabs ------------------------------------------------ */
+/* --- wallet tabs ----------------------------------------------------------- */
 document.querySelectorAll(".tab").forEach((tab) => {
   tab.addEventListener("click", () => {
     document.querySelectorAll(".tab").forEach((t) => t.classList.remove("active"));
@@ -508,20 +726,54 @@ document.querySelectorAll(".tab").forEach((tab) => {
   });
 });
 
-/* --- mint section ------------------------------------------------ */
+/* --- mint section ------------------------------------------------------------ */
+$("mint-text").addEventListener("input", () => {
+  const n = new TextEncoder().encode($("mint-text").value).length;
+  $("mint-count").textContent = `${n} byte${n === 1 ? "" : "s"}`;
+});
+
+const dropZone = $("drop-zone");
+dropZone.addEventListener("click", () => $("mint-file").click());
+dropZone.addEventListener("dragover", (e) => {
+  e.preventDefault();
+  dropZone.classList.add("drag");
+});
+dropZone.addEventListener("dragleave", () => dropZone.classList.remove("drag"));
+dropZone.addEventListener("drop", (e) => {
+  e.preventDefault();
+  dropZone.classList.remove("drag");
+  if (e.dataTransfer.files.length) setMintFile(e.dataTransfer.files[0]);
+});
+$("mint-file").addEventListener("change", () => {
+  if ($("mint-file").files.length) setMintFile($("mint-file").files[0]);
+});
+
+function setMintFile(file) {
+  state.droppedFile = file;
+  const label = $("drop-label");
+  label.innerHTML = `file: <span class="file-name"></span> · click to replace`;
+  label.querySelector(".file-name").textContent = `${file.name} (${file.size} B)`;
+  $("mint-text").value = "";
+  $("mint-count").textContent = "0 bytes";
+}
+function clearMintFile() {
+  state.droppedFile = null;
+  $("mint-file").value = "";
+  $("drop-label").textContent = "drop file here · or click to browse";
+}
+
 function mintPayload() {
-  const file = $("mint-file").files[0];
-  const text = $("mint-text").value;
   const description = $("mint-desc").value;
-  if (file) {
+  if (state.droppedFile) {
     const form = new FormData();
     form.append("wallet", state.wallet);
     form.append("mint", state.mint);
     form.append("description", description);
     if (state.pendingQuote) form.append("quote", state.pendingQuote.id);
-    form.append("file", file);
+    form.append("file", state.droppedFile);
     return { form };
   }
+  const text = $("mint-text").value;
   if (!text) return null;
   const body = { wallet: state.wallet, mint: state.mint, description, text };
   if (state.pendingQuote) body.quote = state.pendingQuote.id;
@@ -532,30 +784,29 @@ $("btn-mint").addEventListener("click", async () => {
   const payload = mintPayload();
   if (!payload) { log("give asset text or choose a file", "err"); return; }
   try {
-    const r = await api("/api/mint", { method: "POST", ...payload });
+    const r = await api("/api/mint", { method: "POST", ...payload, btn: $("btn-mint") });
     log(`minted ${r.h.slice(0, 18)}… for ${state.wallet}`, "ok");
     state.pendingQuote = null;
     state.quotePaid = false;
     $("quote-box").classList.remove("show");
+    clearMintFile();
     updateMintButton();
     refreshAssets();
   } catch (e) { /* logged */ }
 });
 
 $("btn-quote").addEventListener("click", async () => {
-  const file = $("mint-file").files[0];
-  const text = $("mint-text").value;
   let payload;
-  if (file) {
+  if (state.droppedFile) {
     const form = new FormData();
     form.append("mint", state.mint);
-    form.append("file", file);
+    form.append("file", state.droppedFile);
     payload = { form };
-  } else if (text) {
-    payload = { body: { mint: state.mint, text } };
+  } else if ($("mint-text").value) {
+    payload = { body: { mint: state.mint, text: $("mint-text").value } };
   } else { log("give asset text or choose a file first", "err"); return; }
   try {
-    const q = await api("/api/quote", { method: "POST", ...payload });
+    const q = await api("/api/quote", { method: "POST", ...payload, btn: $("btn-quote") });
     if (q.state === "free") { log("this mint is free — mint directly", "info"); return; }
     state.pendingQuote = { id: q.quote, amount: q.amount, request: q.request };
     state.quotePaid = false;
@@ -578,7 +829,7 @@ function startQuotePolling() {
       $("quote-state").textContent = `· ${q.state}`;
       if (q.state === "paid") {
         state.quotePaid = true;
-        log(`quote paid — mint enabled`, "ok");
+        log("quote paid — mint enabled", "ok");
         updateMintButton();
         stopQuotePolling();
       }
@@ -589,7 +840,7 @@ function stopQuotePolling() {
   if (state.quoteTimer) { clearInterval(state.quoteTimer); state.quoteTimer = null; }
 }
 
-/* --- assets ------------------------------------------------------ */
+/* --- asset cards ---------------------------------------------------------------- */
 function badge(status) {
   const cls = status === "active" ? "active" : status === "burned" ? "burned" : "unknown";
   return `<span class="badge ${cls}">${status}</span>`;
@@ -603,37 +854,41 @@ async function refreshAssets() {
   const box = $("assets");
   box.innerHTML = "";
   if (!assets.length) {
-    box.innerHTML = `<div class="micro">no assets — mint or receive one</div>`;
+    box.innerHTML = `<div class="empty-state"><span class="glyph">◇</span>no assets yet — mint one above</div>`;
     return;
   }
   for (const a of assets) {
-    const row = document.createElement("div");
-    row.className = "asset";
-    row.innerHTML = `
-      <span class="hash" title="click to copy full hash"></span>
-      <span class="desc"></span>
-      ${badge(a.asset_status)}
-      <span class="shrink">
-        <button class="mini" data-act="send">send</button>
-        <button class="mini" data-act="show">show</button>
-        <button class="mini danger" data-act="burn">burn</button>
-      </span>`;
-    const hashEl = row.querySelector(".hash");
+    const card = document.createElement("div");
+    card.className = "card";
+    card.innerHTML = `
+      ${identicon(a.h)}
+      <div class="card-body">
+        <span class="hash" title="click to copy full hash"></span>
+        <div class="desc"></div>
+        <div class="card-foot">
+          ${badge(a.asset_status)}
+          <span style="flex:1"></span>
+          <button class="mini" data-act="send">send</button>
+          <button class="mini" data-act="show">show</button>
+          <button class="mini danger" data-act="burn">burn</button>
+        </div>
+      </div>`;
+    const hashEl = card.querySelector(".hash");
     hashEl.textContent = a.h.slice(0, 12) + "…" + a.h.slice(-6);
     hashEl.addEventListener("click", () => copyText(a.h, "asset hash"));
-    row.querySelector(".desc").textContent = a.description || "";
-    row.querySelectorAll("button").forEach((btn) => {
-      btn.addEventListener("click", () => assetAction(btn.dataset.act, a));
+    card.querySelector(".desc").textContent = a.description || "";
+    card.querySelectorAll("button").forEach((btn) => {
+      btn.addEventListener("click", () => assetAction(btn.dataset.act, a, btn));
     });
-    box.appendChild(row);
+    box.appendChild(card);
   }
 }
 
-async function assetAction(act, a) {
+async function assetAction(act, a, btn) {
   const base = { wallet: state.wallet, mint: state.mint, h: a.h };
   try {
     if (act === "send") {
-      const r = await api("/api/send", { method: "POST", body: base });
+      const r = await api("/api/send", { method: "POST", body: base, btn });
       $("send-out").textContent = r.token;
       log(`token out for ${a.h.slice(0, 12)}… (bearer — keep safe)`, "ok");
       refreshAssets();
@@ -641,19 +896,20 @@ async function assetAction(act, a) {
       const r = await api("/api/show", {
         method: "POST",
         body: { ...base, context: $("show-context").value },
+        btn,
       });
-      $("show-out").textContent = JSON.stringify(r);
+      $("show-out").textContent = r.token;
       log(`showing published for ${a.h.slice(0, 12)}… (verify-only)`, "ok");
     } else if (act === "burn") {
       if (!confirm(`burn ${a.h.slice(0, 18)}… ? this retires the asset`)) return;
-      await api("/api/burn", { method: "POST", body: base });
+      await api("/api/burn", { method: "POST", body: base, btn });
       log(`burned ${a.h.slice(0, 12)}…`, "ok");
       refreshAssets();
     }
   } catch (e) { /* logged */ }
 }
 
-/* --- receive ------------------------------------------------------ */
+/* --- receive ------------------------------------------------------------------------ */
 $("btn-receive").addEventListener("click", async () => {
   const token = $("recv-token").value.trim();
   if (!token) { log("paste a token first", "err"); return; }
@@ -667,6 +923,7 @@ $("btn-receive").addEventListener("click", async () => {
         description: $("recv-desc").value,
         public: $("recv-public").checked,
       },
+      btn: $("btn-receive"),
     });
     log(`received ${r.h.slice(0, 18)}… into ${state.wallet}`, "ok");
     $("recv-token").value = "";
@@ -674,17 +931,16 @@ $("btn-receive").addEventListener("click", async () => {
   } catch (e) { /* logged */ }
 });
 
-/* --- inspect ------------------------------------------------------- */
+/* --- inspect -------------------------------------------------------------------------- */
 $("btn-inspect").addEventListener("click", async () => {
-  let blob;
+  const token = $("inspect-token").value.trim();
+  if (!token) { log("paste a showing token first", "err"); return; }
   try {
-    blob = JSON.parse($("inspect-blob").value);
-  } catch (e) {
-    log("blob is not valid JSON", "err");
-    return;
-  }
-  try {
-    const r = await api("/api/inspect", { method: "POST", body: { mint: state.mint, blob } });
+    const r = await api("/api/inspect", {
+      method: "POST",
+      body: { mint: state.mint, token },
+      btn: $("btn-inspect"),
+    });
     $("inspect-result").style.display = "";
     $("ir-hash").textContent = r.asset_hash.slice(0, 24) + "…";
     $("ir-hash").title = r.asset_hash;
@@ -705,7 +961,7 @@ function setBool(id, v) {
   el.className = v ? "v-true" : "v-false";
 }
 
-/* --- boot ------------------------------------------------------------ */
+/* --- boot ------------------------------------------------------------------------------ */
 (async function boot() {
   try {
     await loadState();
