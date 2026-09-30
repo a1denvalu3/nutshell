@@ -393,6 +393,13 @@ const SlideUnderHood = () => (
       exactly when the mint signed this asset for this secret; the proofs are
       Chaum–Pedersen sigma protocols (commit → challenge → respond → verify).
     </p>
+    <p className="footnote d3" style={{ marginTop: 4 }}>
+      Revealing U<sub>s</sub> is safe: its base u′ is freshly randomized for
+      every presentation, so linking it back to the issuance record is a DDH
+      problem — XDH-hard, and the pairing can't help because all these points
+      live in G₁. The pairing check consumes U<sub>s</sub> without exposing
+      the secret.
+    </p>
     <div className="chart-wrap d3">
       <WireSizeChart />
       <p style={{ fontSize: '0.8rem', color: 'var(--muted)', textAlign: 'center', marginTop: 4 }}>
