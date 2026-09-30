@@ -20,9 +20,9 @@
 
 * { box-sizing: border-box; }
 
-/* scale the whole deck with the viewport: 18px on small laptops,
-   up to 22px on large screens/projectors (rem-based design) */
-html { font-size: clamp(18px, 1.2vw, 22px); }
+/* scale the whole deck with the viewport: 20px on small laptops,
+   up to 32px on large screens/projectors (rem-based design) */
+html { font-size: clamp(20px, 1.6vw, 32px); }
 
 body {
   margin: 0;
@@ -39,7 +39,7 @@ h3 { font-size: 1rem; font-weight: 600; margin: 0 0 0.4em; }
 
 .subtitle {
   font-size: 0.95rem; font-weight: 400;
-  max-width: 620px; color: var(--muted);
+  max-width: 38.75rem; color: var(--muted);
   margin: 0 0 1.2em;
 }
 
@@ -58,10 +58,10 @@ h3 { font-size: 1rem; font-weight: 600; margin: 0 0 0.4em; }
 .slide.active { opacity: 1; pointer-events: auto; }
 
 .slide-content {
-  width: 100%; max-width: 880px;
+  width: 100%; max-width: 55rem;
   padding: 60px 40px 100px;
 }
-.slide-content.wide { max-width: 1060px; }
+.slide-content.wide { max-width: 66.25rem; }
 
 /* ── Animations ── */
 @keyframes fadeUp {
@@ -121,7 +121,7 @@ nav button:disabled { opacity: 0.2; cursor: default; }
 .dot.on { background: var(--purple); }
 
 /* ── Layout ── */
-.cols { display: flex; gap: 40px; max-width: 1060px; }
+.cols { display: flex; gap: 40px; max-width: 66.25rem; }
 .col { flex: 1; }
 
 .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
@@ -135,7 +135,7 @@ nav button:disabled { opacity: 0.2; cursor: default; }
 .card li { margin-bottom: 0.35em; }
 .card p { margin: 0.3em 0; }
 
-.chart-wrap { max-width: 920px; margin: 0 auto; }
+.chart-wrap { max-width: 57.5rem; margin: 0 auto; }
 
 .compare { width: 100%; border-collapse: collapse; }
 .compare th {
@@ -206,11 +206,11 @@ nav button:disabled { opacity: 0.2; cursor: default; }
   letter-spacing: -0.03em; line-height: 1.25;
   margin: 0 0 0.55em;
 }
-.lede { font-size: 1rem; max-width: 740px; margin: 0 0 0.45em; }
+.lede { font-size: 1rem; max-width: 46.25rem; margin: 0 0 0.45em; }
 .lede.muted { color: var(--muted); }
 .pullquote { text-align: center; }
 .pullquote .headline {
-  font-size: 2.1rem; max-width: 820px;
+  font-size: 2.1rem; max-width: 51.25rem;
   margin: 0 auto 0.5em;
 }
 .pullquote .lede { margin: 0 auto; }
