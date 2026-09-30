@@ -2,7 +2,7 @@ import React, { useState, useCallback, useEffect } from 'react'
 import { WireSizeChart } from './Charts'
 import MathTex from './MathTex'
 
-const TITLE = 'PS-NFT Credentials'
+const TITLE = 'Private NFTs, ecash-style'
 
 // Exact path data from the skill references (sentry-logo.svg / sentry-glyph.svg)
 const GLYPH_PATH =
@@ -27,6 +27,27 @@ function SentryGlyph({ size = 32 }) {
   )
 }
 
+/* ── Reusable flow diagram: boxes + arrows + caption ── */
+
+function Flow({ steps, caption }) {
+  return (
+    <>
+      <div className="flow">
+        {steps.map((s, i) => (
+          <React.Fragment key={i}>
+            {i > 0 && <div className="flow-arrow">→</div>}
+            <div className={`flow-box${s.purple ? ' purple' : ''}`}>
+              <div className="flow-title">{s.title}</div>
+              {s.sub && <div className="flow-sub">{s.sub}</div>}
+            </div>
+          </React.Fragment>
+        ))}
+      </div>
+      {caption && <div className="flow-caption">{caption}</div>}
+    </>
+  )
+}
+
 /* ─────────────────────────── Slides ─────────────────────────── */
 
 const SlideTitle = () => (
@@ -34,11 +55,10 @@ const SlideTitle = () => (
     <div className="title-logo">
       <SentryLogo width={190} />
     </div>
-    <h1>PS-NFT: Pointcheval–Sanders credentials for asset-bound NFTs</h1>
+    <h1>Private NFTs, ecash-style</h1>
     <p className="subtitle">
-      Pairing-based anonymous credentials on BLS12-381 — as implemented in
-      Nutshell (<span className="mi">cashu/core/crypto/ps.py</span>,{' '}
-      <span className="mi">cashu/nft/</span>)
+      Unique digital assets with cash-grade privacy — anyone can verify
+      ownership, and even the mint can't see which asset changes hands.
     </p>
     <div className="title-meta">
       September 2026 · experimental branch <code>feature/ps-nft-credentials</code>
@@ -46,519 +66,290 @@ const SlideTitle = () => (
   </div>
 )
 
-const SlideIdea = () => (
+const SlideProblem = () => (
   <>
-    <h2>The idea in one slide</h2>
-    <p className="subtitle d1">
-      One credential per asset. Verifiable by <strong>anyone</strong> via a
-      pairing — no mint secret needed. Operations feel like ecash.
-    </p>
-    <div className="cards d2">
-      <div className="card">
-        <h3>
-          <span className="material-symbols-outlined">generating_tokens</span>
-          Mint — <code>nft mint</code>
-        </h3>
-        <p>
-          Bind an asset id <MathTex tex={'h'} /> and an owner secret{' '}
-          <MathTex tex={'s'} /> into a PS credential. One credential per asset,
-          enforced by the mint.
-        </p>
-      </div>
-      <div className="card">
-        <h3>
-          <span className="material-symbols-outlined">swap_horiz</span>
-          Swap — <code>nft send</code> / <code>nft receive</code>
-        </h3>
-        <p>
-          Hand over an offline bearer token; the receiver does a two-round
-          blind swap. The mint never learns which asset moved.
-        </p>
-      </div>
-      <div className="card">
-        <h3>
-          <span className="material-symbols-outlined">local_fire_department</span>
-          Burn — <code>nft burn</code>
-        </h3>
-        <p>
-          Tombstone the asset: the nullifier is spent and{' '}
-          <MathTex tex={'h'} /> is marked burned. Reveals{' '}
-          <MathTex tex={'h'} /> by necessity.
-        </p>
-      </div>
-      <div className="card">
-        <h3>
-          <span className="material-symbols-outlined">visibility</span>
-          Show — <code>nft show</code> / <code>nft inspect</code>
-        </h3>
-        <p>
-          Publish a purpose-bound, unspendable proof of ownership a third party
-          can verify offline + one mint query.
-        </p>
-      </div>
+    <div className="headline d1">
+      NFTs made ownership public. Cash made payments private. This is both.
     </div>
+    <p className="lede d2">
+      A regular NFT publishes every ownership transfer to a public ledger,
+      forever. Ecash is private — but it's only fungible money. This scheme
+      issues unique assets, one per file, with ecash-grade privacy.
+    </p>
   </>
 )
 
-const SlideSetup = () => (
+const SlideQualities = () => (
   <>
-    <h2>Setup and keys</h2>
-    <div className="math d1">
-      <MathTex
-        display
-        tex={'e : G_1 \\times G_2 \\to G_T \\qquad e(a\\cdot P,\\ b\\cdot Q) = e(P, Q)^{a\\cdot b}'}
-      />
-      <MathTex
-        display
-        tex={'\\text{sk} = (x,\\ y_h,\\ y_s) \\qquad \\text{pk} = (X_2,\\ Y_{h2},\\ Y_{s2}) = (x\\cdot g_2,\\ y_h\\cdot g_2,\\ y_s\\cdot g_2)'}
-      />
+    <div className="headline d1">
+      Anyone can check. No one can look you up.
     </div>
-    <div className="cards d2">
-      <div className="card">
-        <h3>BLS12-381, type-3 pairing</h3>
-        <p>
-          Groups <MathTex tex={'G_1, G_2'} /> of prime order{' '}
-          <MathTex tex={'r'} />, generators{' '}
-          <MathTex tex={'g_1, g_2'} />, target group{' '}
-          <MathTex tex={'G_T'} /> — and no efficient isomorphism between{' '}
-          <MathTex tex={'G_1'} /> and <MathTex tex={'G_2'} />.
-        </p>
-      </div>
-      <div className="card">
-        <h3>Credential attributes</h3>
-        <p>
-          <MathTex tex={'h = \\text{SHA-256}(\\text{asset}) \\bmod r'} /> — the
-          asset id — and <MathTex tex={'s'} /> — the owner secret, never
-          revealed anywhere.
-        </p>
-      </div>
+    <p className="lede d2">
+      Anyone can privately verify ownership of an asset — no blockchain
+      lookup, no account, no permission.
+    </p>
+    <p className="lede d2">
+      And transfers are private even from the mint: it notarizes every
+      transfer, and never learns which asset moved.
+    </p>
+  </>
+)
+
+const SlideCast = () => (
+  <>
+    <div className="headline d1">
+      A notary, an owner, and anyone who wants to check.
     </div>
+    <p className="lede d2">
+      <strong>The mint</strong> issues and notarizes — but it is not a
+      blockchain. It keeps no owner ledger, only a list of serial numbers it
+      has seen spent.
+    </p>
+    <p className="lede d2">
+      <strong>The owner</strong> holds a credential plus a secret in their
+      wallet. That pair IS the asset.
+    </p>
+    <p className="lede d2">
+      <strong>Anyone</strong> — say, a buyer — can verify before paying.
+    </p>
     <div className="callout purple d3">
-      <strong>
-        The <MathTex tex={'y'} /> values exist in <MathTex tex={'G_2'} />{' '}
-        only, by construction.
-      </strong>{' '}
-      If <MathTex tex={'y_h'} /> were available in <MathTex tex={'G_1'} />,
-      anyone could compute <MathTex tex={'u^{y_h}'} /> in{' '}
-      <MathTex tex={'G_1'} /> and rescale a credential to a different asset —
-      the exponent-rescaling forgery. The type-3 asymmetry is what makes
-      withholding possible while verification still works.
+      A credential is the mint's unforgeable signature over exactly two
+      things: the asset's fingerprint, and a secret only the owner knows.
     </div>
   </>
 )
 
 const SlideMinting = () => (
   <>
-    <h2>Minting</h2>
-    <div className="steps d1">
-      <div className="step">
-        <div className="step-num">1</div>
-        <div className="step-body">
-          <p>
-            <code>nft init</code>, then <code>nft quote &lt;file&gt;</code> →
-            BOLT11 invoice via the hosting ecash mint (NUT-04-style) → pay →{' '}
-            <code>nft mint --quote &lt;id&gt;</code>. On free mints:{' '}
-            <code>nft mint &lt;file&gt;</code>. The file is only needed at
-            quote time.
-          </p>
-        </div>
-      </div>
-      <div className="step">
-        <div className="step-num">2</div>
-        <div className="step-body">
-          <p>
-            Wallet sends{' '}
-            <MathTex tex={'(h,\\ S = s\\cdot g_1,\\ \\text{PoK of } s)'} />.
-            The mint checks the proof, checks <MathTex tex={'h'} /> was never
-            minted, consumes the quote atomically, picks{' '}
-            <MathTex tex={'k'} /> and sets <MathTex tex={'u = k\\cdot g_1'} />.
-          </p>
-        </div>
-      </div>
-      <div className="step">
-        <div className="step-num">3</div>
-        <div className="step-body">
-          <div className="math small">
-            <MathTex
-              display
-              tex={'v = (x + y_h\\cdot h)\\cdot u + (k\\cdot y_s)\\cdot S = (x + y_h\\cdot h + y_s\\cdot s)\\cdot u'}
-            />
-          </div>
-          <p>
-            The DH trick —{' '}
-            <MathTex
-              tex={'S^{k\\cdot y_s} = (s\\cdot g_1)^{k\\cdot y_s} = s\\cdot y_s\\cdot u'}
-            />{' '}
-            — binds <MathTex tex={'s'} /> without the mint learning it. The
-            wallet stores <MathTex tex={'(u,\\ v,\\ h,\\ s)'} />.
-          </p>
-        </div>
-      </div>
+    <div className="headline d1">One file, one credential — ever.</div>
+    <div className="d2">
+      <Flow
+        steps={[
+          { title: 'You', sub: 'bring a file; its fingerprint (hash) is the asset id' },
+          { title: 'The Mint', sub: 'checks the asset was never issued before', purple: true },
+          { title: 'Your wallet', sub: 'receives the credential' },
+        ]}
+        caption="You pay a normal Lightning invoice if the mint charges — the file is only needed to get a quote."
+      />
     </div>
-    <div className="callout d2">
-      <strong>
-        Why <MathTex tex={'h'} /> is revealed at mint, by design:
-      </strong>{' '}
-      one credential per asset — the mint must see <MathTex tex={'h'} /> to
-      reject duplicates.
-    </div>
+    <p className="lede d3">
+      The mint must see the fingerprint to reject duplicates — minting reveals
+      the asset, by design. The credential it issues binds that asset to a
+      secret your wallet just generated, using a Diffie–Hellman trick: the
+      mint never learns the secret, yet the credential provably encodes it.
+    </p>
   </>
 )
 
-const SlideAnatomy = () => (
+const SlideOwnership = () => (
   <>
-    <h2>The credential and its presentations</h2>
-    <div className="cards three d1">
-      <div className="card">
-        <h3>Credential — 193 B</h3>
-        <p>
-          <MathTex tex={'(u,\\ v,\\ h,\\ s)'} /> + keyset id. Never leaves the
-          wallet except inside a bearer token.
-        </p>
-      </div>
-      <div className="card">
-        <h3>Public presentation — 321 B</h3>
-        <p>
-          <MathTex tex={"(h,\\ u',\\ v',\\ U_s,\\ N,\\ \\pi)"} /> — reveals
-          the asset id <MathTex tex={'h'} />. Used by{' '}
-          <code>--public</code> swaps and burns.
-        </p>
-      </div>
-      <div className="card">
-        <h3>Private presentation — 401 B</h3>
-        <p>
-          <MathTex
-            tex={"(u',\\ v',\\ U_h,\\ U_s,\\ N,\\ \\pi_h,\\ \\pi_s)"}
-          />{' '}
-          — <MathTex tex={'h'} /> stays hidden. The default swap.
-        </p>
-      </div>
+    <div className="headline d1">
+      Ownership is a secret you hold, not a row in a database.
     </div>
-    <div className="math d2">
-      <MathTex
-        display
-        tex={"\\rho \\leftarrow \\mathbb{Z}_r^{*} \\qquad (u',\\ v') = (\\rho\\cdot u,\\ \\rho\\cdot v)"}
-      />
-      <span className="math-note">
-        rerandomized every showing — a fresh signature object each time
-      </span>
-    </div>
+    <p className="lede d2">
+      No blockchain, no account, no registry of owners — the credential and
+      its secret are all there is. The mint remembers only spent serial
+      numbers, and each ownership state has exactly one:{' '}
+      <code>serial = secret × public basepoint</code>.
+    </p>
+    <p className="lede d2">
+      Every transfer creates a new secret, hence a new serial — so at any
+      moment exactly one serial per asset is unspent: the current owner's.
+    </p>
     <div className="callout purple d3">
-      Matching <MathTex tex={"(u',\\ v')"} /> to a recorded issuance{' '}
-      <MathTex tex={'(u,\\ v)'} /> means deciding{' '}
-      <MathTex tex={"\\log_{u}(u') = \\log_{v}(v')"} /> — DDH in{' '}
-      <MathTex tex={'G_1'} />, XDH-hard on BLS12-381 — so the raw MAC can't be
-      a static tracking cookie for third parties.
+      "Is this serial spent?" is the whole ownership question.
     </div>
   </>
 )
 
-const SlideSwapFlow = () => (
-  <>
-    <h2>Swapping I — the two-round blind swap</h2>
-    <div className="steps d1">
-      <div className="step">
-        <div className="step-num">1</div>
-        <div className="step-body">
-          <p>
-            <code>nft send &lt;h&gt;</code> prints an offline bearer token (
-            <span className="mi">psnft1…</span>) containing the credential
-            incl. <MathTex tex={'s'} /> — like unredeemed ecash: swap promptly.
-          </p>
-        </div>
-      </div>
-      <div className="step">
-        <div className="step-num">2</div>
-        <div className="step-body">
-          <p>
-            <code>nft receive &lt;token&gt;</code>, round 1:{' '}
-            <code>POST /transfer/private/begin</code> with{' '}
-            <MathTex tex={'N'} /> → mint returns{' '}
-            <MathTex tex={'u_2 = k_2\\cdot g_1'} /> where{' '}
-            <MathTex tex={'k_2 = \\text{HMAC}_x(N)'} /> — deterministic, so
-            the mint stays stateless.
-          </p>
-        </div>
-      </div>
-      <div className="step">
-        <div className="step-num">3</div>
-        <div className="step-body">
-          <p>
-            Round 2: <code>POST /transfer/private</code> with the private
-            presentation, the blind witness{' '}
-            <MathTex tex={'W_h = h\\cdot u_2'} />, and the receiver's{' '}
-            <MathTex tex={'S_{\\text{new}}'} /> + PoK. The mint verifies,
-            claims <MathTex tex={'N'} /> atomically — double-spend = rejected —
-            and blindly re-issues.
-          </p>
-        </div>
-      </div>
+const SlidePullquote = () => (
+  <div className="pullquote">
+    <div className="headline d1">
+      "The mint sees a credential die and a new one be born. It cannot link
+      them — and it cannot name the asset."
     </div>
-    <div className="callout d2">
-      <code>--public</code> swaps are single-round:{' '}
-      <code>POST /transfer</code> with the public presentation — they reveal{' '}
-      <MathTex tex={'h'} />.
-    </div>
-  </>
+    <p className="lede muted d2">Every default transfer, in one sentence.</p>
+  </div>
 )
 
-const SlideSwapMath = () => (
+const SlideTransfer = () => (
   <>
-    <h2>Swapping II — the math</h2>
-    <div className="cards d1">
-      <div className="card">
-        <h3>
-          Equality of <MathTex tex={'h'} />, proven — never revealed
-        </h3>
-        <p>
-          <MathTex tex={'\\pi_h'} /> is a dlog-eq proof that the SAME{' '}
-          <MathTex tex={'h'} /> sits in{' '}
-          <MathTex tex={"U_h = h\\cdot u'"} /> (input) and{' '}
-          <MathTex tex={'W_h = h\\cdot u_2'} /> (output).
-        </p>
-      </div>
-      <div className="card">
-        <h3>Blind re-issuance</h3>
-        <p>
-          <MathTex
-            tex={'v_2 = x\\cdot u_2 + y_h\\cdot W_h + (k_2\\cdot y_s)\\cdot S_{\\text{new}}'}
-          />{' '}
-          — a fresh credential over the same <MathTex tex={'h'} />, bound to
-          the receiver's new secret.
-        </p>
-      </div>
+    <div className="headline d1">
+      Hand it over like cash. Swap it before it's spent twice.
     </div>
-    <div className="callout purple d2">
-      <strong>What the mint learns from a private swap — exactly:</strong> THAT
-      a credential moved, the spent nullifier <MathTex tex={'N'} />, and an
-      unchainable <MathTex tex={'S_{\\text{new}}'} /> — never which asset.
-    </div>
-  </>
-)
-
-const SlideVerification = () => (
-  <>
-    <h2>Verification equations</h2>
-    <div className="cols d1">
-      <div className="col">
-        <div className="math small">
-          <span className="math-label">Public</span>
-          <MathTex
-            display
-            tex={"e(v',\\ g_2) = e(u',\\ X_2 + h\\cdot Y_{h2}) \\cdot e(U_s,\\ Y_{s2})"}
-          />
-        </div>
-      </div>
-      <div className="col">
-        <div className="math small">
-          <span className="math-label">Private</span>
-          <MathTex
-            display
-            tex={"e(v',\\ g_2) = e(u',\\ X_2) \\cdot e(U_h,\\ Y_{h2}) \\cdot e(U_s,\\ Y_{s2})"}
-          />
-        </div>
-      </div>
-    </div>
-    <div className="card d2">
-      <h3>Ownership — Chaum–Pedersen dlog-eq</h3>
-      <p>
-        Same <MathTex tex={'s'} /> in <MathTex tex={'N'} /> (base{' '}
-        <MathTex tex={'G_{\\text{NULL}}'} />) and <MathTex tex={'U_s'} />{' '}
-        (base <MathTex tex={"u'"} />); in a private swap, same{' '}
-        <MathTex tex={'h'} /> in <MathTex tex={'U_h'} /> and{' '}
-        <MathTex tex={'W_h'} />.
-      </p>
-    </div>
-    <div className="math small d3">
-      <span className="math-label">Why the pairing holds — one line of bilinearity</span>
-      <MathTex
-        display
-        tex={"e(v', g_2) = e(u, g_2)^{\\rho(x + y_h\\cdot h + y_s\\cdot s)} = e(\\rho\\cdot u,\\ (x + y_h\\cdot h)\\cdot g_2) \\cdot e(\\rho\\cdot s\\cdot u,\\ y_s\\cdot g_2)"}
+    <div className="d2">
+      <Flow
+        steps={[
+          { title: 'Sender', sub: 'copies the credential out as an offline token, like an ecash token' },
+          { title: 'Receiver', sub: 'swaps it at the mint for a fresh credential under a new secret', purple: true },
+          { title: 'The Mint', sub: 'old serial spent, new credential born' },
+        ]}
+        caption="The token is a bearer instrument until the receiver swaps — swap promptly, like unredeemed ecash."
       />
     </div>
-    <div className="callout d3">
-      Anyone with the 288-byte public parameter set can run this offline — no
-      mint secret, no interaction.
-    </div>
-  </>
-)
-
-const SlidePurposeBinding = () => (
-  <>
-    <h2>Purpose binding</h2>
-    <div className="math d1">
-      <MathTex
-        display
-        tex={'c = \\text{SHA-256}(\\text{DST} \\,\\|\\, \\text{binding} \\,\\|\\, B \\,\\|\\, P \\,\\|\\, T) \\bmod r'}
-      />
-      <span className="math-note">
-        every Fiat–Shamir transcript carries a length-framed binding right after the DST
-      </span>
-    </div>
-    <div className="cards three d2">
-      <div className="card">
-        <h3>Transfer</h3>
-        <p>
-          Binds the receiver's <MathTex tex={'S_{\\text{new}}'} /> — the proof
-          works for that exact re-issuance only.
-        </p>
-      </div>
-      <div className="card">
-        <h3>Burn</h3>
-        <p>Binds a burn domain constant.</p>
-      </div>
-      <div className="card">
-        <h3>Showing</h3>
-        <p>Binds a showing domain + verifier context (e.g. buyer nonce).</p>
-      </div>
-    </div>
-    <div className="math small d3">
-      <span className="math-label">Chaum–Pedersen lifecycle, compact</span>
-      <MathTex
-        display
-        tex={'T_i = r\\cdot B_i \\;\\to\\; c \\;\\to\\; z = r + c\\cdot s \\;\\to\\; \\hat{T}_i = z\\cdot B_i - c\\cdot P_i,\\ \\ c \\stackrel{?}{=} \\text{SHA-256}(\\text{DST} \\,\\|\\, \\text{binding} \\,\\|\\, B \\,\\|\\, P \\,\\|\\, \\hat{T})'}
-      />
-    </div>
-    <div className="callout purple d3">
-      <strong>This kills replay:</strong> pre-fix, a published presentation
-      was replayable into <code>/transfer</code> by anyone — demonstrated live.
-      Now a proof speaks for exactly one purpose.
-    </div>
+    <p className="lede d3">
+      The receiver's wallet proves the new credential is for the same asset as
+      the old one — without naming it. (A public mode exists if you WANT to
+      reveal the asset; burning needs it.)
+    </p>
   </>
 )
 
 const SlideBurn = () => (
   <>
-    <h2>Burning</h2>
-    <div className="steps d1">
-      <div className="step">
-        <div className="step-num">1</div>
-        <div className="step-body">
-          <p>
-            <code>nft burn &lt;h&gt;</code> sends a presentation bound to the
-            burn domain.
-          </p>
-        </div>
-      </div>
-      <div className="step">
-        <div className="step-num">2</div>
-        <div className="step-body">
-          <p>
-            The mint claims <MathTex tex={'N'} /> and tombstones the asset —
-            status <strong>burned</strong>.
-          </p>
-        </div>
-      </div>
-      <div className="step">
-        <div className="step-num">3</div>
-        <div className="step-body">
-          <p>
-            <code>GET /asset/&lbrace;h&rbrace;</code> →{' '}
-            <strong>active | burned | unknown</strong> — a burned asset stays
-            distinguishable from a transferred one.
-          </p>
-        </div>
-      </div>
+    <div className="headline d1">Burning is final — and public by necessity.</div>
+    <div className="d2">
+      <Flow
+        steps={[
+          { title: 'Owner', sub: 'asks the mint to retire the asset forever' },
+          { title: 'The Mint', sub: 'spends the serial with no successor', purple: true },
+          { title: 'Asset', sub: 'tombstoned — anyone who asks gets "burned"' },
+        ]}
+        caption='"Burned" stays distinguishable from merely "transferred" for anyone asking about that asset.'
+      />
     </div>
-    <div className="callout amber d2">
-      <strong>
-        Burn reveals <MathTex tex={'h'} /> by necessity
-      </strong>{' '}
-      — the mint must know which asset to tombstone.
-    </div>
+    <p className="lede d3">
+      The mint must know what it's tombstoning — a burn always reveals the
+      asset.
+    </p>
   </>
 )
 
 const SlideShowing = () => (
   <>
-    <h2>Showing and third-party verification</h2>
-    <div className="steps d1">
+    <div className="headline d1">
+      Prove you own it without giving it away.
+    </div>
+    <div className="d2">
+      <Flow
+        steps={[
+          { title: 'Owner', sub: 'publishes a showing token (pshow1…)' },
+          { title: 'Verifier', sub: 'checks the signature and the secret — offline', purple: true },
+          { title: 'The Mint', sub: 'one query: is this serial still unspent?' },
+        ]}
+      />
+    </div>
+    <div className="steps d3">
       <div className="step">
         <div className="step-num">1</div>
         <div className="step-body">
-          <p>
-            <code>nft show &lt;h&gt; --context sale-to-bob</code> → prints a{' '}
-            <span className="mi">pshow1</span> token:{' '}
-            <code>"pshow1" + hex(context ‖ presentation)</code> — mirroring
-            the <span className="mi">psnft1</span> bearer tokens — bound to
-            the showing domain + context. Mathematically unspendable: the mint
-            rejects it for transfer and burn.
-          </p>
+          <p>The mint really signed this asset.</p>
         </div>
       </div>
       <div className="step">
         <div className="step-num">2</div>
         <div className="step-body">
           <p>
-            <code>nft inspect &lt;token&gt;</code>, offline: pairing +{' '}
-            <MathTex tex={'\\pi'} /> → the mint signed this{' '}
-            <MathTex tex={'h'} /> AND the publisher knows{' '}
-            <MathTex tex={'s'} /> AND <MathTex tex={'N'} /> belongs to this
-            credential.
+            The publisher actually holds the secret — not a copy of someone
+            else's signature.
           </p>
         </div>
       </div>
       <div className="step">
         <div className="step-num">3</div>
         <div className="step-body">
-          <p>
-            Online: <code>checkstate(N)</code> → UNSPENT = still owned, plus
-            asset status. <code>nft verify &lt;h&gt;</code> does the same for
-            assets in your own wallet.
-          </p>
+          <p>They still own it right now.</p>
         </div>
       </div>
     </div>
-    <div className="callout purple d2">
-      <MathTex tex={'N = s\\cdot G_{\\text{NULL}}'} />, and the mint keeps a
-      spent set (NUT-07-style <code>checkstate</code>). Every transfer
-      re-issues under a FRESH <MathTex tex={'s'} />, so the current holder's{' '}
-      <MathTex tex={'N'} /> is the only unspent one — "is{' '}
-      <MathTex tex={'N'} /> spent?" IS the ownership oracle.
-    </div>
-    <div className="callout amber d3">
-      <strong>Point-in-time caveat:</strong> UNSPENT is a snapshot — the owner
-      can spend right after. In a sale this is a pre-screen; settle by
-      swapping the token before paying.
+    <div className="callout purple d3">
+      Safe to publish: the showing is purpose-bound — verification only. The
+      mint rejects it for transfers and burns; a copied showing is worthless.
+      One caveat: "unspent" is a snapshot, so in a sale you settle by swapping
+      the token before paying.
     </div>
   </>
 )
 
-const SlideTrustWire = () => (
+const SlideWhoLearns = () => (
   <>
-    <h2>Trust model and on the wire</h2>
-    <div className="cols d1">
+    <div className="headline d1">
+      The mint notarizes everything — and learns almost nothing.
+    </div>
+    <table className="compare d2">
+      <thead>
+        <tr>
+          <th></th>
+          <th>The mint learns</th>
+          <th>The public learns</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><strong>Minting</strong></td>
+          <td>the asset id + payment</td>
+          <td>nothing</td>
+        </tr>
+        <tr>
+          <td><strong>Transfer</strong></td>
+          <td>"some credential moved" — not which asset, not who</td>
+          <td>nothing</td>
+        </tr>
+        <tr>
+          <td><strong>Burn</strong></td>
+          <td>the asset id</td>
+          <td>can query the asset's burned status</td>
+        </tr>
+        <tr>
+          <td><strong>Showing</strong></td>
+          <td>someone asked about a serial it can't map to anything</td>
+          <td>the verifier learns asset + possession + still-owned</td>
+        </tr>
+      </tbody>
+    </table>
+  </>
+)
+
+const SlideUnderHood = () => (
+  <>
+    <div className="headline d1">One equation does the checking.</div>
+    <p className="lede muted d2">
+      Optional depth — everything above stands without this slide.
+    </p>
+    <div className="math d2">
+      <MathTex
+        display
+        tex={"e(v',\\ g_2) = e(u',\\ X_2 + h\\cdot Y_{h2}) \\cdot e(U_s,\\ Y_{s2})"}
+      />
+    </div>
+    <p className="lede d3">
+      The mint's signature is a point on a pairing-friendly curve (BLS12-381);
+      this pairing balances exactly when the mint signed this asset for this
+      secret, and anyone can evaluate it with the mint's public parameters.
+      The same-asset and same-secret proofs are Chaum–Pedersen sigma proofs —{' '}
+      <strong>commit → challenge → respond → verify</strong> — and the mint's
+      secret attributes live only in the second curve group, so credentials
+      can't be rescaled to other assets.
+    </p>
+  </>
+)
+
+const SlideWrap = () => (
+  <>
+    <div className="headline d1">Cash-grade privacy for unique assets.</div>
+    <div className="cols d2">
       <div className="col">
-        <div className="card">
-          <h3>Honest limitations</h3>
-          <ul>
-            <li>Bearer until swapped — the sender can still spend</li>
-            <li>
-              Mint liveness needed for <code>checkstate</code>
-            </li>
-            <li>
-              Minting reveals <MathTex tex={'h'} /> by design
-            </li>
-            <li>
-              Showings of one credential are linkable to each other via the
-              constant <MathTex tex={'N'} /> — determinism is what catches
-              double-spends — but <MathTex tex={'N'} /> can't be matched to
-              issuance logs or <MathTex tex={'S'} /> values (DDH in{' '}
-              <MathTex tex={'G_1'} />, XDH-hard)
-            </li>
-          </ul>
-        </div>
-        <div className="callout purple d2" style={{ marginTop: 14 }}>
-          Code map: <strong>cashu/core/crypto/ps.py</strong> (~700 lines,
-          pyblst) · <strong>cashu/nft/</strong>
-          &lbrace;ledger, api, wallet, cli&rbrace;.py
+        <p className="lede">
+          Honestly: tokens are bearer instruments until swapped; freshness
+          answers come from the mint and are point-in-time — the same trust as
+          ecash <code>check_state</code>; the mint sees the asset at minting
+          time and learns timing; and showings of one ownership state share
+          one serial — linkable to each other, to nothing else.
+        </p>
+        <div className="callout purple d3" style={{ marginTop: 14 }}>
+          <strong>
+            Anyone can privately verify ownership; transfers are private even
+            from the mint.
+          </strong>{' '}
+          Code: <strong>cashu/core/crypto/ps.py</strong> +{' '}
+          <strong>cashu/nft/</strong>.
         </div>
       </div>
       <div className="col">
-        <div className="chart-wrap d2">
+        <div className="chart-wrap d3">
           <WireSizeChart />
           <p style={{ fontSize: '0.8rem', color: 'var(--muted)', textAlign: 'center', marginTop: 8 }}>
-            Serialized sizes — real values, hard-fail length checks in the code
+            On the wire: serialized credential and presentation sizes (bytes)
           </p>
         </div>
       </div>
@@ -568,17 +359,18 @@ const SlideTrustWire = () => (
 
 const SLIDES = [
   SlideTitle,
-  SlideIdea,
-  SlideSetup,
+  SlideProblem,
+  SlideQualities,
+  SlideCast,
   SlideMinting,
-  SlideAnatomy,
-  SlideSwapFlow,
-  SlideSwapMath,
-  SlideVerification,
-  SlidePurposeBinding,
+  SlideOwnership,
+  SlidePullquote,
+  SlideTransfer,
   SlideBurn,
   SlideShowing,
-  SlideTrustWire,
+  SlideWhoLearns,
+  SlideUnderHood,
+  SlideWrap,
 ]
 
 /* ─────────────────────────── Chrome ─────────────────────────── */
@@ -598,7 +390,7 @@ function Nav({ cur, total, go, setCur }) {
   )
 }
 
-const WIDE = new Set([3, 4, 5, 7, 8, 10, 11])
+const WIDE = new Set([4, 7, 8, 9, 10, 12])
 
 export default function App() {
   const [cur, setCur] = useState(0)
