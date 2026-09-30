@@ -259,6 +259,13 @@ nav button:disabled { opacity: 0.2; cursor: default; }
 .statement.green { border-left-color: var(--semantic-green); }
 .statement.amber { border-left-color: var(--semantic-amber); }
 
+/* a fact the mint enforces from its own state — NOT a proven statement */
+.mint-note {
+  border: 1px dashed var(--border); border-radius: 10px;
+  padding: 14px 20px; margin-bottom: 12px;
+  font-size: 0.92rem; color: var(--muted); line-height: 1.6;
+}
+
 /* ── Visual components ── */
 .vrow { display: flex; align-items: center; justify-content: center; gap: 14px; margin: 18px 0 6px; }
 .vbox {

@@ -79,11 +79,12 @@ const Slide2 = () => (
         claim={<>“I know the secret <Sym>s</Sym> behind the commitment <Sym>S</Sym> I'm handing you.”</>}
         to="the mint"
       />
-      <Statement
-        claim={<>“This asset has never been issued before.” — and the mint signs.</>}
-        to="the owner, as the credential itself"
-        tone="green"
-      />
+      <div className="mint-note">
+        The mint checks its <em>own</em> ledger: it remembers every asset it
+        has ever signed and refuses repeats. No proof needed — the mint sees
+        the asset at issuance, so it knows. The credential it hands back is
+        the attestation: the mint accepted this asset as new.
+      </div>
     </div>
     <p className="lede d3">
       So the credential comes out bound to a secret the mint never saw. What
