@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
 import { ArrowLeft, Clock, Coins, Search, Store, Tag, Wallet, Zap } from 'lucide-react';
 import { getJSON } from './api.mjs';
-import { Button, CheckRow, HoldButton, Identicon, Modal, Notice, Spinner, Tilt, panel, short, useTint } from './ui.jsx';
+import { BackButton, Button, CheckRow, HoldButton, Identicon, Modal, Notice, Spinner, Tilt, panel, short, useTint } from './ui.jsx';
 import { Segmented, ago, imageUrl } from './social.jsx';
 
 const loadMoney = () => import('./money/wallet.ts');
@@ -130,8 +130,8 @@ function ListingCard({ item, index, onOpen }) {
       <button className="nft-card" style={tint ? { '--tint': tint } : undefined} onClick={() => onOpen(item)} aria-label={`Open ${item.title}`}>
         <div className="nft-media"><img src={imageUrl(item.h)} alt="" loading="lazy" decoding="async" onLoad={onLoad} />{item.state === 'reserved' && <span className="media-tag">Sale in progress</span>}</div>
         <div className="nft-body">
-          <span className="nft-title">{item.title || 'Untitled'}</span>
-          <span className="nft-meta"><span className="owner-chip"><Identicon pubkey={item.seller} size={18} /><span className="ellipsis">{item.seller_name || 'Collector'}</span></span><Price value={item.price} /></span>
+          <span className="nft-meta"><span className="nft-title">{item.title || 'Untitled'}</span><Price value={item.price} /></span>
+          <span className="owner-chip"><Identicon pubkey={item.seller} size={18} /><span className="ellipsis">{item.seller_name || 'Collector'}</span></span>
         </div>
       </button>
     </Tilt>
@@ -203,7 +203,7 @@ export function ListingPage({ id, navigate, identity, market, onStart, startOffe
     } catch (e) { toast.error(e.message); await market.refresh().catch(() => {}); } finally { setBusy(''); }
   };
   return <main className="page listing">
-    <button className="back" onClick={() => navigate('/market')}><ArrowLeft size={14} /> Market</button>
+    <BackButton onClick={() => navigate('/market')}>Market</BackButton>
     <div className="detail">
       <div className="detail-art"><Tilt interactive max={8}><div className="nft-card detail-face"><div className="nft-media"><img src={imageUrl(listing.h)} alt={listing.title || ''} /></div>
         <div className="nft-body"><span className="nft-title">{listing.title}</span><span className="nft-meta"><span className="mono">{short(listing.h, 6, 4)}</span><Price value={listing.price} /></span></div></div></Tilt></div>
@@ -225,7 +225,7 @@ export function ListingPage({ id, navigate, identity, market, onStart, startOffe
           {identity && !mine && market.state === 'elsewhere' && <p className="hint">Your wallet is open on another device. Open Wallet to use it here.</p>}
         </motion.div>}
         {step === 'offer' && <motion.div key="offer" className="detail-panel" {...panel}>
-          <button className="back" onClick={() => setStep('info')} disabled={!!busy}><ArrowLeft size={14} /> Back</button>
+          <BackButton onClick={() => setStep('info')} disabled={!!busy} />
           <h2>Make an offer</h2>
           {!funded.length ? <Notice action={<Button size="sm" variant="secondary" onClick={() => navigate(`/wallet?then=/market/${id}`)}>Add ecash</Button>}>Add ecash to make an offer.</Notice> : <>
             <label className="field"><span>Pay from</span><select value={mint} onChange={(e) => setMint(e.target.value)} disabled={!!busy}>

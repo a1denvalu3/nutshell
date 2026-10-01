@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import { AnimatePresence, animate, motion, useMotionValue, useReducedMotion, useSpring, useTransform } from 'motion/react';
 import { toast } from 'sonner';
-import { Check, CircleAlert, CircleHelp, Copy, LoaderCircle, X } from 'lucide-react';
+import { Check, CircleAlert, CircleHelp, Copy, LoaderCircle, X, ArrowLeft } from 'lucide-react';
 
 export const short = (s, head = 8, tail = 6) => s ? `${s.slice(0, head)}…${s.slice(-tail)}` : '';
 export const date = (n) => new Date(n * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
@@ -210,6 +210,13 @@ export function Modal({ open, close, title, description, children, size = '' }) 
       </Dialog.Popup>
     </Dialog.Portal>
   </Dialog.Root>;
+}
+
+/** Page and panel back navigation, one design everywhere. */
+export function BackButton({ onClick, children = 'Back', disabled = false }) {
+  return <button type="button" className="back" onClick={onClick} disabled={disabled}>
+    <span className="back-icon" aria-hidden="true"><ArrowLeft size={15} strokeWidth={2.6} /></span>{children}
+  </button>;
 }
 
 export function Notice({ tone = 'warn', children, action = null }) {

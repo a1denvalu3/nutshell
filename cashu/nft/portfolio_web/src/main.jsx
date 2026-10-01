@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { Menu } from '@base-ui/react/menu';
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import { Toaster, toast } from 'sonner';
-import { ArrowLeft, ArrowRight, Check, Compass, Download, Ellipsis, Eye, EyeOff, FileJson, HandCoins, ImageDown, Info, KeyRound, Link2, Plus,
+import { ArrowLeft, ArrowRight, Check, Compass, Image as ImageIcon, Download, Ellipsis, Eye, EyeOff, FileJson, HandCoins, ImageDown, Info, KeyRound, Link2, Plus,
   Pencil, Radio, RefreshCw, RotateCcw, Send, ShieldX, Upload, Undo2, Wallet } from 'lucide-react';
 import '@fontsource-variable/inter';
 import '@fontsource-variable/bricolage-grotesque';
@@ -12,7 +12,7 @@ import '@fontsource/jetbrains-mono/500.css';
 import './style.css';
 import { newPrivateKey, parseShowing, profileKey, validateKeyset } from './crypto.mjs';
 import { checked, download, getJSON, signedRequest } from './api.mjs';
-import { Button, CheckRow, CopyChip, DrawnCheck, HoldButton, Identicon, Modal, Notice, PreviewArt, Spinner, StatusBadge,
+import { BackButton, Button, CheckRow, CopyChip, DrawnCheck, HoldButton, Identicon, Modal, Notice, PreviewArt, Spinner, StatusBadge,
   Tilt, copyText, date, identiconColor, panel, short, useTint, verdict } from './ui.jsx';
 import HowItWorks from './HowItWorks.jsx';
 import ClaimPage from './claim.jsx';
@@ -230,7 +230,7 @@ function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend,
         </motion.div>}
 
         {view === 'send' && <motion.div key="send" className="detail-panel" {...panel}>
-          <button className="back" onClick={() => setView('info')} disabled={!!busy}><ArrowLeft size={14} /> Back</button>
+          <BackButton onClick={() => setView('info')} disabled={!!busy} />
           <h2>Send this NFT</h2>
           <Segmented id={`send-${card.id}`} value={method} onChange={(m) => { if (!busy) setMethod(m); }} options={[['link', 'Share a link'], ['file', 'Transfer JPG']]} />
           <AnimatePresence mode="wait" initial={false}>
@@ -598,8 +598,8 @@ function App() {
               <Menu.Trigger className="profile-pill"><Identicon pubkey={identity.pubkey} size={24} /><span>Profile</span>
                 {market.unread > 0 && <motion.span key={market.unread} className="unread" initial={{ scale: .5 }} animate={{ scale: 1 }} aria-label={`${market.unread} unread`}>{market.unread > 9 ? '9+' : market.unread}</motion.span>}</Menu.Trigger>
               <Menu.Portal><Menu.Positioner className="menu-layer" sideOffset={6} align="end"><Menu.Popup className="menu">
+                <Menu.Item className="menu-item" onClick={() => navigate(`/p/${identity.pubkey}`)}><ImageIcon size={15} />My collection</Menu.Item>
                 <Menu.Item className="menu-item" onClick={() => navigate('/wallet')}><Wallet size={15} />Wallet</Menu.Item>
-                <Menu.Item className="menu-item" onClick={() => navigate(`/p/${identity.pubkey}`)}><ArrowRight size={15} />My collection</Menu.Item>
                 <Menu.Item className="menu-item" onClick={() => navigate('/offers')}><HandCoins size={15} />Offers{market.unread > 0 && <span className="unread unread-inline">{market.unread}</span>}</Menu.Item>
                 {/* On collection pages these move here from the top bar; on phones they always live here. */}
                 <Menu.Separator className={`menu-sep ${route.page === 'profile' ? '' : 'menu-mobile'}`} />

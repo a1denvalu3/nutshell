@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
-import { ArrowRight, Download, KeyRound, Lock, Plus, ShieldX } from 'lucide-react';
+import { ArrowRight, Download, KeyRound, Lock, Plus, ShieldX, ImageOff } from 'lucide-react';
 import { checked, getJSON } from './api.mjs';
 import { openLink } from './link.mjs';
 import { Button, CheckRow, DrawnCheck, Identicon, Spinner, Tilt, useTint } from './ui.jsx';
@@ -108,7 +108,7 @@ export default function ClaimPage({ linkId, config, identity, wallet, walletStat
       <div className="claim-art">
         <Tilt max={10}>
           <div className="nft-card is-preview has-tint" style={tint ? { '--tint': tint } : undefined}>
-            <div className="nft-media">{link ? <img src={imageUrl(link.h)} alt={link.title} onLoad={onLoad} /> : null}
+            <div className="nft-media">{link ? <img src={imageUrl(link.h)} alt={link.title} onLoad={onLoad} /> : <span className="media-empty"><ImageOff size={34} /></span>}
               {link?.protected && !ready && !claimed && <span className="media-tag"><Lock size={10} /> Locked</span>}</div>
             <div className="nft-body"><span className="nft-title">{link?.title || ' '}</span>
               <span className="nft-meta">{link && <span className="owner-chip"><Identicon pubkey={link.sender} size={18} /><span className="ellipsis">from {link.sender_name || 'a collector'}</span></span>}</span></div>

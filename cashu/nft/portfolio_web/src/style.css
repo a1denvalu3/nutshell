@@ -393,8 +393,6 @@ button.nft-card:hover .nft-media img, .is-preview:hover .nft-media svg { transfo
 /* Light panels keep light-mode ink in both themes: secondary text included. */
 :is(.pending-box, .notice:not(.notice-bad), .link-box, .keybox) :is(.hint, .muted) { color: #4a4740; }
 .detail-links { display: flex; flex-wrap: wrap; gap: 6px; }
-.back { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; font-size: 13px; font-weight: 750; transition: transform .2s var(--pop); }
-.back:hover { transform: translateX(-4px); }
 .send-facts { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 10px; }
 .send-facts li { display: flex; gap: 12px; font-size: 14px; font-weight: 550; line-height: 1.5; }
 .send-facts .mono { display: inline-grid; place-items: center; flex: none; width: 30px; height: 24px; border-radius: 999px; border: 1.5px solid #111; background: var(--orange); color: #111; font-size: 11px; }
@@ -745,4 +743,41 @@ button.stat { text-align: left; cursor: pointer; }
   .mint-actions { grid-column: 1 / -1; }
   .mint-actions .btn { flex: 1; }
   .mint-custom { flex-direction: column; align-items: stretch; }
+}
+
+/* Page rhythm: one top spacing under the sticky header on every page. */
+:root { --page-top: 32px; }
+@media (max-width: 640px) { :root { --page-top: 20px; } }
+main.page { padding-top: var(--page-top); }
+.page-head, .how-head { padding-top: 0; }
+.profile-card { margin-top: 0; }
+
+/* Back navigation */
+.back { display: inline-flex; align-items: center; gap: 10px; align-self: flex-start; flex: none; height: 38px; padding: 0 16px 0 5px; border-radius: 999px; border: 2px solid var(--ink); background: var(--paper); color: var(--text); font-size: 14px; font-weight: 750; box-shadow: 2px 2px 0 var(--ink); transition: transform .15s var(--ease), box-shadow .15s var(--ease); }
+.back-icon { display: inline-grid; place-items: center; width: 26px; height: 26px; border-radius: 50%; border: 1.5px solid #111; background: var(--lime); color: #111; transition: transform .25s var(--pop); }
+.back:not(:disabled):hover { transform: translate(-1px, -1px); box-shadow: 3px 3px 0 var(--ink); }
+.back:not(:disabled):hover .back-icon { transform: translateX(-3px); }
+.back:not(:disabled):active { transform: translate(2px, 2px); box-shadow: 0 0 0 var(--ink); }
+.back:disabled { opacity: .5; }
+main.page > .back { margin-bottom: 20px; }
+
+/* Polish */
+.media-empty { position: absolute; inset: 0; display: grid; place-items: center; color: var(--muted); opacity: .6; }
+.nft-media .media-empty svg { width: 34px; height: 34px; }
+.nft-meta .nft-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 960px) {
+  .detail { gap: 20px; }
+}
+@media (max-width: 640px) {
+  .grid.grid-collections { grid-template-columns: 1fr; }
+  .sorts { flex-wrap: nowrap; overflow-x: auto; scrollbar-width: none; margin: 0 -14px; padding: 2px 14px 6px; }
+  .sorts::-webkit-scrollbar { display: none; }
+  .sorts .sort { flex: none; }
+  .profile-stats { grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 10px; padding: 18px; }
+  .profile-stats .stat { grid-column: span 2; padding: 12px; }
+  .profile-stats .stat:nth-child(n+4) { grid-column: span 3; }
+  .profile-stats .stat strong { font-size: 26px; }
+  .footer-inner { gap: 12px 20px; }
+  .footer-inner .brand, .footer-inner .muted { flex-basis: 100%; }
+  .footer-inner .nav-link { height: auto; padding: 0; border: 0; white-space: nowrap; }
 }
