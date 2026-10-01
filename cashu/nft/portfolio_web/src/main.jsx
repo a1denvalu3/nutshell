@@ -17,7 +17,8 @@ import { Button, CheckRow, CopyChip, DrawnCheck, HoldButton, Identicon, Modal, N
 import HowItWorks from './HowItWorks.jsx';
 import ClaimPage from './claim.jsx';
 import { linkUrl, newLinkId, sealLink } from './link.mjs';
-import { ListingControls, ListingPage, MarketPage, OffersPage, PendingPurchases, WalletPage, useMarket } from './market.jsx';
+import { ListingControls, ListingPage, MarketPage, OffersPage, PendingPurchases, useMarket } from './market.jsx';
+import { WalletPage } from './WalletPage.jsx';
 import { ActivityItem, ActivityList, ActivityPage, CollectionCard, EditCollectionDialog, ExplorePage, FollowButton, LikeButton, MarketCard,
   NetworkDialog, Segmented, useRelations } from './social.jsx';
 

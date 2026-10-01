@@ -3,16 +3,16 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
-import { ArrowDownToLine, ArrowLeft, ArrowUpFromLine, Clock, Coins, Plus, Search, Store, Tag, Wallet, Zap } from 'lucide-react';
+import { ArrowLeft, Clock, Coins, Search, Store, Tag, Wallet, Zap } from 'lucide-react';
 import { getJSON } from './api.mjs';
-import { Button, CheckRow, CopyChip, HoldButton, Identicon, Modal, Notice, Spinner, Tilt, panel, short, useTint } from './ui.jsx';
+import { Button, CheckRow, HoldButton, Identicon, Modal, Notice, Spinner, Tilt, panel, short, useTint } from './ui.jsx';
 import { Segmented, ago, imageUrl } from './social.jsx';
 
 const loadMoney = () => import('./money/wallet.ts');
 export const sats = (n) => `${Number(n || 0).toLocaleString()} sat${Number(n) === 1 ? '' : 's'}`;
 const when = (t) => new Date(t * 1000).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 const LIFETIMES = [[6 * 3600, '6 hours'], [24 * 3600, '24 hours'], [3 * 86400, '3 days'], [7 * 86400, '7 days']];
-const host = (url) => { try { return new URL(url).host + new URL(url).pathname.replace(/\/$/, ''); } catch { return url; } };
+export const host = (url) => { try { return new URL(url).host + new URL(url).pathname.replace(/\/$/, ''); } catch { return url; } };
 
 const EVENT_TEXT = {
   offer_received: (p) => `New offer: ${sats(p.price)}.`,
@@ -118,7 +118,7 @@ export function useMarket(identity, nftWallet, open) {
   return { money, state, error, balances, unread, version, config, refresh, reconcile, markRead, takeOver, bump };
 }
 
-function TestBadge({ on }) { return on ? <span className="badge badge-warn">Test sats</span> : null; }
+export function TestBadge({ on }) { return on ? <span className="badge badge-warn">Test sats</span> : null; }
 function Price({ value, big }) { return <span className={`price ${big ? 'price-lg' : ''}`}><Tag size={big ? 18 : 13} />{sats(value)}</span>; }
 
 /* ---------- browse ---------- */
@@ -150,7 +150,7 @@ export function MarketPage({ navigate }) {
   return <main className="page explore">
     <header className="page-head">
       <div><span className="pill"><Store size={14} />Market</span><h1>NFTs for sale</h1></div>
-      <p className="muted page-lede">Offers are paid upfront in ecash and held in a time lock. If the seller doesn’t accept, the money comes back automatically.</p>
+      <p className="muted page-lede">Offers are paid upfront in ecash and held in a time lock. Unaccepted offers refund automatically.</p>
     </header>
     <div className="toolbar">
       <label className="search"><Search size={17} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search by title" aria-label="Search listings" /></label>
@@ -227,7 +227,7 @@ export function ListingPage({ id, navigate, identity, market, onStart, startOffe
         {step === 'offer' && <motion.div key="offer" className="detail-panel" {...panel}>
           <button className="back" onClick={() => setStep('info')} disabled={!!busy}><ArrowLeft size={14} /> Back</button>
           <h2>Make an offer</h2>
-          {!funded.length ? <Notice action={<Button size="sm" variant="secondary" onClick={() => navigate(`/wallet?then=/market/${id}`)}>Add ecash</Button>}>Add ecash to your wallet first. We’ll bring you back here.</Notice> : <>
+          {!funded.length ? <Notice action={<Button size="sm" variant="secondary" onClick={() => navigate(`/wallet?then=/market/${id}`)}>Add ecash</Button>}>Add ecash to make an offer.</Notice> : <>
             <label className="field"><span>Pay from</span><select value={mint} onChange={(e) => setMint(e.target.value)} disabled={!!busy}>
               {funded.map((b) => <option key={b.mint} value={b.mint}>{host(b.mint)} · {sats(b.available)}{b.testValue ? ' · test sats' : ''}</option>)}</select></label>
             <div className="row-2">
@@ -282,7 +282,7 @@ export function ListingControls({ card, market, nftWallet, busy, onChanged, navi
       <div className="row"><Button variant="primary" disabled={!ready || !value || !!working} icon={working ? <Spinner /> : null} onClick={() => run('Updating', () => market.money.market.revise(listing, value), 'Price updated.')}>Save price</Button>
         <Button variant="ghost" onClick={() => setMode('')}>Cancel</Button></div>
     </div> : <>
-      <p>Buyers see the asking price. Sending is off while it’s listed; unlist first to send it.</p>
+      <p>Sending is off while it’s listed.</p>
       {listing.state === 'active' && <div className="row">
         <Button variant="secondary" disabled={!ready || !!working || !!busy} onClick={() => { setPrice(String(listing.price)); setMode('edit'); }}>Edit price</Button>
         <Button variant="secondary" disabled={!ready || !!working || !!busy} icon={working ? <Spinner /> : null}
@@ -295,7 +295,7 @@ export function ListingControls({ card, market, nftWallet, busy, onChanged, navi
   return mode === 'list' ? <div className="pending-box listing-box stack">
     <strong>List for sale</strong>
     <label className="field"><span>Asking price (sats you receive)</span><input inputMode="numeric" value={price} onChange={(e) => setPrice(e.target.value.replace(/\D/g, ''))} placeholder="e.g. 2100" autoFocus /></label>
-    <p className="hint">Listing refreshes this NFT’s credential, so any transfer link or JPG you made before stops working. Buyers pay into a time lock; you get paid when you accept.</p>
+    <p className="hint">Listing refreshes this NFT’s credential: earlier transfer links and JPGs stop working. You’re paid when you accept an offer.</p>
     {working ? <Button variant="primary" className="full" disabled icon={<Spinner />}>{working}</Button>
       : <HoldButton disabled={!ready || !value} onComplete={() => run('Listing', () => market.money.market.list(nftWallet, card, value), 'Listed. It’s on the market now.')} icon={<Tag size={16} />}>Hold to list</HoldButton>}
     <Button variant="ghost" onClick={() => setMode('')}>Cancel</Button>
@@ -334,7 +334,7 @@ export function OffersPage({ navigate, market, nftWallet, cards, initialTab }) {
       <Segmented id="offers" value={tab} onChange={setTab} options={[['received', 'Received'], ['made', 'Made']]} /></header>
     {market.state === 'elsewhere' && <Notice action={<Button size="sm" variant="secondary" onClick={market.takeOver}>Use it here</Button>}>Your wallet is open on another device.</Notice>}
     {!offers || !tab ? <div className="feed-loading"><Spinner /> Loading offers…</div>
-      : !shown.length ? <div className="empty"><strong>{tab === 'received' ? 'No offers yet' : 'You haven’t made any offers'}</strong><span className="muted">{tab === 'received' ? 'List an NFT and offers show up here.' : 'Browse the market to find something you like.'}</span>
+      : !shown.length ? <div className="empty"><strong>{tab === 'received' ? 'No offers yet' : 'You haven’t made any offers'}</strong><span className="muted">{tab === 'received' ? 'List an NFT and offers show up here.' : 'Offers you make on listed NFTs show up here.'}</span>
         <Button variant="secondary" onClick={() => navigate('/market')}>Go to market</Button></div>
         : <ul className="offer-list">{shown.map((o, i) => <motion.li key={o.id} className="offer-row" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(i, 10) * .03 }}>
           <img className="offer-thumb" src={imageUrl(o.h)} alt="" loading="lazy" />
@@ -398,124 +398,4 @@ export function PendingPurchases({ market }) {
     <div className="nft-media"><img src={imageUrl(p.h)} alt="" /><span className="media-tag">Purchased · awaiting wallet sync</span></div>
     <div className="nft-body"><span className="nft-title">{p.title || 'NFT'}</span><span className="nft-meta"><span className="muted small">Delivered {ago(p.delivered)}</span><Spinner size={13} /></span></div>
   </div></div>);
-}
-
-/* ---------- wallet ---------- */
-
-/** Onboarding banner on the wallet when the user came to make an offer. */
-function Guide({ goal, balances, onContinue }) {
-  const funded = balances.filter((b) => b.available > 0);
-  const ready = goal && funded.some((b) => b.available > goal.price);
-  return <motion.section className="guide" initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }}>
-    {goal && <img src={imageUrl(goal.h)} alt="" />}
-    <div className="guide-text">
-      <strong>{ready ? 'You’re ready to make your offer' : `Add ecash to make an offer${goal ? ` on ${goal.title || 'this NFT'}` : ''}`}</strong>
-      <span>{ready ? `Your balance covers the asking price of ${sats(goal.price)}.`
-        : goal ? <>It asks {sats(goal.price)} plus a small mint fee. {balances.length ? 'Top up' : 'Add a mint below, then top up'} or receive a token. We’ll bring you back to the NFT.</>
-          : 'Loading the NFT…'}</span>
-      {!balances.length && <span className="small">Just trying it out? Testnut gives free test sats with no value.</span>}
-    </div>
-    <Button variant={ready ? 'primary' : 'secondary'} icon={<ArrowLeft size={15} />} onClick={onContinue}>{ready ? 'Continue to offer' : 'Back to the NFT'}</Button>
-  </motion.section>;
-}
-
-export function WalletPage({ market, navigate, then }) {
-  const [dialog, setDialog] = useState(null), [mintUrl, setMintUrl] = useState(''), [busy, setBusy] = useState('');
-  const [amount, setAmount] = useState(''), [token, setToken] = useState(''), [invoice, setInvoice] = useState(''), [result, setResult] = useState(null);
-  const money = market.money, polling = useRef(0);
-  // Onboarding for an offer: the listing the user came from (?then=/market/<id>).
-  const [goal, setGoal] = useState(null);
-  useEffect(() => {
-    setGoal(null);
-    if (then) getJSON(`/api/${then.slice(1).replace('market/', 'market/listings/')}`).then(setGoal).catch(() => setGoal(null));
-  }, [then]);
-  const backToGoal = (message) => { if (!then) return false; if (message) toast.success(message); navigate(`${then}?offer=1`); return true; };
-  if (market.state === 'opening' || market.state === 'closed') return <main className="page"><div className="feed-loading"><Spinner /> Opening your wallet…</div></main>;
-  if (!money) return <main className="page"><Notice tone="bad">{market.error || 'Your wallet is unavailable.'}</Notice></main>;
-  const close = () => { polling.current++; if (!busy) { setDialog(null); setAmount(''); setToken(''); setInvoice(''); setResult(null); } };
-  const act = async (label, fn) => { setBusy(label); try { return await fn(); } catch (e) { toast.error(e.message); return null; } finally { setBusy(''); await market.refresh().catch(() => {}); } };
-  const addMint = (url) => act('Checking mint', async () => { const c = await money.addMint(url); toast.success(`Added ${c.name || host(c.url)}.`); setMintUrl(''); });
-  const topUp = async () => {
-    const r = await act('Creating invoice', () => money.topUp(dialog.mint, Number(amount)));
-    if (!r) return;
-    setResult(r);
-    // Coco claims the quote in the background; this only follows it while the dialog is open.
-    const run = ++polling.current;
-    while (run === polling.current) {
-      const s = await money.topUpState(r.operationId).catch(() => 'pending');
-      if (s === 'finalized') {
-        await market.refresh(); polling.current++; setDialog(null); setResult(null); setAmount('');
-        if (!backToGoal(`Received ${sats(amount)}. Now make your offer.`)) toast.success(`Received ${sats(amount)}.`);
-        return;
-      }
-      if (s === 'failed') { toast.error('The top-up failed.'); return; }
-      await new Promise((res) => setTimeout(res, 2000));
-    }
-  };
-  const send = () => act('Creating token', async () => setResult({ token: await money.send(dialog.mint, Number(amount)) }));
-  const receive = () => act('Receiving', async () => {
-    const r = await money.receive(token); close();
-    if (!backToGoal(`Received ${sats(r.amount)}. Now make your offer.`)) toast.success(`Received ${sats(r.amount)}.`);
-  });
-  const withdrawQuote = () => act('Getting a quote', async () => setResult(await money.withdrawQuote(dialog.mint, invoice)));
-  const withdraw = () => act('Paying invoice', async () => { await money.withdraw(result.operation.id); toast.success('Invoice paid.'); close(); });
-  const shortcuts = (market.config?.mint_shortcuts || []).filter((s) => !market.balances.some((b) => b.mint === s.url));
-  return <main className="page wallet-page">
-    <header className="page-head"><div><span className="pill"><Wallet size={14} />Wallet</span><h1>Your ecash</h1></div>
-      <Button variant="secondary" icon={<ArrowDownToLine size={15} />} onClick={() => setDialog({ kind: 'receive' })} disabled={money.readOnly}>Receive token</Button></header>
-    {market.state === 'elsewhere' && <Notice action={<Button size="sm" variant="secondary" onClick={market.takeOver}>Use it here</Button>}>This wallet is open on another device. Using it here makes the other device read-only.</Notice>}
-    {market.error && <Notice tone="bad">{market.error}</Notice>}
-    {then && <Guide goal={goal} balances={market.balances} onContinue={() => backToGoal()} />}
-    <p className="muted page-lede">Balances are per mint. Each mint holds its own ecash; nothing is exchanged between mints. Encrypted backups use your collection key.</p>
-    <div className="balance-grid">
-      {market.balances.map((b) => <motion.section key={b.mint} className="balance-card" layout>
-        <div className="row-between"><span className="mono ellipsis" title={b.mint}>{host(b.mint)}</span><TestBadge on={b.testValue} /></div>
-        <strong className="balance-big">{sats(b.available)}</strong>
-        <dl className="balance-legs">
-          {b.offerLocked > 0 && <div><dt>In offers</dt><dd>{sats(b.offerLocked)}</dd></div>}
-          {b.pendingRefund > 0 && <div><dt>Refund pending</dt><dd>{sats(b.pendingRefund)}</dd></div>}
-          {b.pendingClaim > 0 && <div><dt>Payment pending</dt><dd>{sats(b.pendingClaim)}</dd></div>}
-          {b.reserved > 0 && <div><dt>Reserved</dt><dd>{sats(b.reserved)}</dd></div>}
-        </dl>
-        <div className="row">
-          <Button size="sm" variant="primary" icon={<Zap size={14} />} disabled={money.readOnly} onClick={() => setDialog({ kind: 'topup', mint: b.mint })}>Top up</Button>
-          <Button size="sm" variant="secondary" icon={<ArrowUpFromLine size={14} />} disabled={money.readOnly || !b.available} onClick={() => setDialog({ kind: 'send', mint: b.mint })}>Send</Button>
-          <Button size="sm" variant="ghost" disabled={money.readOnly || !b.available} onClick={() => setDialog({ kind: 'withdraw', mint: b.mint })}>Withdraw</Button>
-        </div>
-      </motion.section>)}
-      <section className="balance-card add-mint">
-        <strong>Add a mint</strong>
-        <div className="mint-shortcuts">{shortcuts.map((s) => <button key={s.url} className="chip" disabled={!!busy || money.readOnly} onClick={() => addMint(s.url)}>{s.name}</button>)}</div>
-        <form className="row" onSubmit={(e) => { e.preventDefault(); addMint(mintUrl); }}>
-          <input className="input" value={mintUrl} onChange={(e) => setMintUrl(e.target.value)} placeholder="https://mint.example" aria-label="Mint URL" />
-          <Button type="submit" size="sm" variant="secondary" icon={busy === 'Checking mint' ? <Spinner /> : <Plus size={14} />} disabled={!mintUrl || !!busy || money.readOnly}>Add</Button>
-        </form>
-        <p className="hint">Shortcuts aren’t endorsements. Testnut pays its own invoices with test sats that have no value.</p>
-      </section>
-    </div>
-
-    <Modal open={!!dialog} close={close} title={{ topup: 'Top up with Lightning', send: 'Send ecash', withdraw: 'Withdraw to Lightning', receive: 'Receive a token' }[dialog?.kind]} description={dialog?.mint ? host(dialog.mint) : 'Paste a Cashu token.'}>
-      {dialog?.kind === 'receive' && <form className="stack" onSubmit={(e) => { e.preventDefault(); receive(); }}>
-        <label className="field"><span>Token</span><textarea rows={4} value={token} onChange={(e) => setToken(e.target.value)} placeholder="cashuB…" spellCheck={false} /></label>
-        <Button type="submit" variant="primary" className="full" disabled={!token || !!busy} icon={busy ? <Spinner /> : null}>{busy || 'Receive'}</Button>
-      </form>}
-      {(dialog?.kind === 'topup' || dialog?.kind === 'send') && (!result ? <form className="stack" onSubmit={(e) => { e.preventDefault(); dialog.kind === 'topup' ? topUp() : send(); }}>
-        <label className="field"><span>Amount (sats)</span><input inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value.replace(/\D/g, ''))} autoFocus /></label>
-        <Button type="submit" variant="primary" className="full" disabled={!Number(amount) || !!busy} icon={busy ? <Spinner /> : null}>{busy || (dialog.kind === 'topup' ? 'Create invoice' : 'Create token')}</Button>
-      </form> : result.invoice ? <div className="stack">
-        <div className="link-box"><code className="mono">{result.invoice}</code><CopyChip value={result.invoice} display="Copy invoice" message="Invoice copied" /></div>
-        <p className="muted"><Spinner size={13} /> Waiting for payment. You can close this; the wallet claims it when you’re back.</p>
-      </div> : <div className="stack">
-        <div className="link-box"><code className="mono">{result.token}</code><CopyChip value={result.token} display="Copy token" message="Token copied" /></div>
-        <p className="muted">Treat this token like cash: whoever receives it first gets it.</p>
-      </div>)}
-      {dialog?.kind === 'withdraw' && (!result ? <form className="stack" onSubmit={(e) => { e.preventDefault(); withdrawQuote(); }}>
-        <label className="field"><span>Lightning invoice</span><textarea rows={3} value={invoice} onChange={(e) => setInvoice(e.target.value)} placeholder="lnbc…" spellCheck={false} /></label>
-        <Button type="submit" variant="primary" className="full" disabled={!invoice || !!busy} icon={busy ? <Spinner /> : null}>{busy || 'Get a quote'}</Button>
-      </form> : <div className="stack">
-        <dl className="fee-table"><div><dt>Invoice amount</dt><dd>{sats(Number(String(result.quote.amount)))}</dd></div><div><dt>Fee reserve</dt><dd>{sats(Number(String(result.quote.fee_reserve ?? result.quote.feeReserve ?? 0)))}</dd></div></dl>
-        {busy ? <Button variant="primary" className="full" disabled icon={<Spinner />}>{busy}</Button> : <HoldButton onComplete={withdraw} icon={<Zap size={16} />}>Hold to pay invoice</HoldButton>}
-      </div>)}
-    </Modal>
-  </main>;
 }
