@@ -28,10 +28,18 @@ this directory; Vite proxies `/api` and `/v1` to the backend on port 8401.
 | `NFT_PORTFOLIO_MAX_STORAGE_BYTES` | 1 GB | Total image storage |
 | `NFT_PORTFOLIO_TRUSTED_PROXY` | unset | Reverse proxy address (e.g. `127.0.0.1`) whose `X-Forwarded-For` is trusted for rate limiting |
 | `VITE_MINT_KEYSET_ID` (build time) | unset | Pin the expected mint keyset in the bundle |
+| `PUBLIC_URL` (build time) | unset | Absolute site URL for OpenGraph and Twitter preview tags, e.g. `https://jpg.example` |
 
 Back up `NFT_PORTFOLIO_DIR`: the mint seed in it defines the mint's identity.
 Losing it invalidates every issued credential; replacing it makes browsers that
 already pinned the old keyset refuse to load the app.
+
+## Social preview image
+
+`og/og.html` is the source of the 1200×630 OpenGraph image. After editing it, run
+`npm run og` (headless Chrome; set `CHROME` if it is not in the default macOS
+location) to regenerate `public/assets/og-1.png`. Rename the file when it changes
+so caches pick up the new version.
 
 ## Tests
 
