@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 CollectionSort = Literal["popular", "new", "largest"]
 NFTSort = Literal["new", "old", "title"]
-EventKind = Literal["collection", "mint", "receive", "like", "follow"]
+EventKind = Literal["collection", "mint", "receive", "like", "follow", "sale"]
 
 COLLECTION_ORDER: Dict[str, str] = {
     "popular": "likes DESC, followers DESC, nfts DESC, p.created DESC",
@@ -176,10 +176,18 @@ class Social:
         """Recent public events, newest first, optionally restricted to actors."""
         if actors is not None and not actors:
             return []
-        wanted = set(kinds or ["collection", "mint", "receive", "like", "follow"])
+        wanted = set(
+            kinds or ["collection", "mint", "receive", "like", "follow", "sale"]
+        )
         cutoff = before if before is not None else int(time.time()) + 1
         params: Dict[str, object] = {"before": cutoff, "limit": limit}
-        actor_filter = {"cards": "", "profiles": "", "likes": "", "follows": ""}
+        actor_filter = {
+            "cards": "",
+            "profiles": "",
+            "likes": "",
+            "follows": "",
+            "sales": "",
+        }
         if actors is not None:
             clause, actor_params = _in("a", actors)
             params.update(actor_params)
@@ -188,6 +196,7 @@ class Social:
                 "profiles": f" AND p.pubkey IN ({clause})",
                 "likes": f" AND l.liker IN ({clause})",
                 "follows": f" AND f.follower IN ({clause})",
+                "sales": f" AND s.buyer IN ({clause})",
             }
         events: List[dict] = []
         async with self.db.get_connection() as conn:
@@ -198,6 +207,7 @@ class Social:
                      AND (prev.created<c.created OR (prev.created=c.created AND prev.rowid<c.rowid))
                      ORDER BY prev.created DESC, prev.rowid DESC LIMIT 1) AS previous
                     FROM portfolio_cards c WHERE c.created<:before{actor_filter["cards"]}
+                    AND c.id NOT IN (SELECT offer_id FROM market_sales)
                     ORDER BY c.created DESC LIMIT :limit""",
                     params,
                 )
@@ -259,6 +269,28 @@ class Social:
                         "kind": "follow",
                         "actor": r["follower"],
                         "target": r["followee"],
+                        "created": r["created"],
+                    }
+                    for r in rows
+                ]
+            if "sale" in wanted:
+                # Public sale projection: NFT, buyer, seller and time only.
+                rows = await conn.fetchall(
+                    f"""SELECT s.offer_id, s.card_id, s.h, s.title, s.seller, s.buyer, s.created
+                    FROM market_sales s WHERE s.created<:before{actor_filter["sales"]}
+                    ORDER BY s.created DESC LIMIT :limit""",
+                    params,
+                )
+                events += [
+                    {
+                        "id": f"sale:{r['offer_id']}",
+                        "kind": "sale",
+                        "actor": r["buyer"],
+                        "target": r["seller"],
+                        # The buyer's card (published under the offer id) is the live one.
+                        "card_id": r["offer_id"],
+                        "h": r["h"],
+                        "title": r["title"],
                         "created": r["created"],
                     }
                     for r in rows

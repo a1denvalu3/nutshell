@@ -6,6 +6,7 @@ State:
     ps_issue_sessions -- single-use, expiring blind issuance bases
     ps_nullifiers -- spent presentation nullifiers (double-spend prevention)
     ps_quotes     -- mint quotes: tag (or legacy h) -> settlement state
+    ps_nft_locks  -- spending conditions keyed by a credential's nullifier
 
 There is no owner column and no ownership registry: a transfer claims the
 current credential's nullifier and re-issues the asset under a fresh owner
@@ -28,9 +29,11 @@ cashu/core/crypto/ps.py:
 """
 
 import hashlib
+import hmac
 import time
 import uuid
-from typing import List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple
 
 from sqlalchemy.exc import IntegrityError
 
@@ -73,6 +76,10 @@ class UnknownQuoteError(NFTError):
     pass
 
 
+class LockedError(NFTError):
+    """The credential is held by an unresolved NFT contract."""
+
+
 class AlreadySpentError(NFTError):
     pass
 
@@ -83,6 +90,39 @@ class InvalidProofError(NFTError):
 
 class PaymentError(NFTError):
     pass
+
+
+LOCK_BINDING = b"Cashu_NFT_Lock_v1"
+REFUND_BINDING = b"Cashu_NFT_Lock_Refund_v1"
+
+
+@dataclass(frozen=True)
+class NFTContract:
+    """A buyer-specific NFT HTLC keyed by the locked credential's nullifier.
+
+    Claim: SHA256(preimage) == hashlock; issues to the fixed destination,
+    whose owner proved knowledge of its secret for this contract. Refund:
+    after deadline, the previous holder presents the credential again.
+    Both branches spend the nullifier; a lock is never simply removed."""
+
+    contract_id: str
+    nullifier: bytes
+    h: int
+    hashlock: str
+    destination: PublicKey
+    deadline: int
+
+    def digest(self) -> bytes:
+        return hashlib.sha256(
+            b"Cashu_NFT_Contract_v1\n"
+            + self.contract_id.encode()
+            + b"\n"
+            + self.nullifier
+            + self.h.to_bytes(32, "big")
+            + bytes.fromhex(self.hashlock)
+            + self.destination.format()
+            + self.deadline.to_bytes(8, "big")
+        ).digest()
 
 
 def _h_hex(h: int) -> str:
@@ -182,6 +222,23 @@ class PSLedger:
                         "created": row["created"],
                     },
                 )
+            await conn.execute(
+                """CREATE TABLE IF NOT EXISTS ps_nft_locks (
+                    nullifier BLOB PRIMARY KEY,
+                    contract_id TEXT NOT NULL UNIQUE,
+                    contract_digest TEXT NOT NULL,
+                    h TEXT NOT NULL,
+                    hashlock TEXT NOT NULL,
+                    destination BLOB NOT NULL,
+                    deadline INTEGER NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('locked','claimed','refunded')),
+                    witness TEXT,
+                    issued_u BLOB,
+                    issued_v BLOB,
+                    created INTEGER NOT NULL,
+                    settled INTEGER
+                )"""
+            )
             await conn.execute(
                 """CREATE TABLE IF NOT EXISTS ps_issue_sessions (
                     session TEXT PRIMARY KEY,
@@ -459,6 +516,7 @@ class PSLedger:
             {"n": pres.nullifier.format()},
         ):
             raise AlreadySpentError("credential already spent")
+        await self._require_unlocked(conn, pres.nullifier.format())
         row = await conn.fetchone(
             "SELECT status FROM ps_asset_tags WHERE tag = :tag",
             {"tag": _tag_id(asset_tag(pres.h))},
@@ -554,6 +612,7 @@ class PSLedger:
                 {"n": pres.nullifier.format()},
             ):
                 raise AlreadySpentError("credential already spent")
+            await self._require_unlocked(c, pres.nullifier.format())
             await c.execute(
                 """
                 INSERT INTO ps_nullifiers (nullifier, spent)
@@ -562,3 +621,182 @@ class PSLedger:
                 {"n": pres.nullifier.format(), "spent": self.db.timestamp_now_str()},
             )
         return u2, issue_blind(self.mint_key, k2, u2, B, S_new)
+
+    # --- NFT spending conditions -------------------------------------------
+
+    async def _require_unlocked(self, conn: Connection, nullifier: bytes) -> None:
+        """Every route that consumes a nullifier calls this inside its
+        transaction, so an unresolved contract cannot be bypassed by an
+        ordinary transfer, burn, exported JPG or link."""
+        row = await conn.fetchone(
+            "SELECT state FROM ps_nft_locks WHERE nullifier = :n", {"n": nullifier}
+        )
+        if row is not None and row["state"] == "locked":
+            raise LockedError("credential is locked by an NFT contract")
+
+    async def _claim_nullifier(self, conn: Connection, nullifier: bytes) -> None:
+        try:
+            await conn.execute(
+                "INSERT INTO ps_nullifiers (nullifier, spent) VALUES (:n, :spent)",
+                {"n": nullifier, "spent": self.db.timestamp_now_str()},
+            )
+        except IntegrityError:
+            raise AlreadySpentError("credential already spent")
+
+    async def install_lock(
+        self,
+        conn: Connection,
+        pres: Presentation,
+        contract: NFTContract,
+        binding: bytes,
+    ) -> None:
+        """Lock the presented credential under a contract. The holder's
+        presentation must be bound to ``binding`` (the caller's purpose:
+        LOCK_BINDING ‖ contract digest, or a marketplace delivery binding).
+        Does not spend the nullifier."""
+        if pres.keyset_id and pres.keyset_id != self.keyset.keyset_id:
+            raise InvalidProofError("unknown keyset")
+        if pres.nullifier.format() != contract.nullifier or pres.h != contract.h:
+            raise InvalidProofError("presentation does not match the contract")
+        if not verify_presentation(self.keyset, pres, binding=binding):
+            raise InvalidProofError("invalid presentation")
+        if contract.destination.is_infinity():
+            raise InvalidProofError("invalid contract destination")
+        if await conn.fetchone(
+            "SELECT 1 AS x FROM ps_nullifiers WHERE nullifier = :n",
+            {"n": contract.nullifier},
+        ):
+            raise AlreadySpentError("credential already spent")
+        tag = await conn.fetchone(
+            "SELECT status FROM ps_asset_tags WHERE tag = :tag",
+            {"tag": _tag_id(asset_tag(contract.h))},
+        )
+        if tag is None or tag["status"] != "active":
+            raise UnknownAssetError("unknown or burned asset")
+        try:
+            await conn.execute(
+                """INSERT INTO ps_nft_locks(nullifier,contract_id,contract_digest,h,hashlock,
+                destination,deadline,state,created)
+                VALUES(:n,:cid,:digest,:h,:hashlock,:dest,:deadline,'locked',:now)""",
+                {
+                    "n": contract.nullifier,
+                    "cid": contract.contract_id,
+                    "digest": contract.digest().hex(),
+                    "h": _h_hex(contract.h),
+                    "hashlock": contract.hashlock,
+                    "dest": contract.destination.format(),
+                    "deadline": contract.deadline,
+                    "now": int(time.time()),
+                },
+            )
+        except IntegrityError:
+            raise LockedError("credential or contract is already locked")
+
+    async def claim_lock(
+        self, conn: Connection, contract_id: str, preimage: bytes
+    ) -> Tuple[PublicKey, PublicKey]:
+        """Hashlock branch: spend the locked nullifier and issue to the
+        contract's fixed destination. Stores the terminal witness and the
+        exact issuance so a lost response can be recovered."""
+        row = await conn.fetchone(
+            "SELECT * FROM ps_nft_locks WHERE contract_id = :cid", {"cid": contract_id}
+        )
+        if row is None:
+            raise InvalidProofError("unknown contract")
+        if row["state"] == "claimed":
+            return (
+                PublicKey(compressed=bytes(row["issued_u"]), group="G1"),
+                PublicKey(compressed=bytes(row["issued_v"]), group="G1"),
+            )
+        if row["state"] != "locked":
+            raise AlreadySpentError("contract already settled")
+        if len(preimage) != 32 or not hmac.compare_digest(
+            hashlib.sha256(preimage).hexdigest(), row["hashlock"]
+        ):
+            raise InvalidProofError("preimage does not match the hashlock")
+        nullifier = bytes(row["nullifier"])
+        await self._claim_nullifier(conn, nullifier)
+        destination = PublicKey(compressed=bytes(row["destination"]), group="G1")
+        u, v = issue(self.mint_key, int(row["h"], 16), destination)
+        await conn.execute(
+            """UPDATE ps_nft_locks SET state='claimed', witness=:w, issued_u=:u,
+            issued_v=:v, settled=:now WHERE contract_id=:cid AND state='locked'""",
+            {
+                "w": preimage.hex(),
+                "u": u.format(),
+                "v": v.format(),
+                "now": int(time.time()),
+                "cid": contract_id,
+            },
+        )
+        return u, v
+
+    async def refund_lock(
+        self,
+        conn: Connection,
+        contract_id: str,
+        pres: Presentation,
+        S_new: PublicKey,
+        pok_new: DlogEqProof,
+        now: Optional[int] = None,
+    ) -> Tuple[PublicKey, PublicKey]:
+        """Refund branch: after the deadline the previous holder presents
+        the locked credential again (bound to the refund purpose and a fresh
+        owner commitment). The old nullifier is spent either way."""
+        if not verify_owner_secret(S_new, pok_new):
+            raise InvalidProofError("invalid new owner secret proof")
+        row = await conn.fetchone(
+            "SELECT * FROM ps_nft_locks WHERE contract_id = :cid", {"cid": contract_id}
+        )
+        if row is None:
+            raise InvalidProofError("unknown contract")
+        if row["state"] != "locked":
+            raise AlreadySpentError("contract already settled")
+        if (now if now is not None else int(time.time())) <= row["deadline"]:
+            raise InvalidProofError("contract refund is not open yet")
+        nullifier = bytes(row["nullifier"])
+        if pres.nullifier.format() != nullifier:
+            raise InvalidProofError("presentation does not match the contract")
+        binding = (
+            REFUND_BINDING + bytes.fromhex(row["contract_digest"]) + S_new.format()
+        )
+        if not verify_presentation(self.keyset, pres, binding=binding):
+            raise InvalidProofError("invalid presentation")
+        await self._claim_nullifier(conn, nullifier)
+        u, v = issue(self.mint_key, int(row["h"], 16), S_new)
+        await conn.execute(
+            """UPDATE ps_nft_locks SET state='refunded', issued_u=:u, issued_v=:v,
+            settled=:now WHERE contract_id=:cid AND state='locked'""",
+            {
+                "u": u.format(),
+                "v": v.format(),
+                "now": int(time.time()),
+                "cid": contract_id,
+            },
+        )
+        return u, v
+
+    async def lock_states(self, nullifiers: List[bytes]) -> List[Dict[str, object]]:
+        """Explicit lock/outcome view for new wallets; checkstate is unchanged."""
+        out: List[Dict[str, object]] = []
+        for n in nullifiers:
+            row = await self.db.fetchone(
+                "SELECT contract_id, state, deadline, witness FROM ps_nft_locks WHERE nullifier = :n",
+                {"n": n},
+            )
+            spent = await self.is_spent(n)
+            out.append(
+                {
+                    "nullifier": n.hex(),
+                    "state": "SPENT" if spent else "UNSPENT",
+                    "lock": None
+                    if row is None
+                    else {
+                        "contract_id": row["contract_id"],
+                        "state": row["state"],
+                        "deadline": row["deadline"],
+                        "witness": row["witness"],
+                    },
+                }
+            )
+        return out

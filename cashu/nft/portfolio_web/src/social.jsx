@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
-import { ArrowDownToLine, Heart, Image as ImageIcon, Search, Sparkles, UserPlus, UserCheck, Users } from 'lucide-react';
+import { ArrowDownToLine, Heart, Image as ImageIcon, Search, Sparkles, Tag, UserPlus, UserCheck, Users } from 'lucide-react';
 import { getJSON, signedRequest } from './api.mjs';
 import { Button, Identicon, Modal, Spinner, Tilt, identiconColor, useTint } from './ui.jsx';
 
@@ -105,8 +105,8 @@ export function MarketCard({ item, index = 0, onOpen }) {
   </motion.div>;
 }
 
-const VERB = { mint: 'minted', receive: 'received', collection: 'started a collection', like: 'liked', follow: 'followed' };
-const KIND_ICON = { mint: <Sparkles size={15} />, receive: <ArrowDownToLine size={15} />, collection: <ImageIcon size={15} />, like: <Heart size={15} />, follow: <UserPlus size={15} /> };
+const VERB = { mint: 'minted', receive: 'received', collection: 'started a collection', like: 'liked', follow: 'followed', sale: 'bought' };
+const KIND_ICON = { mint: <Sparkles size={15} />, receive: <ArrowDownToLine size={15} />, collection: <ImageIcon size={15} />, like: <Heart size={15} />, follow: <UserPlus size={15} />, sale: <Tag size={15} /> };
 
 export function ActivityItem({ event, onProfile, onCard, index = 0 }) {
   const who = (pk, name) => <button className="who" onClick={() => onProfile(pk)}><Identicon pubkey={pk} size={22} /><span>{name || 'A collector'}</span></button>;
@@ -115,8 +115,8 @@ export function ActivityItem({ event, onProfile, onCard, index = 0 }) {
     <div className="event-text">
       {who(event.actor, event.actor_name)}
       <span className="verb">{VERB[event.kind]}</span>
-      {(event.kind === 'mint' || event.kind === 'receive') && <button className="event-title" onClick={() => onCard(event)}>{event.title}</button>}
-      {event.kind === 'receive' && event.target && <><span className="verb">from</span>{who(event.target, event.target_name)}</>}
+      {(event.kind === 'mint' || event.kind === 'receive' || event.kind === 'sale') && <button className="event-title" onClick={() => onCard(event)}>{event.title}</button>}
+      {(event.kind === 'receive' || event.kind === 'sale') && event.target && <><span className="verb">from</span>{who(event.target, event.target_name)}</>}
       {(event.kind === 'like' || event.kind === 'follow') && event.target && who(event.target, event.target_name)}
     </div>
     <span className="event-time">{ago(event.created)}</span>

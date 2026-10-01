@@ -104,7 +104,7 @@ class BrowserPortfolio:
         title: str,
         card_id: Optional[str] = None,
     ) -> dict:
-        if kind not in ("mint", "receive", "rotate", "migrate"):
+        if kind not in ("mint", "receive", "rotate", "refresh", "migrate"):
             raise HTTPException(400, "Unknown wallet action.")
         if kind == "mint":
             jpg = await run_in_threadpool(normalize_jpg, data)
@@ -132,17 +132,24 @@ class BrowserPortfolio:
                 {"cutoff": int(time.time()) - 86400},
             )
             legacy = None
-            if kind in ("rotate", "migrate"):
+            if kind in ("rotate", "refresh", "migrate"):
                 card = await self.portfolio.owned_card(conn, pubkey, card_id or "")
                 if kind == "rotate" and card["status"] != "ready":
                     raise HTTPException(
                         409, "Download a transfer JPG before canceling it."
                     )
+                # Refresh: the same credential rotation for an owned card, the
+                # first step of listing it (earlier exports and links die).
+                if kind == "refresh" and card["status"] != "owned":
+                    raise HTTPException(409, "Only cards you hold can be listed.")
                 if kind == "migrate" and card["encrypted_credential"] is not None:
                     raise HTTPException(
                         409, "This NFT is already in the browser wallet."
                     )
-                if kind == "rotate" and card["encrypted_credential"] is None:
+                if (
+                    kind in ("rotate", "refresh")
+                    and card["encrypted_credential"] is None
+                ):
                     raise HTTPException(
                         409, "Move this NFT into your browser wallet first."
                     )
@@ -297,7 +304,7 @@ class BrowserPortfolio:
                     )
                 except ValueError:
                     raise HTTPException(400, "Invalid private presentation.")
-                if op["kind"] in ("rotate", "migrate"):
+                if op["kind"] in ("rotate", "refresh", "migrate"):
                     card = await conn.fetchone(
                         "SELECT showing FROM portfolio_cards WHERE id=:id AND pubkey=:p",
                         {"id": op["card_id"], "p": pubkey},
@@ -385,7 +392,9 @@ class BrowserPortfolio:
                     {"h": op["h"], "jpg": op["jpg"]},
                 )
             card_id = (
-                op["card_id"] if op["kind"] in ("migrate", "rotate") else operation_id
+                op["card_id"]
+                if op["kind"] in ("migrate", "rotate", "refresh")
+                else operation_id
             )
             values = {
                 "id": card_id,

@@ -19,7 +19,7 @@ type Point = G1Point | G2Point;
 const mul = <P extends Point>(p: P, s: bigint): P => p.multiplyUnsafe(s) as P;
 const add = <P extends Point>(a: P, b: P): P => (a as G1Point).add(b as G1Point) as P;
 const encoded = (p: Point) => p.toBytes(true);
-const g1 = bls.G1.Point.BASE, g2 = bls.G2.Point.BASE;
+export const g1 = bls.G1.Point.BASE; const g2 = bls.G2.Point.BASE;
 export const G_NULL = bls.G1.hashToCurve(utf8('ps_nullifier_base'), { DST: 'CASHU_PS_GNULL_XMD:SHA-256_SSWU_RO_' });
 const G_ASSET = bls.G1.hashToCurve(utf8('ps_asset_tag_base'), { DST: 'CASHU_PS_ASSET_TAG_XMD:SHA-256_SSWU_RO_' });
 export interface MintConfig { keyset_id: string; public_key: string; max_jpg_bytes?: number; }
@@ -34,7 +34,7 @@ const scalar = (hex: string, nonzero = false) => {
   return n;
 };
 
-function dlog(bases: G1Point[], points: G1Point[], s: bigint, dst: string, binding: Uint8Array = new Uint8Array()): Uint8Array {
+export function dlog(bases: G1Point[], points: G1Point[], s: bigint, dst: string, binding: Uint8Array = new Uint8Array()): Uint8Array {
   const w = randomScalar();
   const commitments = bases.map(p => mul(p, w));
   const c = challenge(concatBytes(utf8(dst), frame(binding), ...[...bases, ...points, ...commitments].map(p => frame(encoded(p)))));
@@ -72,6 +72,13 @@ function presentation(cred: Credential, binding: Uint8Array) {
   const us = mul(u, s), N = mul(G_NULL, s);
   return { h, u, v, us, N, proof: dlog([G_NULL, u], [N, us], s, 'Cashu_PS_Present_v1', binding) };
 }
+/** Public presentation (Python `Presentation.to_bytes`) bound to one purpose. */
+export function boundPresentation(cred: Credential, binding: Uint8Array): string {
+  verifyKeysetId(cred.keyset_id);
+  const p = presentation(cred, binding);
+  return bytesToHex(concatBytes(hexToBytes(cred.keyset_id), integer(p.h), ...[p.u, p.v, p.us, p.N].map(encoded), p.proof));
+}
+const verifyKeysetId = (id: string) => { if (!/^[0-9a-f]{66}$/.test(id)) throw new Error('Invalid NFT keyset'); };
 export function showing(cred: Credential, pubkey: string) {
   const context = utf8(expectedContext(pubkey, cred.h, cred.keyset_id));
   const p = presentation(cred, concatBytes(utf8('Cashu_PS_Showing_v1'), frame(context)));

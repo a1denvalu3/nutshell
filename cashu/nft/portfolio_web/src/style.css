@@ -45,7 +45,13 @@ body { margin: 0; min-height: 100vh; background: var(--bg); color: var(--text); 
 img, svg { display: block; max-width: 100%; }
 h1, h2, h3 { margin: 0; font-family: var(--display); font-weight: 800; letter-spacing: -.035em; line-height: 1; }
 p { margin: 0; }
-button, input, textarea { font: inherit; color: inherit; }
+button, input, textarea, select { font: inherit; color: inherit; }
+/* Text-entry controls carry their own theme colours: they sit on var(--bg)
+   even inside light panels (.pending-box, .notice, .keybox, .link-box) whose
+   forced #111 text would otherwise be inherited onto a dark field. */
+.field input, .field select, .field textarea, .input { color: var(--text); background: var(--bg); }
+.search { color: var(--text); }
+.field select option { color: var(--text); background: var(--paper); }
 button { cursor: pointer; background: none; border: 0; padding: 0; }
 button:disabled { cursor: not-allowed; }
 a { color: inherit; }
@@ -238,7 +244,7 @@ button.nft-card:hover .nft-media img, .is-preview:hover .nft-media svg { transfo
 .how-sub { font-size: 22px; margin: 24px 0 10px; }
 .how-article em { font-style: normal; font-weight: 700; background: var(--yellow); color: #111; padding: 0 4px; border-radius: 4px; }
 .how-article .mono { font-size: .84em; padding: 1px 5px; border-radius: 5px; background: var(--surface); }
-.eq { margin: 14px 0; padding: 14px 16px; border-radius: var(--radius-sm); background: #111; color: var(--lime); font-size: 13.5px; line-height: 1.7; overflow-x: auto; white-space: pre; }
+.eq, .how-article .eq.mono { margin: 14px 0; padding: 14px 16px; border-radius: var(--radius-sm); background: #111; color: var(--lime); font-size: 13.5px; line-height: 1.7; overflow-x: auto; white-space: pre; }
 .steps { margin: 16px 0; padding: 0; list-style: none; counter-reset: step; display: flex; flex-direction: column; gap: 14px; }
 .steps > li { position: relative; padding-left: 40px; counter-increment: step; }
 .steps > li::before { content: counter(step); position: absolute; left: 0; top: 1px; display: grid; place-items: center; width: 28px; height: 28px; border-radius: 50%; background: var(--orange); color: #111; border: 2px solid #111; font-family: var(--display); font-weight: 800; font-size: 14px; }
@@ -312,7 +318,7 @@ button.nft-card:hover .nft-media img, .is-preview:hover .nft-media svg { transfo
 .field { display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 750; }
 .field input { height: 48px; padding: 0 14px; border-radius: 14px; border: 2px solid var(--ink); background: var(--bg); font-weight: 550; font-size: 15px; transition: box-shadow .15s, transform .15s; }
 .field input:focus { outline: none; box-shadow: 3px 3px 0 var(--ink); transform: translate(-1px, -1px); }
-.field input::placeholder { color: var(--muted); opacity: .8; }
+.field input::placeholder, .field textarea::placeholder, .input::placeholder { color: var(--muted); opacity: .8; }
 .keybox { display: flex; flex-direction: column; gap: 10px; padding: 14px; border-radius: 16px; background: var(--yellow); color: #111; border: 2px solid #111; }
 .keybox-head { display: flex; justify-content: space-between; font-size: 13px; font-weight: 750; }
 .keybox-head span:first-child { display: inline-flex; align-items: center; gap: 6px; }
@@ -383,7 +389,9 @@ button.nft-card:hover .nft-media img, .is-preview:hover .nft-media svg { transfo
 .pending-box p { font-size: 13.5px; font-weight: 550; }
 .pending-box .row { margin-top: 6px; }
 .pending-box .btn { color: #111; border-color: #111; }
-.pending-box .btn-secondary { background: #fffdf7; }
+.pending-box .btn-secondary, .pending-box .hold { background: #fffdf7; }
+/* Light panels keep light-mode ink in both themes: secondary text included. */
+:is(.pending-box, .notice:not(.notice-bad), .link-box, .keybox) :is(.hint, .muted) { color: #4a4740; }
 .detail-links { display: flex; flex-wrap: wrap; gap: 6px; }
 .back { display: inline-flex; align-items: center; gap: 6px; align-self: flex-start; font-size: 13px; font-weight: 750; transition: transform .2s var(--pop); }
 .back:hover { transform: translateX(-4px); }
@@ -582,3 +590,61 @@ button.stat { text-align: left; cursor: pointer; }
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; }
   .marquee-track { animation: none; }
 }
+
+/* Marketplace and wallet */
+.unread { display: inline-grid; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; margin-left: 2px; border-radius: 999px; border: 1.5px solid #111; background: var(--orange); color: #111; font-size: 11px; font-weight: 800; line-height: 1; }
+.unread-inline { margin-left: auto; }
+.menu-sep { height: 2px; margin: 6px 4px; background: var(--surface); border-radius: 2px; }
+.price { display: inline-flex; align-items: center; gap: 5px; flex: none; padding: 2px 9px; border-radius: 999px; border: 1.5px solid #111; background: var(--lime); color: #111; font-size: 12px; font-weight: 800; white-space: nowrap; }
+.price-lg { align-self: flex-start; padding: 6px 14px; font-family: var(--display); font-size: 26px; letter-spacing: -.03em; box-shadow: 3px 3px 0 var(--ink); }
+.page-lede { max-width: 520px; font-weight: 550; }
+.row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.row-between { display: flex; align-items: center; justify-content: space-between; gap: 10px; min-width: 0; }
+.small { font-size: 13px; }
+.wrap { word-break: break-all; }
+.field select, .field textarea, .input { min-height: 48px; padding: 10px 14px; border-radius: 14px; border: 2px solid var(--ink); background: var(--bg); font-weight: 550; font-size: 15px; transition: box-shadow .15s, transform .15s; }
+.field textarea { font-family: var(--mono); font-size: 13px; resize: vertical; }
+.field select:focus, .field textarea:focus, .input:focus { outline: none; box-shadow: 3px 3px 0 var(--ink); transform: translate(-1px, -1px); }
+.input { flex: 1; min-width: 0; height: 40px; min-height: 0; padding: 0 12px; border-radius: 12px; font-size: 14px; }
+.fee-table { margin: 0; display: flex; flex-direction: column; border: 2px solid var(--ink); border-radius: 16px; overflow: hidden; background: var(--paper); }
+.fee-table > div { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 14px; font-size: 14px; border-top: 1.5px solid var(--surface); }
+.fee-table > div:first-child { border-top: 0; }
+.fee-table dt { color: var(--muted); font-weight: 600; }
+.fee-table dd { margin: 0; display: inline-flex; align-items: center; gap: 8px; font-weight: 750; text-align: right; }
+.fee-table .total { background: var(--yellow); color: #111; }
+.fee-table .total dt { color: #111; }
+.listing-box { display: flex; flex-direction: column; gap: 10px; }
+.legs { display: flex; flex-wrap: wrap; gap: 6px; }
+.offer-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 12px; }
+.offer-row { display: grid; grid-template-columns: 72px 1fr auto; align-items: center; gap: 14px; padding: 12px; border-radius: var(--radius); border: 2px solid var(--ink); background: var(--paper); box-shadow: var(--shadow); }
+.offer-thumb { width: 72px; height: 72px; object-fit: cover; border-radius: 12px; border: 2px solid var(--ink); }
+.offer-main { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+.balance-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 18px; margin-top: 20px; }
+.balance-card { display: flex; flex-direction: column; gap: 12px; padding: 18px; border-radius: var(--radius); border: 2px solid var(--ink); background: var(--paper); box-shadow: var(--shadow); }
+.balance-big { font-family: var(--display); font-size: 40px; font-weight: 800; letter-spacing: -.04em; line-height: 1; }
+.balance-legs { margin: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+.balance-legs > div { display: flex; justify-content: space-between; }
+.balance-legs dt { color: var(--muted); font-weight: 600; }
+.balance-legs dd { margin: 0; font-weight: 750; }
+.add-mint { border-style: dashed; box-shadow: none; }
+.mint-shortcuts { display: flex; flex-wrap: wrap; gap: 8px; }
+.mint-shortcuts .chip { padding: 0 12px; font-size: 13px; font-weight: 700; }
+.nft-card.is-pending { opacity: .85; }
+.nft-card.is-pending .nft-media img { filter: saturate(.6); }
+.menu-mobile { display: none; }
+@media (max-width: 640px) {
+  .topbar .nav-link.nav-market { display: inline-flex; }
+  .menu-mobile { display: flex; }
+  .row-2 { grid-template-columns: 1fr; }
+  .offer-row { grid-template-columns: 56px 1fr; }
+  .offer-row > .btn { grid-column: 1 / -1; }
+  .offer-thumb { width: 56px; height: 56px; }
+  .profile-pill > span:not(.unread) { display: none; }
+}
+.guide { display: flex; align-items: center; gap: 14px; margin-bottom: 18px; padding: 14px; border-radius: var(--radius); border: 2px solid #111; background: var(--lime); color: #111; box-shadow: var(--shadow); }
+.guide img { width: 64px; height: 64px; flex: none; object-fit: cover; border-radius: 12px; border: 2px solid #111; }
+.guide-text { flex: 1; display: flex; flex-direction: column; gap: 3px; min-width: 0; font-size: 14px; font-weight: 550; }
+.guide-text strong { font-family: var(--display); font-size: 20px; letter-spacing: -.02em; }
+.guide .btn { color: #111; border-color: #111; }
+.guide .btn-secondary { background: #fffdf7; }
+@media (max-width: 640px) { .guide { flex-wrap: wrap; } .guide .btn { width: 100%; } }

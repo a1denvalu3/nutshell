@@ -7,7 +7,7 @@ import { bytesToHex, concatBytes } from '@noble/hashes/utils.js';
 import { profileKey, parseShowing } from '../crypto.mjs';
 import { checked, signedRequest } from '../api.mjs';
 import { EncryptedVault, walletSeed, type Envelope } from './vault.ts';
-import { ORDER, utf8, integer, blindIssue, blindTransfer, finishBlind, hashAsset, nullifier, decodeToken, encodeToken, verifyCredential, publicCard, type MintConfig, type Credential, type Card } from './ps.ts';
+import { ORDER, utf8, integer, boundPresentation, blindIssue, blindTransfer, finishBlind, hashAsset, nullifier, decodeToken, encodeToken, verifyCredential, publicCard, type MintConfig, type Credential, type Card } from './ps.ts';
 import { splitJpg, transferJpg } from './jpg.ts';
 
 interface Prepared { id: string; h: string; title: string; jpg: string; card_id?: string | null; begin: { session: string; u: string; keyset_id: string } | null; legacy_token: string | null; }
@@ -161,6 +161,31 @@ export class BrowserNFTWallet {
       const cred = await this.credential(card);
       await this.post(`/cards/${card.id}/ready`);
       return { token: encodeToken(cred), nullifier: nullifier(cred) };
+    });
+  }
+  // --- marketplace hooks (NftSide) ---------------------------------------------
+  /** Listing rotates the credential so earlier exports and links stop working. */
+  rotate(card: Card): Promise<Card> {
+    return this.lock(async () => {
+      const cred = await this.credential(card), stage = await this.prepare('refresh', new Uint8Array(), card.title, card.id);
+      return this.swap(stage, cred);
+    });
+  }
+  /** Public presentation of the listed credential, bound to one offer and its
+   *  fixed destination; the NFT mint spends it only inside that delivery. */
+  async presentForDelivery(card: Card, binding: Uint8Array): Promise<string> {
+    return this.lock(async () => boundPresentation(await this.credential(card), binding));
+  }
+  verify(cred: Credential) { verifyCredential(cred, this.config); }
+  /** Save a purchased credential (recovered from the delivery receipt and the
+   *  buyer's own s') encrypted, then publish the ordinary signed showing. */
+  async importPurchased(cardId: string, cred: Credential, publish: (body: { encrypted_credential: Envelope; showing: string; signature: string }) => Promise<unknown>): Promise<void> {
+    return this.lock(async () => {
+      verifyCredential(cred, this.config);
+      await this.unspent(cred);
+      const encrypted = await this.vault.encrypt(cred, scope(cardId, cred.h));
+      await this.vault.put('card:' + cardId, encrypted);
+      await publish({ encrypted_credential: encrypted, ...publicCard(cred, this.secret, this.pubkey) });
     });
   }
   async cancel(card: Card): Promise<Card> {

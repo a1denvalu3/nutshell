@@ -40,6 +40,8 @@ from ..core.db import Connection, Database, LockOptions
 from .api import create_router
 from .imgmeta import embed_token
 from .ledger import AlreadyMintedError, AlreadySpentError, NFTError, PSLedger
+from .market import Executor, Market, market_router
+from .market_net import MintNetPolicy
 from .portfolio_jpg import normalize_jpg, split_transfer_jpg, validate_jpg
 from .portfolio_links import LinkRequest, Links
 from .portfolio_social import (
@@ -393,11 +395,20 @@ def create_portfolio_app(
     max_jpg_bytes: int = 10 * 1024 * 1024,
     max_cards: int = 100,
     max_storage_bytes: int = 1024**3,
+    market_dev_mints: Optional[List[str]] = None,
+    executor_interval: float = 5.0,
+    run_executor: bool = True,
 ) -> FastAPI:
     portfolio = Portfolio(data_dir, max_jpg_bytes, max_cards, max_storage_bytes)
     browser_wallet = BrowserPortfolio(portfolio)
     social = Social(portfolio)
     links = Links(portfolio)
+    dev_mints = frozenset(market_dev_mints or [])
+    market = Market(portfolio, data_dir, MintNetPolicy(dev_mints=dev_mints))
+    executor = Executor(market, interval=executor_interval)
+    # Browsers talk to payment mints directly (wallet balances, funding,
+    # verification), so connect-src admits HTTPS/WSS plus configured dev mints.
+    connect_src = " ".join(["'self'", "https:", "wss:", *sorted(dev_mints)])
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
@@ -405,7 +416,12 @@ def create_portfolio_app(
         await browser_wallet.migrate()
         await social.migrate()
         await links.migrate()
+        await market.migrate()
+        if run_executor:
+            executor.start()
         yield
+        await executor.stop()
+        await market.client.aclose()
         await portfolio.db.engine.dispose()
 
     app = FastAPI(
@@ -413,6 +429,8 @@ def create_portfolio_app(
     )
     app.state.portfolio = portfolio
     app.state.browser_wallet = browser_wallet
+    app.state.market = market
+    app.state.executor = executor
     requests: Dict[str, Deque[float]] = defaultdict(deque)
 
     @app.middleware("http")
@@ -438,7 +456,7 @@ def create_portfolio_app(
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["Content-Security-Policy"] = (
-            "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; connect-src 'self'; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
+            f"default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; font-src 'self'; connect-src {connect_src}; worker-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
         )
         response.headers["Permissions-Policy"] = (
             "camera=(), microphone=(), geolocation=()"
@@ -660,6 +678,14 @@ def create_portfolio_app(
             limit, before, followees, ["mint", "receive", "collection"]
         )
 
+    async def refuse_if_listed(card_id: str) -> None:
+        """Listed NFTs can't be exported, linked or rotated: unlist first."""
+        async with portfolio.db.get_connection() as conn:
+            if await market.card_listed(conn, card_id):
+                raise HTTPException(409, "Unlist this NFT before sending it.")
+
+    app.include_router(market_router(market, executor, authorize, read_body))
+
     @app.post("/api/profiles/{pubkey}/links")
     async def create_link(pubkey: str, request: Request):
         raw = await read_body(request, 8192)
@@ -668,6 +694,7 @@ def create_portfolio_app(
             body = LinkRequest.model_validate_json(raw)
         except ValidationError:
             raise HTTPException(400, "Invalid transfer link.")
+        await refuse_if_listed(body.card_id)
         return await links.create(pubkey, body)
 
     @app.get("/api/links/{link_id}")
@@ -767,12 +794,14 @@ def create_portfolio_app(
     async def wallet_prepare(
         pubkey: str,
         request: Request,
-        kind: Literal["mint", "receive", "rotate", "migrate"] = Query(),
+        kind: Literal["mint", "receive", "rotate", "refresh", "migrate"] = Query(),
         title: str = Query(default="Untitled JPG", min_length=1, max_length=80),
         card_id: Optional[str] = Query(default=None),
     ):
         raw = await read_body(request, max_jpg_bytes)
         await authorize(request, pubkey, raw)
+        if card_id and kind in ("rotate", "refresh", "migrate"):
+            await refuse_if_listed(card_id)
         return await browser_wallet.prepare(pubkey, kind, raw, title, card_id)
 
     @app.post("/api/profiles/{pubkey}/wallet/operations/{operation_id}/backup")
@@ -823,6 +852,7 @@ def create_portfolio_app(
     async def wallet_ready(pubkey: str, card_id: str, request: Request):
         raw = await read_body(request, 0)
         await authorize(request, pubkey, raw)
+        await refuse_if_listed(card_id)
         async with portfolio.db.get_connection(locks=CARD_LOCKS) as conn:
             await portfolio.reconcile(conn, pubkey)
             row = await portfolio.owned_card(conn, pubkey, card_id)
@@ -858,6 +888,10 @@ def create_portfolio_app(
         "/transfer/private/begin",
         "/transfer/private",
         "/verify",
+        "/lockstate",
+        "/lock",
+        "/lock/claim",
+        "/lock/refund",
     }
     # create_router only registers APIRoute endpoints via decorators.
     api_routes = cast(List[APIRoute], router.routes)
@@ -870,6 +904,9 @@ def create_portfolio_app(
 
     @app.get("/")
     @app.get("/how-it-works")
+    @app.get("/market")
+    @app.get("/wallet")
+    @app.get("/offers")
     @app.get("/explore")
     @app.get("/explore/nfts")
     @app.get("/activity")
@@ -887,6 +924,12 @@ def create_portfolio_app(
         return FileResponse(
             WEB_DIR / "index.html", headers={"Cache-Control": "no-cache"}
         )
+
+    @app.get("/market/{listing_id}")
+    async def market_page(listing_id: str):
+        if not re.fullmatch(r"[0-9a-f]{32}", listing_id):
+            raise HTTPException(404, "Listing not found.")
+        return await frontend()
 
     @app.get("/claim/{link_id}")
     async def claim_page(link_id: str):
@@ -907,6 +950,13 @@ def main() -> None:
         max_storage_bytes=int(
             os.environ.get("NFT_PORTFOLIO_MAX_STORAGE_BYTES", str(1024**3))
         ),
+        # Development only: exact mint URLs the settlement worker may reach
+        # over plain HTTP on local addresses (e.g. the dev ecash mint).
+        market_dev_mints=[
+            u.strip()
+            for u in os.environ.get("NFT_MARKET_DEV_MINTS", "").split(",")
+            if u.strip()
+        ],
     )
     # Behind a reverse proxy, trust X-Forwarded-For only from the proxy's
     # address so per-client rate limits see real client IPs.

@@ -11,6 +11,7 @@ client-side. Blind issuance reveals a deterministic duplicate tag rather
 than h; the legacy clear-h endpoints remain available for compatibility.
 """
 
+import time
 from typing import List, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException
@@ -18,16 +19,22 @@ from pydantic import BaseModel
 
 from ..core.crypto.bls import PublicKey, curve_order
 from ..core.crypto.ps import (
+    G1,
     DlogEqProof,
     LinearProof,
     Presentation,
     PrivatePresentation,
+    verify_dlog_eq,
     verify_presentation,
 )
+from ..core.db import LockOptions
 from .ledger import (
+    LOCK_BINDING,
     AlreadyMintedError,
     AlreadySpentError,
     InvalidProofError,
+    LockedError,
+    NFTContract,
     NFTError,
     PaymentError,
     PSLedger,
@@ -94,6 +101,31 @@ class PrivateTransferRequest(BaseModel):
     new_proof: str
 
 
+class LockRequest(BaseModel):
+    presentation: str  # holder's Presentation bound to LOCK_BINDING ‖ contract digest
+    contract_id: str  # 32 hex chars, chosen by the holder
+    hashlock: str  # SHA256 of the claim preimage, 64 hex
+    destination: str  # buyer owner commitment S', G1 hex
+    destination_proof: str  # proof of knowledge of s', bound to the contract digest
+    deadline: int  # unix seconds; refund opens after it
+
+
+class LockClaimRequest(BaseModel):
+    contract_id: str
+    preimage: str  # 64 hex
+
+
+class LockRefundRequest(BaseModel):
+    contract_id: str
+    presentation: str  # bound to REFUND_BINDING ‖ contract digest ‖ S_new
+    new_owner_commitment: str
+    new_proof: str
+
+
+LOCK_RECEIVE_DST = b"Cashu_NFT_Lock_Receive_v1"
+MAX_LOCK_SECONDS = 30 * 24 * 3600
+
+
 class IssueResponse(BaseModel):
     u: str
     v: str
@@ -139,6 +171,8 @@ def _parse_presentation(raw: str) -> Presentation:
 
 
 def _http_error(e: NFTError) -> HTTPException:
+    if isinstance(e, LockedError):
+        return HTTPException(423, str(e))
     if isinstance(e, PaymentError):
         return HTTPException(402, str(e))
     if isinstance(e, AlreadyMintedError):
@@ -330,6 +364,105 @@ def create_router(ledger: PSLedger) -> APIRouter:
                 {"nullifier": n.hex(), "state": s} for n, s in zip(nullifiers, states)
             ]
         }
+
+    @router.post("/lockstate")
+    async def lockstate(req: CheckStateRequest):
+        """Explicit lock/outcome view for wallets that understand contracts;
+        /checkstate is unchanged for existing clients."""
+        if len(req.nullifiers) > MAX_CHECKSTATE_NULLIFIERS:
+            raise HTTPException(
+                400, f"too many nullifiers (max {MAX_CHECKSTATE_NULLIFIERS})"
+            )
+        try:
+            nullifiers = [bytes.fromhex(n) for n in req.nullifiers]
+        except ValueError:
+            raise HTTPException(400, "nullifier must be hex")
+        if any(len(n) != 48 for n in nullifiers):
+            raise HTTPException(400, "nullifier must be a 48-byte compressed G1 point")
+        return {"states": await ledger.lock_states(nullifiers)}
+
+    @router.post("/lock")
+    async def lock(req: LockRequest):
+        pres = _parse_presentation(req.presentation)
+        destination = _parse_g1(req.destination)
+        if len(req.contract_id) != 32 or not all(
+            c in "0123456789abcdef" for c in req.contract_id
+        ):
+            raise HTTPException(400, "contract_id must be 32 lowercase hex chars")
+        if len(req.hashlock) != 64 or not all(
+            c in "0123456789abcdef" for c in req.hashlock
+        ):
+            raise HTTPException(400, "hashlock must be 64 lowercase hex chars")
+        now = int(time.time())
+        if not now < req.deadline <= now + MAX_LOCK_SECONDS:
+            raise HTTPException(400, "deadline out of range")
+        contract = NFTContract(
+            contract_id=req.contract_id,
+            nullifier=pres.nullifier.format(),
+            h=pres.h,
+            hashlock=req.hashlock,
+            destination=destination,
+            deadline=req.deadline,
+        )
+        if destination.is_infinity() or not verify_dlog_eq(
+            [G1],
+            [destination],
+            _parse_proof(req.destination_proof),
+            LOCK_RECEIVE_DST,
+            contract.digest(),
+        ):
+            raise HTTPException(403, "invalid destination proof")
+        try:
+            async with ledger.db.get_connection(
+                locks=[LockOptions(table="ps_nullifiers")]
+            ) as conn:
+                await ledger.install_lock(
+                    conn, pres, contract, LOCK_BINDING + contract.digest()
+                )
+        except NFTError as e:
+            raise _http_error(e)
+        return {
+            "contract_id": req.contract_id,
+            "nullifier": contract.nullifier.hex(),
+            "digest": contract.digest().hex(),
+            "state": "locked",
+        }
+
+    @router.post("/lock/claim", response_model=IssueResponse)
+    async def lock_claim(req: LockClaimRequest):
+        try:
+            preimage = bytes.fromhex(req.preimage)
+        except ValueError:
+            raise HTTPException(400, "preimage must be hex")
+        try:
+            async with ledger.db.get_connection(
+                locks=[LockOptions(table="ps_nullifiers")]
+            ) as conn:
+                u, v = await ledger.claim_lock(conn, req.contract_id, preimage)
+        except NFTError as e:
+            raise _http_error(e)
+        return IssueResponse(
+            u=u.format().hex(), v=v.format().hex(), keyset_id=ledger.keyset.keyset_id
+        )
+
+    @router.post("/lock/refund", response_model=IssueResponse)
+    async def lock_refund(req: LockRefundRequest):
+        try:
+            async with ledger.db.get_connection(
+                locks=[LockOptions(table="ps_nullifiers")]
+            ) as conn:
+                u, v = await ledger.refund_lock(
+                    conn,
+                    req.contract_id,
+                    _parse_presentation(req.presentation),
+                    _parse_g1(req.new_owner_commitment),
+                    _parse_proof(req.new_proof),
+                )
+        except NFTError as e:
+            raise _http_error(e)
+        return IssueResponse(
+            u=u.format().hex(), v=v.format().hex(), keyset_id=ledger.keyset.keyset_id
+        )
 
     @router.get("/asset/{asset_hash}")
     async def asset(asset_hash: str):

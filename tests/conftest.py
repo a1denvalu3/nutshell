@@ -77,7 +77,7 @@ async def _startup_test_keysets(ledger: Ledger) -> None:
     await ledger.activate_keyset(derivation_path="m/0'/0'/1'", version="0.20.0")
 
 
-Ledger._startup_keysets = _startup_test_keysets
+Ledger._startup_keysets = _startup_test_keysets  # type: ignore[method-assign,assignment]
 
 settings.mint_rpc_server_enable = True
 settings.mint_rpc_server_mutual_tls = False

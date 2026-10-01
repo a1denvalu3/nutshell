@@ -8,16 +8,17 @@ export async function checked(response) {
   return response;
 }
 export async function getJSON(path) { return (await checked(await fetch(path, { cache: 'no-store' }))).json(); }
-export async function signedRequest(secret, path, body = new Uint8Array(), contentType = 'application/octet-stream') {
+// `origin` is empty in the browser (same-origin); Node tests pass the server URL.
+export async function signedRequest(secret, path, body = new Uint8Array(), contentType = 'application/octet-stream', origin = '') {
   const bytes = typeof body === 'string' ? new TextEncoder().encode(body) : body;
   const pubkey = profileKey(secret);
-  const challenge = await (await checked(await fetch('/api/auth/challenge', {
+  const challenge = await (await checked(await fetch(origin + '/api/auth/challenge', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ pubkey, method: 'POST', path, body_hash: bytesToHex(sha256(bytes)) }),
   }))).json();
   const expected = `Cashu_NFT_Portfolio_Auth_v1\n${pubkey}\nPOST\n${path}\n${bytesToHex(sha256(bytes))}\n${challenge.nonce}\n${challenge.expires}`;
   if (challenge.message !== expected) throw new Error('Unexpected signing challenge.');
-  return checked(await fetch(path, {
+  return checked(await fetch(origin + path, {
     method: 'POST', body: bytes,
     headers: { 'Content-Type': contentType, 'X-Portfolio-Challenge': challenge.nonce,
       'X-Portfolio-Signature': signMessage(secret, expected) },

@@ -3,8 +3,8 @@ import { createRoot } from 'react-dom/client';
 import { Menu } from '@base-ui/react/menu';
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import { Toaster, toast } from 'sonner';
-import { ArrowLeft, ArrowRight, Check, Download, Ellipsis, Eye, EyeOff, FileJson, ImageDown, KeyRound, Link2, Plus,
-  Pencil, RefreshCw, RotateCcw, Send, ShieldX, Upload, Undo2 } from 'lucide-react';
+import { ArrowLeft, ArrowRight, Check, Compass, Download, Ellipsis, Eye, EyeOff, FileJson, HandCoins, ImageDown, Info, KeyRound, Link2, Plus,
+  Pencil, Radio, RefreshCw, RotateCcw, Send, ShieldX, Upload, Undo2, Wallet } from 'lucide-react';
 import '@fontsource-variable/inter';
 import '@fontsource-variable/bricolage-grotesque';
 import '@fontsource/jetbrains-mono/400.css';
@@ -17,6 +17,7 @@ import { Button, CheckRow, CopyChip, DrawnCheck, HoldButton, Identicon, Modal, N
 import HowItWorks from './HowItWorks.jsx';
 import ClaimPage from './claim.jsx';
 import { linkUrl, newLinkId, sealLink } from './link.mjs';
+import { ListingControls, ListingPage, MarketPage, OffersPage, PendingPurchases, WalletPage, useMarket } from './market.jsx';
 import { ActivityItem, ActivityList, ActivityPage, CollectionCard, EditCollectionDialog, ExplorePage, FollowButton, LikeButton, MarketCard,
   NetworkDialog, Segmented, useRelations } from './social.jsx';
 
@@ -39,14 +40,21 @@ function initialIdentity() {
 // cards don't re-render and proofs aren't re-verified every 15 seconds.
 const keepSame = (prev, next) => prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
 function routeKey() { return window.location.pathname.match(/^\/p\/([0-9a-f]{64})\/?$/)?.[1] || null; }
+// Where onboarding/top-up returns to: only internal listing paths (no open redirect).
+const safeReturn = (v) => (/^\/market\/[0-9a-f]{32}$/.test(v || '') ? v : null);
 function readRoute() {
-  const path = window.location.pathname, nft = new URLSearchParams(window.location.search).get('nft');
+  const path = window.location.pathname, params = new URLSearchParams(window.location.search), nft = params.get('nft');
   const pubkey = routeKey();
   if (pubkey) return { page: 'profile', pubkey, nft };
   if (/^\/how-it-works\/?$/.test(path)) return { page: 'how' };
   if (/^\/explore\/nfts\/?$/.test(path)) return { page: 'explore', tab: 'nfts' };
   if (/^\/explore\/?$/.test(path)) return { page: 'explore', tab: 'collections' };
   if (/^\/activity\/?$/.test(path)) return { page: 'activity' };
+  if (/^\/market\/?$/.test(path)) return { page: 'market' };
+  const listing = path.match(/^\/market\/([0-9a-f]{32})\/?$/);
+  if (listing) return { page: 'listing', id: listing[1], offer: params.get('offer') === '1' };
+  if (/^\/wallet\/?$/.test(path)) return { page: 'wallet', then: safeReturn(params.get('then')) };
+  if (/^\/offers\/?$/.test(path)) return { page: 'offers', tab: ['received', 'made'].includes(params.get('tab')) ? params.get('tab') : null };
   const claim = path.match(/^\/claim\/([0-9a-f]{32})\/?$/);
   if (claim) return { page: 'claim', id: claim[1] };
   return { page: 'home' };
@@ -132,7 +140,9 @@ function PreviewCard({ variant, title, note }) {
 
 /* ---------- Card detail with guarded send flow ---------- */
 
-function CardDetail({ card, result, owner, busy, config, canSend, onSend, onCancel, isNew }) {
+function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend, onSend, onCancel, isNew, market, nftWallet, onChanged, navigate }) {
+  const [listed, setListed] = useState(null);
+  const canSend = walletCanSend && !listed;
   const [flipped, setFlipped] = useState(false);
   const [view, setView] = useState('info');
   const [ack, setAck] = useState(false);
@@ -140,7 +150,7 @@ function CardDetail({ card, result, owner, busy, config, canSend, onSend, onCanc
   const [method, setMethod] = useState('link'), [locked, setLocked] = useState(false);
   const [password, setPassword] = useState(''), [repeat, setRepeat] = useState(''), [result2, setResult2] = useState(null);
   const resetSend = () => { setAck(false); setPassword(''); setRepeat(''); setLocked(false); setMethod('link'); };
-  useEffect(() => { setView('info'); resetSend(); setResult2(null); setFlipped(false); setConfirmCancel(false); }, [card.id]);
+  useEffect(() => { setView('info'); resetSend(); setResult2(null); setFlipped(false); setConfirmCancel(false); setListed(null); }, [card.id]);
   useEffect(() => { if (!confirmCancel) return; const t = setTimeout(() => setConfirmCancel(false), 4000); return () => clearTimeout(t); }, [confirmCancel]);
   const sent = card.status === 'sent', ready = card.status === 'ready';
   const v = verdict(result, ready);
@@ -207,8 +217,9 @@ function CardDetail({ card, result, owner, busy, config, canSend, onSend, onCanc
               </Button>
             </div>
           </div>}
-          {owner && !sent && !ready && <Button variant="primary" size="lg" className="full" icon={<Send size={16} />} disabled={!!busy || !canSend} onClick={() => setView('send')}>Send NFT</Button>}
-          {owner && !sent && !canSend && !busy && <p className="hint">Your wallet is still syncing this NFT.</p>}
+          {owner && !sent && !ready && !listed && <Button variant="primary" size="lg" className="full" icon={<Send size={16} />} disabled={!!busy || !canSend} onClick={() => setView('send')}>Send NFT</Button>}
+          {owner && !sent && !walletCanSend && !busy && <p className="hint">Your wallet is still syncing this NFT.</p>}
+          {owner && !sent && market && <ListingControls card={card} market={market} nftWallet={nftWallet} busy={busy} onChanged={onChanged} navigate={navigate} onListing={setListed} />}
 
           <div className="detail-links">
             <Button variant="ghost" size="sm" icon={<ImageDown size={14} />} onClick={() => { const a = document.createElement('a'); a.href = imageUrl(card.h); a.download = `cashu-${card.h.slice(0, 12)}.jpg`; a.click(); }}>Save image</Button>
@@ -378,6 +389,10 @@ function AddDialog({ open, close, config, wallet, onAdded }) {
 
 /* ---------- App ---------- */
 
+function SignInFirst({ onStart }) {
+  return <main className="page"><div className="empty"><strong>Start a collection first</strong><span className="muted">Your wallet and offers belong to your collection key.</span><Button variant="primary" onClick={onStart}>Get started</Button></div></main>;
+}
+
 function App() {
   const [identity, setIdentity] = useState(initialIdentity);
   const [route, setRoute] = useState(readRoute);
@@ -390,6 +405,8 @@ function App() {
   const [openInput, setOpenInput] = useState(''), [fresh, setFresh] = useState(null);
   const [localWallet, setLocalWallet] = useState(null), [walletState, setWalletState] = useState('opening'), [walletError, setWalletError] = useState('');
   const [relations, toggleRelation] = useRelations(identity);
+  const navRef = useRef(null);
+  const market = useMarket(identity, localWallet, (path) => navRef.current?.(path));
   const [home, setHome] = useState(null);
   const migrationAttempts = useRef(new Set());
   const recovery = useRef(false), reloadRef = useRef(null);
@@ -400,15 +417,21 @@ function App() {
   const sent = profile?.cards.filter((c) => c.status === 'sent') || [];
   const shown = tab === 'sent' ? sent : active;
   const openCard = (item) => navigate(`/p/${item.pubkey || item.actor}?nft=${item.card_id || item.id}`);
+  const [myCards, setMyCards] = useState(null);
+  useEffect(() => {
+    if (!identity || route.page !== 'offers') return;
+    getJSON(`/api/profiles/${identity.pubkey}`).then((p) => setMyCards(p.cards)).catch(() => {});
+  }, [identity, route.page, market.version]);
 
   const navigate = useCallback((path) => {
     window.history.pushState({}, '', path);
     setRoute(readRoute()); setProfile(null); setSelected(null); setVisitor(false); setTab('collection');
     window.scrollTo({ top: 0, behavior: 'instant' });
   }, []);
+  navRef.current = navigate;
   useEffect(() => { const pop = () => { setRoute(readRoute()); setProfile(null); setSelected(null); }; window.addEventListener('popstate', pop); return () => window.removeEventListener('popstate', pop); }, []);
   useEffect(() => {
-    const titles = { how: 'How it works', explore: route.tab === 'nfts' ? 'Explore NFTs' : 'Explore collections', activity: 'Activity', claim: 'Claim an NFT' };
+    const titles = { how: 'How it works', explore: route.tab === 'nfts' ? 'Explore NFTs' : 'Explore collections', activity: 'Activity', claim: 'Claim an NFT', market: 'Market', listing: 'For sale', wallet: 'Wallet', offers: 'Offers' };
     document.title = titles[route.page] ? `${titles[route.page]} · Cashu NFT` : profile?.name ? `${profile.name} · Cashu NFT` : 'Cashu NFT · The NFT is the JPG';
   }, [route, profile?.name]);
   useEffect(() => {
@@ -440,6 +463,7 @@ function App() {
     return data;
   }, [pubkey]);
   reloadRef.current = reload;
+  useEffect(() => { if (pubkey && market.version) reloadRef.current(pubkey).catch(() => {}); }, [market.version, pubkey]);
   useEffect(() => {
     if (!identity || !config) { setLocalWallet(null); return; }
     let disposed = false;
@@ -498,7 +522,11 @@ function App() {
       const response = await signedRequest(secret, `/api/profiles/${p}`, JSON.stringify({ name: name.trim() || 'Untitled collection' }), 'application/json');
       const data = await response.json(); saveIdentity(secret);
       setDialog(null); setGenerated(''); setInputKey(''); setBackedUp(false);
-      if (readRoute().page === 'claim') toast.success('Collection ready. Now claim your NFT.');
+      const here = readRoute();
+      if (here.page === 'claim') toast.success('Collection ready. Now claim your NFT.');
+      // Came for an NFT: fund the wallet next, then return to that listing.
+      else if (here.page === 'listing') { navigate(`/wallet?then=/market/${here.id}`); toast.success('Collection ready. Add ecash to make your offer.'); }
+      else if (here.page === 'wallet' || here.page === 'offers') { navigate(window.location.pathname + window.location.search); toast.success('Collection ready.'); }
       else { navigate(`/p/${p}`); setProfile(data); toast.success(dialog === 'create' ? 'Collection created.' : 'Collection unlocked.'); }
     } catch (e) { toast.error(e.message); } finally { setBusy(''); }
   };
@@ -553,7 +581,7 @@ function App() {
     try { const summary = await toggleRelation('follows', target, on); applySummary(target, summary); toast.success(on ? `Following ${profile?.name || 'this collection'}.` : 'Unfollowed.'); }
     catch (e) { toast.error(e.message); }
   };
-  const verbs = { mint: 'minted', receive: 'received', collection: 'joined', like: 'liked', follow: 'followed' };
+  const verbs = { mint: 'minted', receive: 'received', collection: 'joined', like: 'liked', follow: 'followed', sale: 'bought' };
   const ticker = home?.activity?.length ? home.activity.map((e) => `${e.actor_name || 'Someone'} ${verbs[e.kind]} ${e.title || e.target_name || ''}`.trim())
     : ['The NFT is the JPG', 'Free mint', 'Send it like a meme', 'No seed phrase drama', 'Your key, your vibes', '1 of 1 by default', 'gm'];
 
@@ -562,13 +590,21 @@ function App() {
       <div className="topbar-inner">
         <a className="brand" href="/" onClick={(e) => { e.preventDefault(); navigate('/'); }}><span className="brand-mark" aria-hidden="true" />Cashu NFT</a>
         <nav aria-label="Main">
-          {[['/explore', 'Explore', 'explore'], ['/activity', 'Activity', 'activity'], ['/how-it-works', 'How it works', 'how']].map(([href, label, page]) =>
-            <a key={href} className={`nav-link ${route.page === page ? 'is-active' : ''}`} href={href} onClick={(e) => { e.preventDefault(); navigate(href); }}>{label}</a>)}
+          {(route.page !== 'profile' ? [['/market', 'Market', 'market'], ['/explore', 'Explore', 'explore'], ['/activity', 'Activity', 'activity'], ['/how-it-works', 'How it works', 'how']] : [['/market', 'Market', 'market']]).map(([href, label, page]) =>
+            <a key={href} className={`nav-link ${route.page === page || (page === 'market' && route.page === 'listing') ? 'is-active' : ''} ${page === 'market' ? 'nav-market' : ''}`} href={href} onClick={(e) => { e.preventDefault(); navigate(href); }}>{label}</a>)}
           {identity
             ? <Menu.Root>
-              <Menu.Trigger className="profile-pill"><Identicon pubkey={identity.pubkey} size={24} /><span>My collection</span></Menu.Trigger>
+              <Menu.Trigger className="profile-pill"><Identicon pubkey={identity.pubkey} size={24} /><span>Profile</span>
+                {market.unread > 0 && <motion.span key={market.unread} className="unread" initial={{ scale: .5 }} animate={{ scale: 1 }} aria-label={`${market.unread} unread`}>{market.unread > 9 ? '9+' : market.unread}</motion.span>}</Menu.Trigger>
               <Menu.Portal><Menu.Positioner className="menu-layer" sideOffset={6} align="end"><Menu.Popup className="menu">
-                <Menu.Item className="menu-item" onClick={() => navigate(`/p/${identity.pubkey}`)}><ArrowRight size={15} />Open my collection</Menu.Item>
+                <Menu.Item className="menu-item" onClick={() => navigate('/wallet')}><Wallet size={15} />Wallet</Menu.Item>
+                <Menu.Item className="menu-item" onClick={() => navigate(`/p/${identity.pubkey}`)}><ArrowRight size={15} />My collection</Menu.Item>
+                <Menu.Item className="menu-item" onClick={() => navigate('/offers')}><HandCoins size={15} />Offers{market.unread > 0 && <span className="unread unread-inline">{market.unread}</span>}</Menu.Item>
+                {/* On collection pages these move here from the top bar; on phones they always live here. */}
+                <Menu.Separator className={`menu-sep ${route.page === 'profile' ? '' : 'menu-mobile'}`} />
+                {[['/explore', 'Explore', <Compass key="i" size={15} />], ['/activity', 'Activity', <Radio key="i" size={15} />], ['/how-it-works', 'How it works', <Info key="i" size={15} />]].map(([href, label, icon]) =>
+                  <Menu.Item key={href} className={`menu-item ${route.page === 'profile' ? '' : 'menu-mobile'}`} onClick={() => navigate(href)}>{icon}{label}</Menu.Item>)}
+                <Menu.Separator className="menu-sep" />
                 <Menu.Item className="menu-item" onClick={openCreate} disabled={!config}><Plus size={15} />Start another collection</Menu.Item>
                 <Menu.Item className="menu-item" onClick={() => { setName(''); setDialog('import'); }}><KeyRound size={15} />Import a key</Menu.Item>
                 <Menu.Item className="menu-item" onClick={() => setDialog('open')}><Link2 size={15} />Open by public key</Menu.Item>
@@ -587,6 +623,14 @@ function App() {
         onCreate={openCreate} onImport={() => { setName(''); setDialog('import'); }} onReceived={() => toast.success('Claimed. The NFT is in your collection.')} />
 
       : route.page === 'activity' ? <ActivityPage identity={identity} navigate={navigate} openCard={openCard} />
+
+      : route.page === 'market' ? <MarketPage navigate={navigate} />
+
+      : route.page === 'listing' ? <ListingPage id={route.id} navigate={navigate} identity={identity} market={market} onStart={openCreate} startOffer={route.offer} />
+
+      : route.page === 'wallet' ? (identity ? <WalletPage market={market} navigate={navigate} then={route.then} /> : <SignInFirst onStart={openCreate} />)
+
+      : route.page === 'offers' ? (identity ? <OffersPage navigate={navigate} market={market} nftWallet={localWallet} cards={myCards} initialTab={route.tab} /> : <SignInFirst onStart={openCreate} />)
 
       : route.page === 'how' ? <HowItWorks onStart={() => identity ? navigate(`/p/${identity.pubkey}`) : openCreate()} />
 
@@ -731,6 +775,7 @@ function App() {
           : loading && !profile ? <div className="grid">{[0, 1, 2, 3].map((i) => <div key={i} className="nft-card skeleton" />)}</div>
           : <motion.div className="grid" key={tab}>
             {shown.map((asset, i) => <NFTCard key={asset.id} index={i} card={asset} verification={verification[asset.id]} isNew={asset.id === fresh} onOpen={setSelected} />)}
+            {tab === 'collection' && owner && <PendingPurchases market={market} />}
             {tab === 'collection' && owner && <motion.button className="nft-card add-tile" onClick={() => setDialog('add')} disabled={!canAdd}
               whileHover={canAdd ? { y: -3 } : undefined} whileTap={canAdd ? { scale: .98 } : undefined} transition={{ type: 'spring', stiffness: 400, damping: 26 }}>
               <span className="add-icon"><Plus size={20} /></span><strong>Add JPG</strong><span className="muted">Mint a new one or receive a transfer</span>
@@ -802,7 +847,8 @@ function App() {
 
     <Modal open={!!card} close={() => { if (!busy) setSelected(null); }} size="wide" title={card?.title}>
       {card && <CardDetail card={card} result={verification[card.id]} owner={owner} busy={busy} config={config}
-        canSend={!!localWallet && !!card.signature && card.custody === 'browser'} onSend={sendCard} onCancel={cancelTransfer} isNew={card.id === fresh} />}
+        canSend={!!localWallet && !!card.signature && card.custody === 'browser'} onSend={sendCard} onCancel={cancelTransfer} isNew={card.id === fresh}
+        market={owner ? market : null} nftWallet={localWallet} onChanged={() => reload()} navigate={navigate} />}
     </Modal>
     <Toaster theme="system" position="bottom-center" toastOptions={{ className: 'toast' }} />
   </MotionConfig>;
