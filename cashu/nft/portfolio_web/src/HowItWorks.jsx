@@ -2,6 +2,8 @@ import React from 'react';
 import { motion } from 'motion/react';
 import { ArrowRight } from 'lucide-react';
 import { Button } from './ui.jsx';
+import { Segmented } from './social.jsx';
+import Basics from './HowBasics.jsx';
 
 const SECTIONS = [
   ['jpg', 'The NFT is the JPG'],
@@ -14,13 +16,8 @@ const SECTIONS = [
 const Eq = ({ children }) => <pre className="eq mono">{children}</pre>;
 const reveal = { initial: { opacity: 0, y: 14 }, whileInView: { opacity: 1, y: 0 }, viewport: { once: true, margin: '-60px' }, transition: { duration: .4, ease: 'easeOut' } };
 
-export default function HowItWorks({ onStart }) {
-  return <main className="page how">
-    <header className="how-head">
-      <span className="kicker">How it works</span>
-      <h1>The NFT is the JPG.</h1>
-      <p className="lead">Most NFTs are a token on a ledger that points to an image hosted somewhere else. A Cashu NFT is a credential carried inside the image file itself. This page explains the cryptography that makes that work, with just enough math to check it.</p>
-    </header>
+function Cryptography({ onStart }) {
+  return <>
     <div className="how-layout">
       <nav className="how-toc" aria-label="On this page">
         {SECTIONS.map(([id, label], i) => <a key={id} href={`#${id}`}><span className="mono">{String(i + 1).padStart(2, '0')}</span>{label}</a>)}
@@ -101,5 +98,20 @@ export default function HowItWorks({ onStart }) {
         <div className="how-cta"><p>Ready to mint your first one?</p><Button variant="primary" icon={<ArrowRight size={16} />} onClick={onStart}>Create a collection</Button></div>
       </article>
     </div>
+  </>;
+}
+
+export default function HowItWorks({ onStart, view = 'basics', onView }) {
+  const crypto = view === 'cryptography';
+  return <main className="page how">
+    <header className="how-head">
+      <span className="kicker">How it works</span>
+      <h1>The NFT is the JPG.</h1>
+      <p className="lead">{crypto
+        ? 'Most NFTs are a token on a ledger that points to an image hosted somewhere else. A Cashu NFT is a credential carried inside the image file itself. This page explains the cryptography that makes that work, with just enough math to check it.'
+        : 'Most NFTs are an entry on a public ledger that points to a picture stored somewhere else. A Cashu NFT is different: the picture carries its own ownership. Four ideas, two minutes.'}</p>
+      <Segmented id="how" value={view} onChange={(v) => onView?.(v)} options={[['basics', 'The basics'], ['cryptography', 'Cryptography']]} />
+    </header>
+    {crypto ? <Cryptography onStart={onStart} /> : <Basics onStart={onStart} onCrypto={() => { onView?.('cryptography'); window.scrollTo({ top: 0, behavior: 'smooth' }); }} />}
   </main>;
 }

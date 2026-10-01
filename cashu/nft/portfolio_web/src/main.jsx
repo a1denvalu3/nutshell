@@ -46,7 +46,7 @@ function readRoute() {
   const path = window.location.pathname, params = new URLSearchParams(window.location.search), nft = params.get('nft');
   const pubkey = routeKey();
   if (pubkey) return { page: 'profile', pubkey, nft };
-  if (/^\/how-it-works\/?$/.test(path)) return { page: 'how' };
+  if (/^\/how-it-works\/?$/.test(path)) return { page: 'how', view: params.get('view') === 'cryptography' ? 'cryptography' : 'basics' };
   if (/^\/explore\/nfts\/?$/.test(path)) return { page: 'explore', tab: 'nfts' };
   if (/^\/explore\/?$/.test(path)) return { page: 'explore', tab: 'collections' };
   if (/^\/activity\/?$/.test(path)) return { page: 'activity' };
@@ -632,7 +632,8 @@ function App() {
 
       : route.page === 'offers' ? (identity ? <OffersPage navigate={navigate} market={market} nftWallet={localWallet} cards={myCards} initialTab={route.tab} /> : <SignInFirst onStart={openCreate} />)
 
-      : route.page === 'how' ? <HowItWorks onStart={() => identity ? navigate(`/p/${identity.pubkey}`) : openCreate()} />
+      : route.page === 'how' ? <HowItWorks view={route.view} onStart={() => identity ? navigate(`/p/${identity.pubkey}`) : openCreate()}
+        onView={(view) => { window.history.replaceState({}, '', view === 'cryptography' ? '/how-it-works?view=cryptography' : '/how-it-works'); setRoute(readRoute()); }} />
 
       : route.page === 'home' ? <main className="page home">
         <section className="hero-card tone-cream">
