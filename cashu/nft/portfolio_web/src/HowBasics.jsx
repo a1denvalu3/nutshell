@@ -128,16 +128,16 @@ const CARDS = [
   },
   {
     art: StolenFrame, title: 'Whoever has the file, has the NFT',
-    body: <>It’s a real bearer NFT, like a banknote. Put the file in a digital frame on your wall, and if someone walks off with it and adds it to their wallet first, it’s theirs now. No account to log into, no ledger to look up. Keep it safe like you’d keep cash safe. Changed your mind before anyone claims it? Cancel, and every copy you handed out stops working.</>,
+    body: <>It’s a real bearer NFT, like a banknote. Put the file in a digital frame on your wall, and if someone walks off with it and adds it to their wallet first, it’s theirs now. Keep it safe like cash. Until someone claims it, you can cancel, and every copy you handed out stops working.</>,
   },
   {
     art: BlindMint, title: 'Private by default',
     crypto: true,
-    body: <>When you send an NFT, the mint doesn’t learn which picture moved, or who gave it to whom. All it does is stop the same NFT being spent twice: it checks a one-time code and marks it as used. Everything else stays between you and the person you sent it to. Showing an NFT on your public collection is your choice.</>,
+    body: <>When you send an NFT, the mint doesn’t learn which picture moved, or who gave it to whom. All it does is stop the same NFT being spent twice: it checks a one-time code and marks it as used. Showing an NFT on your public collection is your choice.</>,
   },
   {
     art: SendAnyWay, title: 'Send it any way you like',
-    body: <>Mint any JPG you like, then save it to your computer. To give it to a friend, hand it over on a USB stick, attach it to an email, or share a link. When your friend adds the JPG to their wallet, it becomes theirs and stops being yours: the mint retires your copy for good. Tip: send the file itself, since screenshots and chat apps strip out the token.</>,
+    body: <>Mint any JPG and save it to your computer. To give it to a friend, hand it over on a USB stick, attach it to an email, or share a link. When your friend adds the JPG to their wallet, it becomes theirs and stops being yours: the mint retires your copy for good. Tip: send the file itself, since screenshots and chat apps strip out the token.</>,
   },
 ];
 
