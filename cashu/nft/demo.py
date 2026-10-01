@@ -3,9 +3,14 @@
     poetry run python -m cashu.nft.demo
 
 Serves a single-page demo (cashu/nft/demo.html) plus a small JSON API that
-drives two local wallets (alice/bob) against a selectable mint: an embedded
-local mint (free, no quotes) or any external PS-NFT service URL. The raw NFT
-API of the embedded mint is also mounted at /v1/nft.
+drives one local wallet against a selectable mint: an embedded local mint
+(free, no quotes) or any external PS-NFT service URL. The raw NFT API of
+the embedded mint is also mounted at /v1/nft.
+
+The demo is image-native: tokens travel embedded in the images themselves
+(JPEG/PNG metadata, see cashu/nft/imgmeta.py) or as small .psnft.txt /
+.pshow.txt attachments for non-image assets. Sending, showing and
+receiving are file downloads and uploads, never copy-pasted strings.
 
 Environment:
     NFT_DEMO_PORT  listen port (default 8400)
@@ -16,6 +21,7 @@ Environment:
 import asyncio
 import json
 import os
+import shutil
 import threading
 import uuid
 from contextlib import contextmanager
@@ -39,13 +45,14 @@ from .ledger import PSLedger
 from .wallet import SHOW_TOKEN_PREFIX, TOKEN_PREFIX, NFTClient, NFTWallet
 
 LOCAL_MINT_ID = "local"
-WALLETS = ["alice", "bob"]
 DEMO_HTML = os.path.join(os.path.dirname(__file__), "demo.html")
+_JPEG_MAGIC = b"\xff\xd8"
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
 def _sniff_image(data: bytes) -> Optional[str]:
     """Magic-byte image detection. Anything else must not be served."""
-    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+    if data.startswith(_PNG_MAGIC):
         return "image/png"
     if data.startswith(b"\xff\xd8\xff"):
         return "image/jpeg"
@@ -59,7 +66,7 @@ def _sniff_image(data: bytes) -> Optional[str]:
 
 
 class Demo:
-    """Holds the demo state: embedded mint, wallet files, external mints."""
+    """Holds the demo state: embedded mint, wallet file, external mints."""
 
     def __init__(self, data_dir: str):
         os.makedirs(data_dir, exist_ok=True)
@@ -68,12 +75,16 @@ class Demo:
         os.makedirs(self.content_dir, exist_ok=True)
         self.lock = threading.Lock()
 
-        self.seeds = self._load_or_create_seeds()
-        for name in WALLETS:
-            path = self._wallet_path(name)
-            if not os.path.exists(path):
-                wallet = NFTWallet(path, seed=bytes.fromhex(self.seeds[name]))
-                wallet.db.close()
+        self.seed = self._load_or_create_seed()
+        wallet_path = self._wallet_path()
+        # migration from the two-wallet demo: alice's wallet becomes THE
+        # wallet (same seed, same derived secrets, same assets)
+        legacy = os.path.join(data_dir, "alice.sqlite3")
+        if not os.path.exists(wallet_path) and os.path.exists(legacy):
+            shutil.copyfile(legacy, wallet_path)
+        if not os.path.exists(wallet_path):
+            wallet = NFTWallet(wallet_path, seed=bytes.fromhex(self.seed))
+            wallet.db.close()
 
         seed = os.environ.get("NFT_DEMO_SEED", "demo local mint seed")
         self.ledger = PSLedger(
@@ -90,15 +101,21 @@ class Demo:
 
     # --- persistence --------------------------------------------------
 
-    def _load_or_create_seeds(self) -> Dict[str, str]:
+    def _load_or_create_seed(self) -> str:
         path = os.path.join(self.data_dir, "seeds.json")
         if os.path.exists(path):
             with open(path) as f:
-                return dict(json.load(f))
-        seeds = {name: os.urandom(32).hex() for name in WALLETS}
+                seeds = dict(json.load(f))
+            seed = seeds.get("wallet") or seeds.get("alice")
+            if seed:
+                if "wallet" not in seeds:
+                    with open(path, "w") as f:
+                        json.dump({"wallet": seed}, f, indent=2)
+                return seed
+        seed = os.urandom(32).hex()
         with open(path, "w") as f:
-            json.dump(seeds, f, indent=2)
-        return seeds
+            json.dump({"wallet": seed}, f, indent=2)
+        return seed
 
     def _load_mints(self) -> List[Dict[str, str]]:
         path = os.path.join(self.data_dir, "mints.json")
@@ -111,19 +128,17 @@ class Demo:
         with open(os.path.join(self.data_dir, "mints.json"), "w") as f:
             json.dump(self.mints, f, indent=2)
 
-    def _wallet_path(self, name: str) -> str:
-        return os.path.join(self.data_dir, f"{name}.sqlite3")
+    def _wallet_path(self) -> str:
+        return os.path.join(self.data_dir, "wallet.sqlite3")
 
     # --- helpers ------------------------------------------------------
 
     @contextmanager
-    def open_wallet(self, name: str) -> Iterator[NFTWallet]:
-        """Open a wallet for one operation. sqlite3 connections are bound
-        to the creating thread, so wallets are opened (and closed) inside
-        the worker thread that uses them."""
-        if name not in self.seeds:
-            raise HTTPException(400, f"unknown wallet: {name}")
-        wallet = NFTWallet(self._wallet_path(name))
+    def open_wallet(self) -> Iterator[NFTWallet]:
+        """Open the wallet for one operation. sqlite3 connections are bound
+        to the creating thread, so the wallet is opened (and closed) inside
+        the worker thread that uses it."""
+        wallet = NFTWallet(self._wallet_path())
         try:
             yield wallet
         finally:
@@ -152,16 +167,23 @@ class Demo:
             raise HTTPException(400, "h must be a 64-hex-char scalar")
         return h
 
+    @staticmethod
+    def _receive_error(e: RuntimeError) -> HTTPException:
+        """NFTClient surfaces mint rejections as 'mint error NNN: ...'."""
+        msg = str(e)
+        if msg.startswith("mint error 409"):
+            return HTTPException(409, "this token was already swapped")
+        if msg.startswith("mint error "):
+            return HTTPException(400, msg)
+        return HTTPException(400, msg)
+
     # --- operations (blocking; run via run_in_threadpool) --------------
 
     def state(self) -> Dict[str, Any]:
         mints = [
             {"id": LOCAL_MINT_ID, "name": "local (embedded)", "url": ""}
         ] + list(self.mints)
-        return {
-            "mints": [{**m, **self._mint_info(m["id"])} for m in mints],
-            "wallets": list(WALLETS),
-        }
+        return {"mints": [{**m, **self._mint_info(m["id"])} for m in mints]}
 
     def _mint_info(self, mint_id: str) -> Dict[str, Any]:
         try:
@@ -201,9 +223,9 @@ class Demo:
         self._save_mints()
         return {"status": "removed"}
 
-    def assets(self, wallet: str, mint_id: str) -> List[Dict[str, Any]]:
+    def assets(self, mint_id: str) -> List[Dict[str, Any]]:
         client = self.client(mint_id)
-        with self.lock, self.open_wallet(wallet) as w:
+        with self.lock, self.open_wallet() as w:
             assets = w.assets()
         result = []
         for a in assets:
@@ -224,7 +246,6 @@ class Demo:
 
     def mint(
         self,
-        wallet: str,
         mint_id: str,
         description: str,
         asset: bytes,
@@ -233,11 +254,11 @@ class Demo:
         client = self.client(mint_id)
         if client.payment_required and not quote:
             raise HTTPException(400, "this mint requires a paid quote")
-        with self.lock, self.open_wallet(wallet) as w:
+        with self.lock, self.open_wallet() as w:
             cred = client.mint(w, asset, quote=quote, description=description)
         hex_h = cred.h.to_bytes(32, "big").hex()
-        # content-addressed store: the asset bytes stay available to both
-        # demo wallets (tokens carry no bytes) and to the thumbnail endpoint
+        # content-addressed store: the asset bytes back the thumbnail and
+        # the token-embedding downloads (tokens themselves carry no bytes)
         with open(os.path.join(self.content_dir, hex_h), "wb") as f:
             f.write(asset)
         return {"h": hex_h, "description": description}
@@ -265,11 +286,13 @@ class Demo:
             raise HTTPException(404, "stored content is not an image")
         return data, media_type
 
-    def embed(
-        self, wallet: str, mint_id: str, h: int, kind: str
-    ) -> Tuple[bytes, str, str]:
-        """The stored image with an NFT token embedded in its metadata.
-        Returns (bytes, media_type, download filename)."""
+    def embed(self, mint_id: str, h: int, kind: str) -> Tuple[bytes, str, str]:
+        """The asset as a download with a token attached: embedded into the
+        image metadata for JPEG/PNG, or as a plain text token file for
+        everything else. Returns (bytes, media_type, download filename).
+
+        Bearer exports do NOT remove the asset from the wallet: the sender
+        keeps full control until someone swaps the token."""
         if kind not in ("showing", "bearer"):
             raise HTTPException(400, "kind must be 'showing' or 'bearer'")
         client = self.client(mint_id)
@@ -278,7 +301,7 @@ class Demo:
             raise HTTPException(404, "no content stored for this asset")
         with open(path, "rb") as f:
             data = f.read()
-        with self.lock, self.open_wallet(wallet) as w:
+        with self.lock, self.open_wallet() as w:
             if kind == "showing":
                 token = client.show(w, h)
             else:
@@ -286,11 +309,15 @@ class Demo:
             description = next((a.description for a in w.assets() if a.h == h), "")
         try:
             embedded = embed_token(data, token)
-        except ValueError as e:
-            raise HTTPException(400, str(e))
-        media_type = _sniff_image(embedded[:4096])
-        if media_type not in ("image/jpeg", "image/png"):
-            raise HTTPException(400, "stored content is not a JPEG or PNG image")
+        except ValueError:
+            # not a JPEG/PNG: ship the token as a text attachment
+            media_type = "text/plain"
+            return (
+                token.encode(),
+                media_type,
+                self._download_name(description, media_type, kind),
+            )
+        media_type = _sniff_image(embedded[:4096]) or "application/octet-stream"
         return embedded, media_type, self._download_name(description, media_type, kind)
 
     @staticmethod
@@ -300,19 +327,52 @@ class Demo:
         )[:40].strip("-")
         if not base:
             base = "asset"
-        ext = ".jpg" if media_type == "image/jpeg" else ".png"
         suffix = "proof" if kind == "showing" else "bearer"
+        if media_type == "image/png":
+            return f"{base}-{suffix}.png"
+        if media_type == "image/jpeg":
+            return f"{base}-{suffix}.jpg"
+        ext = ".pshow.txt" if kind == "showing" else ".psnft.txt"
         return f"{base}-{suffix}{ext}"
 
-    def extract(self, mint_id: str, data: bytes) -> Dict[str, Any]:
-        """Pull an embedded token out of an uploaded image and report what
-        it proves: a showing gets the full inspection, a bearer token gets
-        the asset hash and its spent state."""
-        client = self.client(mint_id)
-        try:
+    @staticmethod
+    def token_from_upload(data: bytes) -> str:
+        """A bearer token from an uploaded file: embedded in JPEG/PNG
+        metadata, or the raw file content for .psnft.txt attachments."""
+        if data.startswith((_JPEG_MAGIC, _PNG_MAGIC)):
             token = extract_token(data)
-        except ValueError as e:
-            raise HTTPException(400, str(e))
+            if token is None:
+                raise HTTPException(400, "no token embedded in this image")
+        else:
+            try:
+                token = data.decode("ascii").strip()
+            except UnicodeDecodeError:
+                raise HTTPException(400, "upload a JPEG/PNG image or a token file")
+        if token.startswith(SHOW_TOKEN_PREFIX):
+            raise HTTPException(
+                400, "this is a verify-only showing, not a spendable token"
+            )
+        if not token.startswith(TOKEN_PREFIX):
+            raise HTTPException(400, "no token found in this file")
+        return token
+
+    def extract(self, mint_id: str, data: bytes) -> Dict[str, Any]:
+        """Pull a token out of an uploaded file (embedded image metadata or
+        a raw .pshow.txt/.psnft.txt) and report what it proves: a showing
+        gets the full inspection, a bearer token gets the asset hash and
+        its spent state."""
+        client = self.client(mint_id)
+        if data.startswith((_JPEG_MAGIC, _PNG_MAGIC)):
+            token = extract_token(data)
+        else:
+            try:
+                token = data.decode("ascii").strip()
+            except UnicodeDecodeError:
+                raise HTTPException(400, "upload a JPEG/PNG image or a token file")
+            if any(b < 32 and b not in (9, 10, 13) for b in data):
+                raise HTTPException(400, "upload a JPEG/PNG image or a token file")
+            if not token.startswith((SHOW_TOKEN_PREFIX, TOKEN_PREFIX)):
+                return {"found": False}
         if token is None:
             return {"found": False}
         if token.startswith(SHOW_TOKEN_PREFIX):
@@ -321,20 +381,18 @@ class Demo:
             except ValueError:
                 return {"found": False}
             return {"found": True, "kind": "showing", "result": result}
-        if token.startswith(TOKEN_PREFIX):
-            try:
-                cred = NFTClient.decode_token(token)
-            except ValueError:
-                return {"found": False}
-            pres = present(cred)
-            spent = client.check_state(pres.nullifier.format()) == "SPENT"
-            return {
-                "found": True,
-                "kind": "bearer",
-                "asset_hash": cred.h.to_bytes(32, "big").hex(),
-                "spent": spent,
-            }
-        return {"found": False}
+        try:
+            cred = NFTClient.decode_token(token)
+        except ValueError:
+            return {"found": False}
+        pres = present(cred)
+        spent = client.check_state(pres.nullifier.format()) == "SPENT"
+        return {
+            "found": True,
+            "kind": "bearer",
+            "asset_hash": cred.h.to_bytes(32, "big").hex(),
+            "spent": spent,
+        }
 
     def quote(self, mint_id: str, asset: bytes) -> Dict[str, Any]:
         client = self.client(mint_id)
@@ -345,25 +403,33 @@ class Demo:
     def quote_state(self, mint_id: str, quote_id: str) -> Dict[str, Any]:
         return self.client(mint_id).get_quote(quote_id)  # type: ignore[no-any-return]
 
-    def send(self, wallet: str, mint_id: str, h: int) -> Dict[str, str]:
-        client = self.client(mint_id)
-        with self.lock, self.open_wallet(wallet) as w:
-            token = client.send_token(w, h)
-        return {"token": token}
-
     def receive(
-        self, wallet: str, mint_id: str, token: str, description: str, public: bool
+        self,
+        mint_id: str,
+        token: str,
+        description: str,
+        public: bool,
+        content: Optional[bytes] = None,
     ) -> Dict[str, str]:
+        """Swap a bearer token at the mint (hidden-h by default) and, when
+        the token arrived inside an image, keep those bytes so the received
+        NFT shows its thumbnail."""
         client = self.client(mint_id)
-        with self.lock, self.open_wallet(wallet) as w:
-            cred = client.receive(w, token, description=description, private=not public)
+        with self.lock, self.open_wallet() as w:
+            try:
+                cred = client.receive(
+                    w, token, description=description, private=not public
+                )
+            except ValueError as e:
+                raise HTTPException(400, str(e))
+            except RuntimeError as e:
+                raise self._receive_error(e)
+        if content is not None and _sniff_image(content[:4096]):
+            with open(
+                os.path.join(self.content_dir, f"{cred.h:064x}"), "wb"
+            ) as f:
+                f.write(content)
         return {"h": cred.h.to_bytes(32, "big").hex()}
-
-    def show(self, wallet: str, mint_id: str, h: int, context: str) -> Dict[str, str]:
-        client = self.client(mint_id)
-        with self.lock, self.open_wallet(wallet) as w:
-            token = client.show(w, h, context.encode() if context else b"")
-        return {"token": token}
 
     def inspect(self, mint_id: str, token: str) -> Dict[str, Any]:
         client = self.client(mint_id)
@@ -372,9 +438,9 @@ class Demo:
         except ValueError as e:
             raise HTTPException(400, str(e))
 
-    def verify(self, wallet: str, mint_id: str, h: int) -> Dict[str, Any]:
+    def verify(self, mint_id: str, h: int) -> Dict[str, Any]:
         client = self.client(mint_id)
-        with self.lock, self.open_wallet(wallet) as w:
+        with self.lock, self.open_wallet() as w:
             pres = w.present(h)
         return {
             "valid": client.verify(pres),
@@ -382,9 +448,9 @@ class Demo:
             "asset_status": client.asset_status(h),
         }
 
-    def burn(self, wallet: str, mint_id: str, h: int) -> Dict[str, str]:
+    def burn(self, mint_id: str, h: int) -> Dict[str, str]:
         client = self.client(mint_id)
-        with self.lock, self.open_wallet(wallet) as w:
+        with self.lock, self.open_wallet() as w:
             client.burn(w, h)
         return {"status": "burned"}
 
@@ -439,8 +505,8 @@ def create_demo_app(data_dir: str) -> FastAPI:
         return await run_in_threadpool(demo.remove_mint, mint_id)
 
     @app.get("/api/assets")
-    async def get_assets(wallet: str, mint: str):
-        return await run_in_threadpool(demo.assets, wallet, mint)
+    async def get_assets(mint: str):
+        return await run_in_threadpool(demo.assets, mint)
 
     @app.get("/api/content/{h}")
     async def get_content(h: str):
@@ -457,7 +523,6 @@ def create_demo_app(data_dir: str) -> FastAPI:
         body = await request.json()
         embedded, media_type, filename = await run_in_threadpool(
             demo.embed,
-            str(body.get("wallet", "")),
             str(body.get("mint", "")),
             Demo.parse_h(str(body.get("h", ""))),
             str(body.get("kind", "")),
@@ -477,7 +542,7 @@ def create_demo_app(data_dir: str) -> FastAPI:
         form = await request.form()
         file = form.get("file")
         if not isinstance(file, UploadFile) or not file.filename:
-            raise HTTPException(400, "upload an image file")
+            raise HTTPException(400, "upload an image or token file")
         data = await file.read()
         mint = form.get("mint")
         mint_id = mint if isinstance(mint, str) and mint else LOCAL_MINT_ID
@@ -488,7 +553,6 @@ def create_demo_app(data_dir: str) -> FastAPI:
         fields, asset = await _asset_payload(request)
         return await run_in_threadpool(
             demo.mint,
-            str(fields.get("wallet", "")),
             str(fields.get("mint", "")),
             str(fields.get("description", "")),
             asset,
@@ -504,37 +568,32 @@ def create_demo_app(data_dir: str) -> FastAPI:
     async def get_quote(mint_id: str, quote_id: str):
         return await run_in_threadpool(demo.quote_state, mint_id, quote_id)
 
-    @app.post("/api/send")
-    async def post_send(request: Request):
-        body = await request.json()
-        return await run_in_threadpool(
-            demo.send,
-            str(body.get("wallet", "")),
-            str(body.get("mint", "")),
-            Demo.parse_h(str(body.get("h", ""))),
-        )
-
     @app.post("/api/receive")
     async def post_receive(request: Request):
+        """Multipart: an image with an embedded token (or a .psnft.txt);
+        JSON: {"token": "psnft1...", ...} for the paste fallback."""
+        content_type = request.headers.get("content-type", "")
+        if content_type.startswith("multipart/form-data"):
+            form = await request.form()
+            file = form.get("file")
+            if not isinstance(file, UploadFile) or not file.filename:
+                raise HTTPException(400, "upload an image or token file")
+            data = await file.read()
+            token = Demo.token_from_upload(data)
+            description = str(form.get("description") or "") or file.filename
+            public = str(form.get("public") or "").lower() in ("true", "1", "on")
+            mint = form.get("mint")
+            mint_id = mint if isinstance(mint, str) and mint else LOCAL_MINT_ID
+            return await run_in_threadpool(
+                demo.receive, mint_id, token, description, public, data
+            )
         body = await request.json()
         return await run_in_threadpool(
             demo.receive,
-            str(body.get("wallet", "")),
             str(body.get("mint", "")),
             str(body.get("token", "")),
             str(body.get("description", "")),
             bool(body.get("public", False)),
-        )
-
-    @app.post("/api/show")
-    async def post_show(request: Request):
-        body = await request.json()
-        return await run_in_threadpool(
-            demo.show,
-            str(body.get("wallet", "")),
-            str(body.get("mint", "")),
-            Demo.parse_h(str(body.get("h", ""))),
-            str(body.get("context", "")),
         )
 
     @app.post("/api/inspect")
@@ -549,7 +608,6 @@ def create_demo_app(data_dir: str) -> FastAPI:
         body = await request.json()
         return await run_in_threadpool(
             demo.verify,
-            str(body.get("wallet", "")),
             str(body.get("mint", "")),
             Demo.parse_h(str(body.get("h", ""))),
         )
@@ -559,7 +617,6 @@ def create_demo_app(data_dir: str) -> FastAPI:
         body = await request.json()
         return await run_in_threadpool(
             demo.burn,
-            str(body.get("wallet", "")),
             str(body.get("mint", "")),
             Demo.parse_h(str(body.get("h", ""))),
         )
