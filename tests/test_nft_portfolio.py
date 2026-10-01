@@ -928,3 +928,37 @@ def test_proofs_require_encrypted_backup_and_operation_owner(client):
         ).status_code
         == 400
     )
+
+
+# --- profile pictures ---------------------------------------------------------------
+
+
+def test_profile_picture_is_scaled_stripped_and_owner_only(client):
+    alice, bob = Profile(client), Profile(client)
+    alice.create()
+    bob.create()
+    big = io.BytesIO()
+    Image.new("RGB", (2000, 1200), (200, 40, 40)).save(big, "PNG", pnginfo=None)
+    resp = alice.post(f"{alice.base}/avatar", big.getvalue())
+    assert resp.status_code == 200, resp.text
+    version = resp.json()["avatar"]
+    assert version
+    stored = client.get(f"/api/avatars/{alice.pubkey}.jpg")
+    assert stored.status_code == 200 and stored.headers["content-type"] == "image/jpeg"
+    with Image.open(io.BytesIO(stored.content)) as image:
+        assert image.size == (256, 256) and image.format == "JPEG"
+        assert not image.getexif()
+    lookup = client.get(f"/api/avatars?pubkeys={alice.pubkey},{bob.pubkey}").json()
+    assert lookup == {alice.pubkey: version}
+    # Over 5 MB is refused before decoding; non-images are refused cleanly.
+    assert (
+        alice.post(f"{alice.base}/avatar", b"\0" * (5 * 1024 * 1024 + 1)).status_code
+        == 413
+    )
+    assert alice.post(f"{alice.base}/avatar", b"not an image").status_code == 400
+    # Only the owner can set or remove it.
+    assert (
+        client.post(f"{alice.base}/avatar", content=big.getvalue()).status_code >= 400
+    )
+    assert alice.post(f"{alice.base}/avatar/remove").json()["avatar"] is None
+    assert client.get(f"/api/avatars/{alice.pubkey}.jpg").status_code == 404

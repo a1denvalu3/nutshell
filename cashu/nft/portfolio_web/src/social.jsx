@@ -3,7 +3,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
 import { ArrowDownToLine, Heart, Image as ImageIcon, Search, Sparkles, Tag, UserPlus, UserCheck, Users } from 'lucide-react';
 import { getJSON, signedRequest } from './api.mjs';
-import { Button, Identicon, Modal, Spinner, Tilt, identiconColor, useTint } from './ui.jsx';
+import { Button, Identicon, Modal, SkeletonCards, SkeletonRows, Spinner, Tilt, identiconColor, setAvatarVersion, useTint } from './ui.jsx';
 
 export const imageUrl = (h) => `/api/images/${h}.jpg`;
 
@@ -145,7 +145,7 @@ export function ActivityList({ source, onProfile, onCard, empty, pageSize = 30 }
       setEvents([...events, ...list.filter((e) => !seen.has(e.id))]); setMore(list.length === pageSize);
     } catch (e) { toast.error(e.message); } finally { setLoading(false); }
   };
-  if (!events) return <div className="feed-loading"><Spinner /> Loading activity…</div>;
+  if (!events) return <SkeletonRows count={6} />;
   if (!events.length) return <div className="empty"><strong>{empty?.title || 'Quiet for now'}</strong><span className="muted">{empty?.text || 'Nothing has happened here yet.'}</span>{empty?.action}</div>;
   return <>
     <ul className="feed">{events.map((e, i) => <ActivityItem key={e.id} event={e} index={i} onProfile={onProfile} onCard={onCard} />)}</ul>
@@ -202,7 +202,7 @@ export function ExplorePage({ tab, navigate, relations, onLike, openCard }) {
       <label className="search"><Search size={17} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder={tab === 'nfts' ? 'Search NFTs by title' : 'Search collections'} aria-label="Search" /></label>
       <div className="sorts">{sorts.map(([key, label]) => <button key={key} className={`sort ${sort === key ? 'is-active' : ''}`} onClick={() => setSort(key)}>{label}</button>)}</div>
     </div>
-    {!items ? <div className="grid">{Array.from({ length: 8 }, (_, i) => <div key={i} className="nft-card skeleton" />)}</div>
+    {!items ? <SkeletonCards count={tab === 'nfts' ? 8 : 6} variant={tab === 'nfts' ? 'nft' : 'collection'} />
       : !items.length ? <div className="empty"><strong>Nothing found</strong><span className="muted">{q ? 'Try a different search.' : 'Be the first to mint something.'}</span></div>
         : <div className={`grid ${tab === 'collections' ? 'grid-collections' : ''}`}>
           {tab === 'nfts'
@@ -236,27 +236,75 @@ export function NetworkDialog({ pubkey, open, initial, close, navigate }) {
   return <Modal open={open} close={close} title="Network">
     <div className="stack">
       <Segmented id="network" value={tab} onChange={setTab} options={[['followers', `Followers${data ? ' ' + data.followers.length : ''}`], ['following', `Following${data ? ' ' + data.following.length : ''}`]]} />
-      {!data ? <div className="feed-loading"><Spinner /> Loading…</div>
+      {!data ? <SkeletonRows count={4} className="sk-compact" />
         : !list.length ? <p className="muted">{tab === 'followers' ? 'No followers yet.' : 'Not following anyone yet.'}</p>
           : <ul className="people">{list.map((p) => <li key={p.pubkey}><button onClick={() => { close(); navigate(`/p/${p.pubkey}`); }}><Identicon pubkey={p.pubkey} size={34} /><strong className="ellipsis">{p.name}</strong><Users size={14} /></button></li>)}</ul>}
     </div>
   </Modal>;
 }
 
+const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
+
+/** Downscale in the browser (512 px JPG) so uploads stay small; the server
+ *  re-encodes to its final 256 px square. */
+async function shrinkPicture(file) {
+  if (file.size > MAX_AVATAR_BYTES) throw new Error('Pick a picture up to 5 MB.');
+  const bitmap = await createImageBitmap(file, { imageOrientation: 'from-image' }).catch(() => { throw new Error('This picture can’t be read. Try a JPG or PNG.'); });
+  const scale = Math.min(1, 512 / Math.min(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(bitmap.width * scale); canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext('2d').drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  bitmap.close?.();
+  const blob = await new Promise((resolve) => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+  return new Uint8Array(await blob.arrayBuffer());
+}
+
 export function EditCollectionDialog({ open, close, profile, identity, onSaved }) {
   const [name, setName] = useState(''), [cover, setCover] = useState(''), [saving, setSaving] = useState(false);
+  const [picture, setPicture] = useState(null), [removePicture, setRemovePicture] = useState(false), [pictureError, setPictureError] = useState('');
+  const fileRef = useRef(null);
   const active = profile?.cards.filter((c) => c.status !== 'sent') || [];
-  useEffect(() => { if (open && profile) { setName(profile.name); setCover(profile.custom_cover ? profile.cover : ''); } }, [open, profile]);
+  useEffect(() => {
+    if (open && profile) { setName(profile.name); setCover(profile.custom_cover ? profile.cover : ''); setPicture(null); setRemovePicture(false); setPictureError(''); }
+  }, [open, profile]);
+  useEffect(() => () => { if (picture) URL.revokeObjectURL(picture.preview); }, [picture]);
+  const choose = async (file) => {
+    if (!file) return;
+    setPictureError('');
+    try { const bytes = await shrinkPicture(file); setPicture({ bytes, preview: URL.createObjectURL(new Blob([bytes], { type: 'image/jpeg' })) }); setRemovePicture(false); }
+    catch (e) { setPictureError(e.message); }
+  };
+  const hasPicture = picture || (profile?.avatar && !removePicture);
   const save = async (event) => {
     event.preventDefault();
     setSaving(true);
     try {
-      const updated = await socialPost(identity, '/settings', { name: name.trim(), cover });
-      onSaved(updated); toast.success('Collection updated.'); close();
+      let updated;
+      const base = `/api/profiles/${identity.pubkey}`;
+      if (picture) updated = await (await signedRequest(identity.secret, `${base}/avatar`, picture.bytes, 'image/jpeg')).json();
+      else if (removePicture && profile?.avatar) updated = await (await signedRequest(identity.secret, `${base}/avatar/remove`)).json();
+      updated = await socialPost(identity, '/settings', { name: name.trim(), cover });
+      setAvatarVersion(identity.pubkey, updated.avatar);
+      onSaved(updated); toast.success('Profile updated.'); close();
     } catch (e) { toast.error(e.message); } finally { setSaving(false); }
   };
-  return <Modal open={open} close={() => { if (!saving) close(); }} title="Edit collection" description="Rename it and pick the picture people see first.">
+  return <Modal open={open} close={() => { if (!saving) close(); }} title="Edit profile" description="Your name, picture and cover.">
     <form className="stack" onSubmit={save}>
+      <div className="field"><span>Picture</span>
+        <div className="avatar-edit">
+          <span className="avatar-preview">
+            {picture ? <img src={picture.preview} alt="" /> : hasPicture ? <img src={`/api/avatars/${identity.pubkey}.jpg?v=${profile.avatar}`} alt="" />
+              : <Identicon pubkey={identity.pubkey} size={72} />}
+          </span>
+          <div className="avatar-actions">
+            <input ref={fileRef} type="file" accept="image/*" hidden onChange={(e) => { choose(e.target.files?.[0]); e.target.value = ''; }} />
+            <Button type="button" variant="secondary" size="sm" onClick={() => fileRef.current?.click()} disabled={saving}>{hasPicture ? 'Change picture' : 'Upload picture'}</Button>
+            {hasPicture && <Button type="button" variant="ghost" size="sm" onClick={() => { setPicture(null); setRemovePicture(true); }} disabled={saving}>Remove</Button>}
+            <span className="hint">JPG, PNG or WebP, up to 5 MB.</span>
+          </div>
+        </div>
+        {pictureError && <span className="field-error">{pictureError}</span>}
+      </div>
       <label className="field"><span>Name</span><input maxLength={40} value={name} onChange={(e) => setName(e.target.value)} required /></label>
       <div className="field"><span>Cover</span>
         <div className="cover-picker">

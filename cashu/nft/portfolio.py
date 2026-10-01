@@ -42,7 +42,7 @@ from .imgmeta import embed_token
 from .ledger import AlreadyMintedError, AlreadySpentError, NFTError, PSLedger
 from .market import Executor, Market, market_router
 from .market_net import MintNetPolicy
-from .portfolio_jpg import normalize_jpg, split_transfer_jpg, validate_jpg
+from .portfolio_jpg import avatar_jpg, normalize_jpg, split_transfer_jpg, validate_jpg
 from .portfolio_links import LinkRequest, Links
 from .portfolio_social import (
     CollectionSort,
@@ -62,6 +62,7 @@ from .wallet import SHOW_TOKEN_PREFIX, TOKEN_PREFIX, NFTClient
 AUTH_DOMAIN = "Cashu_NFT_Portfolio_Auth_v1"
 CLAIM_DOMAIN = "Cashu_NFT_Portfolio_Claim_v1\n"
 SHOW_DOMAIN = "Cashu_NFT_Portfolio_Show_v1"
+MAX_AVATAR_BYTES = 5 * 1024 * 1024  # upload limit; stored pictures are 256 px
 WEB_DIR = Path(__file__).parent / "portfolio_web" / "dist"
 CARD_LOCKS = [
     LockOptions(table="ps_assets"),
@@ -157,6 +158,8 @@ class Portfolio:
             for statement in (
                 """CREATE TABLE IF NOT EXISTS portfolio_profiles (
                     pubkey TEXT PRIMARY KEY, name TEXT NOT NULL, created INTEGER NOT NULL)""",
+                """CREATE TABLE IF NOT EXISTS portfolio_avatars (
+                    pubkey TEXT PRIMARY KEY, jpg BLOB NOT NULL, updated INTEGER NOT NULL)""",
                 """CREATE TABLE IF NOT EXISTS portfolio_images (
                     h TEXT PRIMARY KEY, jpg BLOB NOT NULL)""",
                 """CREATE TABLE IF NOT EXISTS portfolio_cards (
@@ -630,7 +633,14 @@ def create_portfolio_app(
     async def get_profile(pubkey: str):
         validate_pubkey(pubkey)
         profile = await portfolio.profile(pubkey)
-        return {**profile, **await social.summary(pubkey)}
+        avatar = await portfolio.db.fetchone(
+            "SELECT updated FROM portfolio_avatars WHERE pubkey=:p", {"p": pubkey}
+        )
+        return {
+            **profile,
+            **await social.summary(pubkey),
+            "avatar": avatar["updated"] if avatar else None,
+        }
 
     @app.post("/api/profiles/{pubkey}/settings")
     async def update_settings(pubkey: str, request: Request):
@@ -885,6 +895,59 @@ def create_portfolio_app(
         # Owner-only: which cards have an outstanding transfer JPG or link.
         await authorize(request, pubkey, await read_body(request, 0))
         return {"ids": await portfolio.pending_cards(pubkey)}
+
+    @app.post("/api/profiles/{pubkey}/avatar")
+    async def upload_avatar(pubkey: str, request: Request):
+        raw = await read_body(request, MAX_AVATAR_BYTES)
+        await authorize(request, pubkey, raw)
+        try:
+            jpg = await run_in_threadpool(avatar_jpg, raw)
+        except ValueError as error:
+            raise HTTPException(400, str(error))
+        await portfolio.db.execute(
+            """INSERT INTO portfolio_avatars(pubkey,jpg,updated) VALUES(:p,:j,:t)
+            ON CONFLICT(pubkey) DO UPDATE SET jpg=:j, updated=:t""",
+            {"p": pubkey, "j": jpg, "t": int(time.time())},
+        )
+        return await get_profile(pubkey)
+
+    @app.post("/api/profiles/{pubkey}/avatar/remove")
+    async def remove_avatar(pubkey: str, request: Request):
+        await authorize(request, pubkey, await read_body(request, 0))
+        await portfolio.db.execute(
+            "DELETE FROM portfolio_avatars WHERE pubkey=:p", {"p": pubkey}
+        )
+        return await get_profile(pubkey)
+
+    @app.get("/api/avatars")
+    async def avatar_versions(pubkeys: str = Query(default="", max_length=6600)):
+        """Batched lookup: which profiles have a picture, and its version."""
+        keys = [k for k in pubkeys.split(",") if k][:100]
+        for key in keys:
+            validate_pubkey(key)
+        if not keys:
+            return {}
+        clause = ",".join(f":k{i}" for i in range(len(keys)))
+        rows = await portfolio.db.fetchall(
+            f"SELECT pubkey, updated FROM portfolio_avatars WHERE pubkey IN ({clause})",
+            {f"k{i}": k for i, k in enumerate(keys)},
+        )
+        return {r["pubkey"]: r["updated"] for r in rows}
+
+    @app.get("/api/avatars/{pubkey}.jpg")
+    async def avatar(pubkey: str):
+        validate_pubkey(pubkey)
+        row = await portfolio.db.fetchone(
+            "SELECT jpg FROM portfolio_avatars WHERE pubkey=:p", {"p": pubkey}
+        )
+        if row is None:
+            raise HTTPException(404, "No profile picture.")
+        # URLs carry ?v=<updated>, so a new picture is a new URL.
+        return Response(
+            bytes(row["jpg"]),
+            media_type="image/jpeg",
+            headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        )
 
     @app.get("/api/images/{h}.jpg")
     async def image(h: str):

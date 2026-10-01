@@ -34,6 +34,40 @@ def validate_jpg(data: bytes) -> None:
         raise ValueError("This JPG is damaged or too large to decode safely.")
 
 
+AVATAR_SIZE = 256
+AVATAR_FORMATS = {"JPEG", "PNG", "WEBP", "GIF"}
+
+
+def avatar_jpg(data: bytes, size: int = AVATAR_SIZE) -> bytes:
+    """Re-encode an uploaded profile picture: decode it safely, apply the
+    orientation flag, crop the centre square, scale it to ``size`` and save a
+    fresh JPG. Nothing from the original file (metadata included) survives."""
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", Image.DecompressionBombWarning)
+            with Image.open(io.BytesIO(data)) as image:
+                if image.format not in AVATAR_FORMATS:
+                    raise ValueError("Use a JPG, PNG, WebP or GIF picture.")
+                if image.width * image.height > MAX_PIXELS:
+                    raise ValueError("Use a picture with at most 25 million pixels.")
+                image.seek(0)
+                oriented = ImageOps.exif_transpose(image)
+                rgba = oriented.convert("RGBA")
+                flat = Image.new("RGB", rgba.size, (255, 253, 247))
+                flat.paste(rgba, mask=rgba.getchannel("A"))
+                square = ImageOps.fit(flat, (size, size), Image.Resampling.LANCZOS)
+                out = io.BytesIO()
+                square.save(out, "JPEG", quality=86, optimize=True, progressive=True)
+                return out.getvalue()
+    except (
+        UnidentifiedImageError,
+        OSError,
+        Image.DecompressionBombError,
+        Image.DecompressionBombWarning,
+    ):
+        raise ValueError("This picture is damaged or too large to decode safely.")
+
+
 def split_transfer_jpg(data: bytes) -> Tuple[bytes, Optional[str]]:
     """Remove only our exact EXIF envelope; preserve every other byte.
 

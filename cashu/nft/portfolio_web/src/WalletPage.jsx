@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import QRCode from 'qrcode';
 import { ArrowDownToLine, ArrowLeft, ArrowUpFromLine, ClipboardPaste, Coins, ExternalLink, Plus, Wallet, Zap } from 'lucide-react';
 import { getJSON } from './api.mjs';
-import { Button, CopyChip, DrawnCheck, HoldButton, Modal, Notice, Spinner, panel } from './ui.jsx';
+import { Button, CopyChip, DrawnCheck, HoldButton, Modal, Notice, SkeletonRows, Spinner, panel } from './ui.jsx';
 import { Segmented, imageUrl } from './social.jsx';
 import { TestBadge, host, sats } from './market.jsx';
 
@@ -251,7 +251,10 @@ export function WalletPage({ market, navigate, then }) {
     if (then) { toast.success(`Received ${sats(amount)}.`); setReceive(null); backToGoal(); }
   };
 
-  if (market.state === 'opening' || market.state === 'closed') return <main className="page wallet-page"><div className="feed-loading"><Spinner /> Opening your wallet…</div></main>;
+  if (market.state === 'opening' || market.state === 'closed') return <main className="page wallet-page" aria-busy="true">
+    <div className="wallet-hero sk-wrap"><div className="wallet-total"><span className="sk sk-line w-20 thin" /><span className="sk sk-amount" /></div><div className="wallet-actions"><span className="sk sk-button" /><span className="sk sk-button" /></div></div>
+    <SkeletonRows count={2} className="sk-mints" />
+  </main>;
   if (!money) return <main className="page wallet-page"><Notice tone="bad">{market.error || 'Your wallet is unavailable.'}</Notice></main>;
   const readOnly = money.readOnly;
 

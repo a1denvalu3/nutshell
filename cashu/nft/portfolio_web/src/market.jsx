@@ -5,7 +5,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
 import { ChevronRight, Clock, Coins, Search, Store, Tag, Wallet, Zap } from 'lucide-react';
 import { getJSON } from './api.mjs';
-import { BackButton, Button, CheckRow, HoldButton, Identicon, Modal, Notice, Spinner, Tilt, panel, short, useTint } from './ui.jsx';
+import { BackButton, Button, CheckRow, HoldButton, SkeletonCards, SkeletonDetail, SkeletonRows, Identicon, Modal, Notice, Spinner, Tilt, panel, short, useTint } from './ui.jsx';
 import { Segmented, ago, imageUrl } from './social.jsx';
 
 const loadMoney = () => import('./money/wallet.ts');
@@ -157,7 +157,7 @@ export function MarketPage({ navigate }) {
       <div className="sorts">{[['new', 'Newest'], ['price_asc', 'Price: low to high'], ['price_desc', 'Price: high to low']].map(([k, l]) =>
         <button key={k} className={`sort ${sort === k ? 'is-active' : ''}`} onClick={() => setSort(k)}>{l}</button>)}</div>
     </div>
-    {!items ? <div className="grid">{Array.from({ length: 8 }, (_, i) => <div key={i} className="nft-card skeleton" />)}</div>
+    {!items ? <SkeletonCards count={8} />
       : !items.length ? <div className="empty"><strong>Nothing listed yet</strong><span className="muted">{q ? 'Try a different search.' : 'Open one of your NFTs and choose List for sale.'}</span></div>
         : <div className="grid">{items.map((item, i) => <ListingCard key={item.id} item={item} index={i} onOpen={(l) => navigate(`/market/${l.id}`)} />)}</div>}
     {more && <div className="load-more"><Button variant="secondary" onClick={() => load(items.length)}>Load more</Button></div>}
@@ -188,7 +188,7 @@ export function ListingPage({ id, navigate, identity, market, onStart, startOffe
     return () => { live = false; };
   }, [step, mint, amount, market.money, listing?.price]);
   if (error) return <main className="page"><Notice tone="bad">{error}</Notice></main>;
-  if (!listing) return <main className="page"><div className="feed-loading"><Spinner /> Loading listing…</div></main>;
+  if (!listing) return <main className="page listing"><SkeletonDetail /></main>;
   const mine = identity?.pubkey === listing.seller, open = listing.state === 'active';
   const balance = market.balances.find((b) => b.mint === mint);
   const deadline = Math.floor(Date.now() / 1000) + lifetime, acceptBy = deadline - (market.config?.accept_window || 3600);
@@ -282,7 +282,7 @@ function ListingOffers({ listing, market, navigate }) {
       <h3>Offers {offers?.length ? <span className="tab-count">{offers.length}</span> : null}</h3>
       {offers?.length ? <Button size="sm" variant="secondary" onClick={() => navigate('/offers?tab=received')}>All offers</Button> : null}
     </header>
-    {!offers ? <div className="feed-loading"><Spinner /> Loading offers…</div>
+    {!offers ? <SkeletonRows count={2} className="sk-compact" />
       : !offers.length ? <p className="muted">No offers yet. New offers appear here and in your inbox.</p>
         : <>
           {waiting > 0 && <p className="listing-offers-lead">{waiting === 1 ? '1 offer is waiting for your review.' : `${waiting} offers are waiting for your review.`}</p>}
@@ -386,14 +386,14 @@ export function OffersPage({ navigate, market, nftWallet, cards, initialTab, foc
   useEffect(() => { load().catch((e) => toast.error(e.message)); }, [load, market.version]);
   const { markRead, unread } = market;
   useEffect(() => { if (unread) markRead(); }, [markRead, unread]);
-  if (market.state === 'opening' || market.state === 'closed') return <main className="page"><div className="feed-loading"><Spinner /> Opening your wallet…</div></main>;
+  if (market.state === 'opening' || market.state === 'closed') return <main className="page offers"><header className="page-head"><div><span className="pill">Offers</span><h1>Offers</h1></div></header><SkeletonRows count={3} thumb /></main>;
   if (!market.money) return <main className="page"><Notice tone="bad">{market.error || 'Your wallet is unavailable.'}</Notice></main>;
   const shown = (offers || []).filter((o) => o.role === (tab === 'received' ? 'seller' : 'buyer'));
   return <main className="page offers">
     <header className="page-head"><div><span className="pill">Offers</span><h1>{!tab ? 'Offers' : tab === 'received' ? 'Offers on your NFTs' : 'Offers you made'}</h1></div>
       <Segmented id="offers" value={tab} onChange={setTab} options={[['received', 'Received'], ['made', 'Made']]} /></header>
     {market.state === 'elsewhere' && <Notice action={<Button size="sm" variant="secondary" onClick={market.takeOver}>Use it here</Button>}>Your wallet is open on another device.</Notice>}
-    {!offers || !tab ? <div className="feed-loading"><Spinner /> Loading offers…</div>
+    {!offers || !tab ? <SkeletonRows count={3} thumb />
       : !shown.length ? <div className="empty"><strong>{tab === 'received' ? 'No offers yet' : 'You haven’t made any offers'}</strong><span className="muted">{tab === 'received' ? 'List an NFT and offers show up here.' : 'Offers you make on listed NFTs show up here.'}</span>
         <Button variant="secondary" onClick={() => navigate('/market')}>Go to market</Button></div>
         : <ul className="offer-list">{shown.map((o, i) => <motion.li key={o.id} id={`offer-${o.id}`} className={`offer-row ${highlight === o.id ? 'is-focus' : ''}`} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(i, 10) * .03 }}>

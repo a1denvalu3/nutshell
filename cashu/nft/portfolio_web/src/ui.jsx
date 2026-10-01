@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useReducer, useRef, useState } from 'react';
 import { Dialog } from '@base-ui/react/dialog';
 import { AnimatePresence, animate, motion, useMotionValue, useReducedMotion, useSpring, useTransform } from 'motion/react';
 import { toast } from 'sonner';
@@ -61,7 +61,42 @@ export function useTint(key) {
   return [tint, onLoad];
 }
 
+/* Profile pictures: one batched lookup for every identicon on screen. A
+ * profile without a picture keeps its generated identicon. */
+const avatarVersions = new Map();
+const avatarListeners = new Set();
+let avatarQueue = new Set(), avatarTimer = null;
+async function flushAvatars() {
+  const keys = [...avatarQueue]; avatarQueue = new Set(); avatarTimer = null;
+  for (let i = 0; i < keys.length; i += 100) {
+    const chunk = keys.slice(i, i + 100);
+    try {
+      const found = await (await fetch(`/api/avatars?pubkeys=${chunk.join(',')}`)).json();
+      for (const k of chunk) avatarVersions.set(k, found[k] ?? null);
+    } catch { for (const k of chunk) avatarVersions.set(k, null); }
+  }
+  avatarListeners.forEach((fn) => fn());
+}
+export function setAvatarVersion(pubkey, version) {
+  avatarVersions.set(pubkey, version ?? null);
+  avatarListeners.forEach((fn) => fn());
+}
+function useAvatarVersion(pubkey) {
+  const [, rerender] = useReducer((n) => n + 1, 0);
+  useEffect(() => {
+    avatarListeners.add(rerender);
+    if (/^[0-9a-f]{64}$/.test(pubkey || '') && !avatarVersions.has(pubkey) && !avatarQueue.has(pubkey)) {
+      avatarQueue.add(pubkey);
+      if (!avatarTimer) avatarTimer = setTimeout(flushAvatars, 40);
+    }
+    return () => { avatarListeners.delete(rerender); };
+  }, [pubkey]);
+  return avatarVersions.get(pubkey) ?? null;
+}
+
 export function Identicon({ pubkey, size = 72 }) {
+  const version = useAvatarVersion(pubkey);
+  if (version) return <img className="identicon avatar-img" src={`/api/avatars/${pubkey}.jpg?v=${version}`} width={size} height={size} alt="" loading="lazy" decoding="async" />;
   const bytes = pubkey.match(/../g).map((b) => parseInt(b, 16));
   const color = identiconColor(pubkey);
   const cells = [];
@@ -210,6 +245,32 @@ export function Modal({ open, close, title, description, children, size = '' }) 
       </Dialog.Popup>
     </Dialog.Portal>
   </Dialog.Root>;
+}
+
+/* Loading placeholders shaped like the content they stand in for. They fade
+ * in after a short delay (fast loads never flash) and breathe gently. */
+const Bone = ({ className = '', style }) => <span className={`sk ${className}`} style={style} />;
+export function SkeletonCards({ count = 8, variant = 'nft', className = '' }) {
+  return <div className={`grid sk-wrap ${variant === 'collection' ? 'grid-collections' : ''} ${className}`} role="status" aria-label="Loading">
+    {Array.from({ length: count }, (_, i) => variant === 'collection'
+      ? <div key={i} className="sk-card sk-collection"><Bone className="sk-cover" /><div className="sk-row"><Bone className="sk-avatar" /><div className="sk-lines"><Bone className="sk-line w-60" /><Bone className="sk-line w-40 thin" /></div></div></div>
+      : <div key={i} className="sk-card sk-nft"><Bone className="sk-media" /><div className="sk-lines"><Bone className="sk-line w-70" /><Bone className="sk-line w-40 thin" /></div></div>)}
+  </div>;
+}
+export function SkeletonRows({ count = 5, thumb = false, avatar = true, className = '' }) {
+  return <div className={`sk-wrap sk-rows ${className}`} role="status" aria-label="Loading">
+    {Array.from({ length: count }, (_, i) => <div key={i} className="sk-list-row">
+      {thumb && <Bone className="sk-thumb" />}
+      {avatar && !thumb && <Bone className="sk-dot" />}
+      <div className="sk-lines"><Bone className="sk-line" style={{ width: `${62 - (i % 3) * 12}%` }} /><Bone className="sk-line w-30 thin" /></div>
+    </div>)}
+  </div>;
+}
+export function SkeletonDetail() {
+  return <div className="detail sk-wrap" role="status" aria-label="Loading">
+    <div className="sk-card sk-nft sk-detail-art"><Bone className="sk-media" /><div className="sk-lines"><Bone className="sk-line w-50" /><Bone className="sk-line w-30 thin" /></div></div>
+    <div className="sk-panel"><Bone className="sk-line w-20 thin" /><Bone className="sk-title" /><Bone className="sk-pill" /><Bone className="sk-line w-70" /><Bone className="sk-line w-60" /><Bone className="sk-button" /></div>
+  </div>;
 }
 
 /** Page and panel back navigation, one design everywhere. */

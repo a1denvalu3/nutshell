@@ -3,7 +3,7 @@ import { createRoot } from 'react-dom/client';
 import { Menu } from '@base-ui/react/menu';
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import { Toaster, toast } from 'sonner';
-import { ArrowLeft, ArrowRight, Check, Compass, Image as ImageIcon, Download, Ellipsis, Eye, EyeOff, FileJson, HandCoins, ImageDown, Info, KeyRound, Link2, Plus,
+import { ArrowLeft, ArrowRight, Check, Compass, Monitor, Moon, Sun, Image as ImageIcon, Download, Ellipsis, Eye, EyeOff, FileJson, HandCoins, ImageDown, Info, KeyRound, Link2, Plus,
   Pencil, Radio, RefreshCw, RotateCcw, Send, ShieldX, Upload, Undo2, Wallet } from 'lucide-react';
 import '@fontsource-variable/inter';
 import '@fontsource-variable/bricolage-grotesque';
@@ -12,7 +12,7 @@ import '@fontsource/jetbrains-mono/500.css';
 import './style.css';
 import { newPrivateKey, parseShowing, profileKey, validateKeyset } from './crypto.mjs';
 import { checked, download, getJSON, signedRequest } from './api.mjs';
-import { BackButton, Button, CheckRow, CopyChip, DrawnCheck, HoldButton, Identicon, Modal, Notice, PreviewArt, Spinner, StatusBadge,
+import { BackButton, Button, CheckRow, SkeletonCards, CopyChip, DrawnCheck, HoldButton, Identicon, Modal, Notice, PreviewArt, Spinner, StatusBadge,
   Tilt, copyText, date, identiconColor, panel, short, useTint, verdict } from './ui.jsx';
 import HowItWorks from './HowItWorks.jsx';
 import ClaimPage from './claim.jsx';
@@ -390,6 +390,30 @@ function AddDialog({ open, close, config, wallet, onAdded }) {
 
 /* ---------- App ---------- */
 
+/* System / light / dark. theme.js applies the choice before first paint. */
+const THEMES = [['system', 'System', Monitor], ['light', 'Light', Sun], ['dark', 'Dark', Moon]];
+function useTheme() {
+  const api = typeof window !== 'undefined' ? window.cashuTheme : null;
+  const [state, setState] = useState(() => ({ mode: api?.get() || 'system', dark: api?.isDark() || false }));
+  useEffect(() => {
+    const on = (e) => setState({ mode: e.detail.mode, dark: e.detail.dark });
+    window.addEventListener('cashu-theme', on);
+    return () => window.removeEventListener('cashu-theme', on);
+  }, []);
+  return [state, (mode) => api?.set(mode)];
+}
+function ThemeMenu({ theme, setTheme }) {
+  const Current = THEMES.find(([m]) => m === theme.mode)?.[2] || Monitor;
+  return <Menu.Root>
+    <Menu.Trigger className="theme-btn" aria-label={`Theme: ${theme.mode}`}><Current size={17} /></Menu.Trigger>
+    <Menu.Portal><Menu.Positioner className="menu-layer" sideOffset={6} align="end"><Menu.Popup className="menu menu-compact">
+      {THEMES.map(([mode, label, Icon]) => <Menu.Item key={mode} className="menu-item" onClick={() => setTheme(mode)}>
+        <Icon size={15} />{label}{theme.mode === mode && <Check size={15} className="menu-check" />}
+      </Menu.Item>)}
+    </Menu.Popup></Menu.Positioner></Menu.Portal>
+  </Menu.Root>;
+}
+
 function SignInFirst({ onStart }) {
   return <main className="page"><div className="empty"><strong>Start a collection first</strong><span className="muted">Your wallet and offers belong to your collection key.</span><Button variant="primary" onClick={onStart}>Get started</Button></div></main>;
 }
@@ -406,6 +430,7 @@ function App() {
   const [openInput, setOpenInput] = useState(''), [fresh, setFresh] = useState(null);
   const [localWallet, setLocalWallet] = useState(null), [walletState, setWalletState] = useState('opening'), [walletError, setWalletError] = useState('');
   const [relations, toggleRelation] = useRelations(identity);
+  const [theme, setTheme] = useTheme();
   const navRef = useRef(null);
   const market = useMarket(identity, localWallet, (path) => navRef.current?.(path));
   const [home, setHome] = useState(null);
@@ -609,6 +634,7 @@ function App() {
         <nav aria-label="Main">
           {(route.page !== 'profile' ? [['/market', 'Market', 'market'], ['/explore', 'Explore', 'explore'], ['/activity', 'Activity', 'activity'], ['/how-it-works', 'How it works', 'how']] : [['/market', 'Market', 'market']]).map(([href, label, page]) =>
             <a key={href} className={`nav-link ${route.page === page || (page === 'market' && route.page === 'listing') ? 'is-active' : ''} ${page === 'market' ? 'nav-market' : ''}`} href={href} onClick={(e) => { e.preventDefault(); navigate(href); }}>{label}</a>)}
+          <ThemeMenu theme={theme} setTheme={setTheme} />
           {identity
             ? <Menu.Root>
               <Menu.Trigger className="profile-pill"><Identicon pubkey={identity.pubkey} size={24} /><span>Profile</span>
@@ -676,6 +702,11 @@ function App() {
         </section>
 
         <Marquee items={ticker} />
+
+        {!home && <section className="home-section">
+          <div className="section-head"><h2>Popular collections</h2></div>
+          <SkeletonCards count={3} variant="collection" />
+        </section>}
 
         {home?.collections.length > 0 && <section className="home-section">
           <div className="section-head"><h2>Popular collections</h2><Button variant="secondary" size="sm" icon={<ArrowRight size={14} />} onClick={() => navigate('/explore')}>See all</Button></div>
@@ -756,7 +787,7 @@ function App() {
               {identity?.pubkey === pubkey && <Menu.Root>
                 <Menu.Trigger className="icon-btn icon-btn-bordered" aria-label="More actions"><Ellipsis size={17} /></Menu.Trigger>
                 <Menu.Portal><Menu.Positioner className="menu-layer" sideOffset={6} align="end"><Menu.Popup className="menu">
-                  <Menu.Item className="menu-item" onClick={() => setDialog('edit')} disabled={!profile}><Pencil size={15} />Edit name and cover</Menu.Item>
+                  <Menu.Item className="menu-item" onClick={() => setDialog('edit')} disabled={!profile}><Pencil size={15} />Edit profile</Menu.Item>
                   <Menu.Item className="menu-item" onClick={() => setVisitor((v) => !v)}>{visitor ? <EyeOff size={15} /> : <Eye size={15} />}{visitor ? 'Back to owner view' : 'View as visitor'}</Menu.Item>
                   <Menu.Item className="menu-item" onClick={() => setDialog('backup')}><KeyRound size={15} />Back up private key</Menu.Item>
                   <Menu.Item className="menu-item" onClick={recoverWallet} disabled={!!busy || !config}><RefreshCw size={15} />Sync wallet from backup</Menu.Item>
@@ -790,7 +821,7 @@ function App() {
 
         {tab === 'activity' ? <ActivityList source={`/api/activity?actor=${pubkey}`} onProfile={(pk) => navigate(`/p/${pk}`)} onCard={openCard}
           empty={{ title: 'No activity yet', text: 'Mints, receipts, likes and follows by this collector show up here.' }} />
-          : loading && !profile ? <div className="grid">{[0, 1, 2, 3].map((i) => <div key={i} className="nft-card skeleton" />)}</div>
+          : loading && !profile ? <SkeletonCards count={4} />
           : <motion.div className="grid" key={tab}>
             {shown.map((asset, i) => <NFTCard key={asset.id} index={i} card={asset} verification={verification[asset.id]} isNew={asset.id === fresh} onOpen={setSelected} />)}
             {tab === 'collection' && owner && <PendingPurchases market={market} />}
@@ -868,7 +899,7 @@ function App() {
         canSend={!!localWallet && !!card.signature && card.custody === 'browser'} onSend={sendCard} onCancel={cancelTransfer} isNew={card.id === fresh}
         market={owner ? market : null} nftWallet={localWallet} onChanged={() => reload()} navigate={navigate} />}
     </Modal>
-    <Toaster theme="system" position="bottom-center" toastOptions={{ className: 'toast' }} />
+    <Toaster theme={theme.dark ? 'dark' : 'light'} position="bottom-center" toastOptions={{ className: 'toast' }} />
   </MotionConfig>;
 }
 

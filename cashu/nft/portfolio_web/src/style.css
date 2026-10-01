@@ -25,8 +25,9 @@
   --pop: cubic-bezier(.34, 1.56, .64, 1);
   --ease: cubic-bezier(.2, .8, .2, 1);
 }
+/* Dark tokens: follow the OS unless the theme menu forces light or dark. */
 @media (prefers-color-scheme: dark) {
-  :root {
+  :root:not([data-theme="light"]) {
     color-scheme: dark;
     --bg: #121212;
     --paper: #1b1b1b;
@@ -36,6 +37,16 @@
     --muted: #a8a397;
     --tint-mix: 28%;
   }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #121212;
+  --paper: #1b1b1b;
+  --surface: #262626;
+  --ink: #f4f0e6;
+  --text: #f4f0e6;
+  --muted: #a8a397;
+  --tint-mix: 28%;
 }
 
 * { box-sizing: border-box; }
@@ -160,8 +171,6 @@ button.nft-card:hover .nft-media img, .is-preview:hover .nft-media svg { transfo
 .add-tile .muted { color: inherit; opacity: .7; }
 .add-icon { display: grid; place-items: center; width: 54px; height: 54px; margin-bottom: 6px; border-radius: 50%; border: 2px solid #111; background: var(--orange); color: #111; transition: transform .4s var(--pop); }
 .add-tile:hover .add-icon { transform: rotate(180deg) scale(1.1); }
-.skeleton { aspect-ratio: 1 / 1.3; background: var(--surface); animation: pulse 1.2s ease-in-out infinite; box-shadow: none; }
-@keyframes pulse { 50% { opacity: .5; } }
 .empty { grid-column: 1 / -1; display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 64px 16px; border: 2px dashed var(--ink); border-radius: var(--radius); text-align: center; }
 .empty strong { font-family: var(--display); font-size: 24px; }
 
@@ -729,8 +738,8 @@ button.stat { text-align: left; cursor: pointer; }
 .qr svg path:first-child { fill: #fff; }
 .invoice-actions { justify-content: center; }
 .wait-line { display: inline-flex; align-items: center; gap: 10px; font-weight: 700; }
-.pulse { width: 10px; height: 10px; border-radius: 50%; background: var(--orange); border: 1.5px solid #111; animation: pulse 1.4s ease-in-out infinite; }
-@keyframes pulse { 50% { transform: scale(.6); opacity: .5; } }
+.pulse { width: 10px; height: 10px; border-radius: 50%; background: var(--orange); border: 1.5px solid #111; animation: wait-pulse 1.4s ease-in-out infinite; }
+@keyframes wait-pulse { 50% { transform: scale(.6); opacity: .5; } }
 .wallet-done { display: flex; flex-direction: column; align-items: center; gap: 12px; text-align: center; }
 .wallet-done h3 { font-size: 26px; }
 .wallet-done .btn { margin-top: 8px; }
@@ -830,3 +839,53 @@ main.page > .back { margin-bottom: 20px; }
   .basics-card .basics-copy h2 { font-size: 26px; }
   .basics-card .basics-copy p { font-size: 16px; }
 }
+
+/* Profile pictures */
+.avatar-img { display: block; object-fit: cover; background: var(--surface); }
+.profile-avatar .avatar-img { border-radius: 20px; }
+.avatar-edit { display: flex; align-items: center; gap: 16px; }
+.avatar-preview { display: grid; place-items: center; flex: none; width: 76px; height: 76px; overflow: hidden; border-radius: 20px; border: 2px solid var(--ink); background: var(--surface); }
+.avatar-preview img, .avatar-preview svg { width: 100%; height: 100%; object-fit: cover; }
+.avatar-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.avatar-actions .hint { flex-basis: 100%; }
+
+/* Theme menu */
+.theme-btn { display: inline-grid; place-items: center; flex: none; width: 40px; height: 40px; margin-left: 6px; border-radius: 50%; border: 2px solid var(--ink); background: var(--paper); color: var(--text); box-shadow: 2px 2px 0 var(--ink); transition: transform .15s, box-shadow .15s; }
+.theme-btn:hover { transform: translate(-1px, -1px); box-shadow: 3px 3px 0 var(--ink); }
+.theme-btn:active, .theme-btn[data-popup-open] { transform: translate(2px, 2px); box-shadow: 0 0 0 var(--ink); }
+.theme-btn svg { transition: transform .35s var(--pop); }
+.theme-btn:hover svg { transform: rotate(-20deg); }
+.menu-compact { min-width: 170px; }
+.menu-check { margin-left: auto; }
+@media (max-width: 640px) { .theme-btn { width: 36px; height: 36px; margin-left: 2px; } }
+
+/* Loading placeholders */
+@keyframes sk-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes sk-breathe { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+.sk-wrap { animation: sk-in .25s ease .15s both; }
+.sk { display: block; border-radius: 8px; background: var(--surface); animation: sk-breathe 1.8s ease-in-out infinite; }
+.sk-card { display: flex; flex-direction: column; gap: 10px; padding: 10px; border: 2px solid color-mix(in srgb, var(--ink) 18%, transparent); border-radius: var(--radius); background: var(--paper); }
+.sk-media { aspect-ratio: 1; border-radius: 11px; }
+.sk-nft .sk-lines { height: 66px; justify-content: center; padding: 0 4px; }
+.sk-collection { padding: 0; overflow: hidden; border-radius: 22px; gap: 0; }
+.sk-cover { aspect-ratio: 16 / 10; border-radius: 0; }
+.sk-row { display: flex; align-items: center; gap: 12px; padding: 14px; }
+.sk-avatar { flex: none; width: 40px; height: 40px; border-radius: 12px; }
+.sk-lines { display: flex; flex-direction: column; gap: 8px; flex: 1; min-width: 0; }
+.sk-line { height: 12px; border-radius: 6px; }
+.sk-line.thin { height: 9px; }
+.w-20 { width: 20%; } .w-30 { width: 30%; } .w-40 { width: 40%; } .w-50 { width: 50%; } .w-60 { width: 60%; } .w-70 { width: 70%; }
+.sk-rows { display: flex; flex-direction: column; gap: 10px; }
+.sk-list-row { display: flex; align-items: center; gap: 14px; padding: 14px; border: 2px solid color-mix(in srgb, var(--ink) 18%, transparent); border-radius: 16px; background: var(--paper); }
+.sk-dot { flex: none; width: 34px; height: 34px; border-radius: 50%; }
+.sk-thumb { flex: none; width: 64px; height: 64px; border-radius: 12px; }
+.sk-compact .sk-list-row { padding: 10px 12px; }
+.sk-mints .sk-list-row { padding: 18px; }
+.sk-panel { display: flex; flex-direction: column; gap: 14px; padding-top: 8px; }
+.sk-title { height: 38px; width: 70%; border-radius: 10px; }
+.sk-pill { height: 46px; width: 150px; border-radius: 999px; }
+.sk-button { height: 52px; width: 100%; border-radius: 999px; margin-top: 8px; }
+.wallet-actions .sk-button { width: 150px; margin-top: 0; }
+.sk-amount { height: 72px; width: 220px; border-radius: 14px; }
+.sk-detail-art { max-width: 380px; width: 100%; justify-self: center; }
+@media (prefers-reduced-motion: reduce) { .sk, .sk-wrap { animation: none; } }
