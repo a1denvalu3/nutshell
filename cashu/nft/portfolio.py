@@ -687,11 +687,15 @@ def main() -> None:
             os.environ.get("NFT_PORTFOLIO_MAX_STORAGE_BYTES", str(1024**3))
         ),
     )
+    # Behind a reverse proxy, trust X-Forwarded-For only from the proxy's
+    # address so per-client rate limits see real client IPs.
+    trusted_proxy = os.environ.get("NFT_PORTFOLIO_TRUSTED_PROXY", "")
     uvicorn.run(
         app,
         host=os.environ.get("NFT_PORTFOLIO_HOST", "127.0.0.1"),
         port=int(os.environ.get("NFT_PORTFOLIO_PORT", "8401")),
-        proxy_headers=False,
+        proxy_headers=bool(trusted_proxy),
+        forwarded_allow_ips=trusted_proxy or None,
     )
 
 

@@ -29,6 +29,9 @@ function initialIdentity() {
     return secret && profileKey(secret) === active ? { secret, pubkey: active } : null;
   } catch { return null; }
 }
+// Polling returns a fresh object even when nothing changed; keep the old one so
+// cards don't re-render and proofs aren't re-verified every 15 seconds.
+const keepSame = (prev, next) => prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
 function routeKey() { return window.location.pathname.match(/^\/p\/([0-9a-f]{64})\/?$/)?.[1] || null; }
 
 function Modal({ open, close, title, description, children, wide = false }) {
@@ -177,7 +180,14 @@ function App() {
   const [generated, setGenerated] = useState(''), [inputKey, setInputKey] = useState(''), [name, setName] = useState(''), [backedUp, setBackedUp] = useState(false);
   const [openInput, setOpenInput] = useState(''), [file, setFile] = useState(null), [title, setTitle] = useState('');
   const [previewUrl, setPreviewUrl] = useState(''), [celebration, setCelebration] = useState(null);
-  const recovery = useRef(false), reloadRef = useRef(null);
+  const recovery = useRef(false), reloadRef = useRef(null), heroObserver = useRef(null);
+  // Pause the hero float animation while it is scrolled out of view.
+  const heroRef = useCallback((node) => {
+    heroObserver.current?.disconnect(); heroObserver.current = null;
+    if (!node || !('IntersectionObserver' in window)) return;
+    heroObserver.current = new IntersectionObserver(([entry]) => node.classList.toggle('offscreen', !entry.isIntersecting));
+    heroObserver.current.observe(node);
+  }, []);
   const owner = Boolean(identity && identity.pubkey === pubkey && !visitor);
   const verification = useVerification(profile, config, refresh);
   const card = profile?.cards.find((c) => c.id === selected);
@@ -203,7 +213,7 @@ function App() {
   const reload = useCallback(async (key = pubkey) => {
     if (!key) return;
     const data = await getJSON(`/api/profiles/${key}`);
-    if (routeKey() === key) { setProfile(data); setProfileError(''); }
+    if (routeKey() === key) { setProfile((prev) => keepSame(prev, data)); setProfileError(''); }
     return data;
   }, [pubkey]);
   reloadRef.current = reload;
@@ -316,7 +326,7 @@ function App() {
           <div className="hero-actions"><button className="button button-lime" onClick={openCreate} disabled={!config}><Plus size={18} /> Create portfolio <ArrowUpRight size={18} /></button><button className="button button-glass" onClick={() => setDialog('open')}><Eye size={18} /> Open profile</button></div>
           <div className="hero-footnote"><Fingerprint size={17} /><span>Your key. Your public collection. No wallet extension.</span></div>
         </div>
-        <div className="hero-showcase"><div className="orbit orbit-one" /><div className="orbit orbit-two" /><div className="floating-label label-one"><ShieldCheck size={17} /> Proof, with your flex</div>
+        <div className="hero-showcase" ref={heroRef}><div className="orbit orbit-one" /><div className="orbit orbit-two" /><div className="floating-label label-one"><ShieldCheck size={17} /> Proof, with your flex</div>
           <div className="hero-card-back"><CollectorCard preview variant={1} /></div><div className="hero-card-main"><CollectorCard preview /></div>
           <div className="floating-label label-two"><ImagePlus size={17} /> A JPG you can actually send</div><span className="showcase-star star-one">✦</span><span className="showcase-star star-two">✧</span>
         </div>

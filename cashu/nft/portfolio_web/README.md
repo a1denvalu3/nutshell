@@ -26,6 +26,7 @@ this directory; Vite proxies `/api` and `/v1` to the backend on port 8401.
 | `NFT_PORTFOLIO_MAX_JPG_BYTES` | 10 MB | Upload limit per JPG |
 | `NFT_PORTFOLIO_MAX_CARDS` | 100 | Active NFTs per profile |
 | `NFT_PORTFOLIO_MAX_STORAGE_BYTES` | 1 GB | Total image storage |
+| `NFT_PORTFOLIO_TRUSTED_PROXY` | unset | Reverse proxy address (e.g. `127.0.0.1`) whose `X-Forwarded-For` is trusted for rate limiting |
 | `VITE_MINT_KEYSET_ID` (build time) | unset | Pin the expected mint keyset in the bundle |
 
 Back up `NFT_PORTFOLIO_DIR`: the mint seed in it defines the mint's identity.
