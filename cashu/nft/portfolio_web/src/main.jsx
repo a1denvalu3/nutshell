@@ -12,8 +12,9 @@ import '@fontsource/manrope/400.css';
 import '@fontsource/manrope/600.css';
 import '@fontsource/manrope/700.css';
 import './style.css';
-import { newPrivateKey, profileKey, signClaim, validateKeyset } from './crypto.mjs';
+import { newPrivateKey, profileKey, validateKeyset } from './crypto.mjs';
 import { checked, download, getJSON, signedRequest } from './api.mjs';
+const openWallet = (...args) => import('./wallet/index.ts').then(module => module.openWallet(...args));
 
 const KEYRING = 'cashu-nft-keys-v1', ACTIVE = 'cashu-nft-active-v1', MINT_PIN = 'cashu-nft-mint-v1';
 const short = (s) => s ? `${s.slice(0, 8)}…${s.slice(-6)}` : '';
@@ -180,6 +181,8 @@ function App() {
   const [generated, setGenerated] = useState(''), [inputKey, setInputKey] = useState(''), [name, setName] = useState(''), [backedUp, setBackedUp] = useState(false);
   const [openInput, setOpenInput] = useState(''), [file, setFile] = useState(null), [title, setTitle] = useState('');
   const [previewUrl, setPreviewUrl] = useState(''), [celebration, setCelebration] = useState(null);
+  const [localWallet, setLocalWallet] = useState(null), [walletState, setWalletState] = useState('opening'), [walletError, setWalletError] = useState('');
+  const migrationAttempts = useRef(new Set());
   const recovery = useRef(false), reloadRef = useRef(null), heroObserver = useRef(null);
   // Pause the hero float animation while it is scrolled out of view.
   const heroRef = useCallback((node) => {
@@ -218,6 +221,16 @@ function App() {
   }, [pubkey]);
   reloadRef.current = reload;
   useEffect(() => {
+    if (!identity || !config) { setLocalWallet(null); return; }
+    let disposed = false;
+    setWalletState('opening'); setWalletError(''); setLocalWallet(null);
+    openWallet(identity.secret, config).then(async ({ wallet }) => {
+      await wallet.recover();
+      if (!disposed) { setLocalWallet(wallet); setWalletState('ready'); await reloadRef.current(identity.pubkey); }
+    }).catch(e => { if (!disposed) { setWalletState('error'); setWalletError(e.message); } });
+    return () => { disposed = true; };
+  }, [identity, config]);
+  useEffect(() => {
     if (!pubkey) return;
     let disposed = false;
     setLoading(true); setProfileError('');
@@ -232,20 +245,28 @@ function App() {
     return () => URL.revokeObjectURL(url);
   }, [file]);
 
-  const finalize = useCallback(async (asset, secret) => {
-    const body = JSON.stringify({ showing: asset.showing, signature: signClaim(secret, asset.showing) });
-    return (await signedRequest(secret, `/api/profiles/${profileKey(secret)}/cards/${asset.id}/claim`, body, 'application/json')).json();
-  }, []);
   useEffect(() => {
-    const missing = owner && profile?.cards.filter((c) => c.status !== 'sent' && !c.signature);
-    if (!missing?.length || recovery.current || busy) return;
+    const missing = owner && localWallet && profile?.cards.filter(c => c.status !== 'sent' && c.custody !== 'browser' && !migrationAttempts.current.has(c.id));
+    if (!missing?.length || recovery.current || busy || localWallet.pubkey !== pubkey) return;
     recovery.current = true;
+    for (const card of missing) migrationAttempts.current.add(card.id);
+    setBusy('Moving NFTs into your browser wallet');
     (async () => {
-      try { for (const asset of missing) await finalize(asset, identity.secret); await reload(); }
-      catch (e) { toast.error(`Ownership signing needs another try: ${e.message}`); }
-      finally { recovery.current = false; }
+      try { for (const asset of missing) await localWallet.migrate(asset); await reload(); toast.success('Your spending keys now stay in your browser.'); }
+      catch (e) { setWalletError(e.message); toast.error(`Wallet migration needs another try: ${e.message}`); }
+      finally { recovery.current = false; setBusy(''); }
     })();
-  }, [profile, owner, identity, busy, finalize, reload]);
+  }, [profile, owner, localWallet, busy, reload, pubkey]);
+
+  const recoverWallet = async () => {
+    setBusy('Recovering encrypted wallet backups'); setWalletError('');
+    try {
+      const { wallet } = await openWallet(identity.secret, config);
+      await wallet.recover(); setLocalWallet(wallet); setWalletState('ready');
+      migrationAttempts.current.clear(); await reload(); toast.success('Your browser wallet is synced.');
+    } catch (e) { setWalletError(e.message); toast.error(e.message); }
+    finally { setBusy(''); }
+  };
 
   const closeDialog = () => { if (busy) return; setDialog(null); setGenerated(''); setInputKey(''); setBackedUp(false); setFile(null); setTitle(''); };
   const openCreate = () => { setName(''); setGenerated(newPrivateKey()); setBackedUp(false); setDialog('create'); };
@@ -273,34 +294,33 @@ function App() {
     setFile(next); setTitle(next.name.replace(/\.jpe?g$/i, '').slice(0, 80));
   };
   const upload = async (event) => {
-    event.preventDefault(); if (!file || !owner) return;
+    event.preventDefault(); if (!file || !owner || !localWallet) return;
     const mode = dialog; setBusy(mode === 'mint' ? 'Minting your JPG' : 'Receiving your JPG');
     let asset;
     try {
       const bytes = new Uint8Array(await file.arrayBuffer());
-      asset = await (await signedRequest(identity.secret, `/api/profiles/${pubkey}/${mode}?title=${encodeURIComponent(title.trim() || 'Untitled JPG')}`, bytes, 'image/jpeg')).json();
-      await finalize(asset, identity.secret);
+      asset = await localWallet[mode](bytes, title.trim() || 'Untitled JPG');
       await reload(); setDialog(null); setFile(null); setSelected(asset.id); setFlipped(false); setCelebration(asset.id);
       toast.success(mode === 'mint' ? 'Your JPG is now a collectible.' : 'Collected. The original transfer is now spent.');
       setTimeout(() => setCelebration(null), 2500);
     } catch (e) {
-      if (asset) { toast.error(`Card saved. Reopen your portfolio to finish its ownership signature: ${e.message}`); await reload().catch(() => {}); }
+      if (asset) { toast.error(`Your NFT was saved. Refresh your portfolio: ${e.message}`); await reload().catch(() => {}); }
       else toast.error(e.message);
     } finally { setBusy(''); }
   };
   const exportCard = async () => {
     setBusy('Preparing the transfer JPG');
     try {
-      const response = await signedRequest(identity.secret, `/api/profiles/${pubkey}/cards/${card.id}/export`);
-      download(await response.blob(), `cashu-transfer-${card.h.slice(0, 12)}.jpg`);
+      const jpg = await localWallet.send(card);
+      download(new Blob([jpg], { type: 'image/jpeg' }), `cashu-transfer-${card.h.slice(0, 12)}.jpg`);
       await reload(); toast.success('Transfer JPG downloaded. Send it as an original file.');
     } catch (e) { toast.error(e.message); } finally { setBusy(''); }
   };
   const cancelTransfer = async () => {
     setBusy('Canceling the transfer');
     try {
-      const updated = await (await signedRequest(identity.secret, `/api/profiles/${pubkey}/cards/${card.id}/cancel`)).json();
-      await finalize(updated, identity.secret); await reload(); toast.success('Canceled. Every previous transfer JPG is now invalid.');
+      await localWallet.cancel(card);
+      await reload(); toast.success('Canceled. Every previous transfer JPG is now invalid.');
     } catch (e) { toast.error(e.message); await reload().catch(() => {}); } finally { setBusy(''); }
   };
   const copy = async (text, message) => { try { await navigator.clipboard.writeText(text); toast.success(message); } catch { toast.error('Clipboard unavailable. Select and copy the text instead.'); } };
@@ -344,13 +364,19 @@ function App() {
         </div>
       </section>
       {profileError && <div className="notice" role="status">{profileError}{!profile && identity?.pubkey === pubkey && <button className="text-link" onClick={() => { setInputKey(identity.secret); setDialog('import'); }}>Create this portfolio</button>}</div>}
+      {owner && <aside className={`wallet-panel ${walletError ? 'wallet-needs-attention' : ''}`} role="status">
+        <span className="wallet-panel-icon">{walletState === 'opening' ? <LoaderCircle className="spinner" /> : <ShieldCheck />}</span>
+        <div><strong>{busy || (walletState === 'opening' ? 'Opening your browser wallet' : walletError ? 'Your wallet needs attention' : 'Your spending keys stay here')}</strong>
+          <p>{walletError || 'Encrypted in this browser. Backed up at the mint. Unlocked with your private key.'}</p></div>
+        <button className="button button-glass" onClick={recoverWallet} disabled={!!busy || !config}><RotateCcw size={15} /> Recover wallet</button>
+      </aside>}
       <section className="collection-section"><div className="section-heading"><div><div className="eyebrow">The display case</div><h2>Collection <span className="count">{active.length}</span></h2></div>
-        {owner && <div className="collection-actions"><button className="button button-glass" disabled={!!busy || !config} onClick={() => { setFile(null); setTitle(''); setDialog('receive'); }}><ArrowDownToLine size={17} /> Receive JPG</button><button className="button button-lime" disabled={!!busy || !config} onClick={() => { setFile(null); setTitle(''); setDialog('mint'); }}><Plus size={18} /> Mint a JPG</button></div>}
+        {owner && <div className="collection-actions"><button className="button button-glass" disabled={!!busy || !config || !localWallet} onClick={() => { setFile(null); setTitle(''); setDialog('receive'); }}><ArrowDownToLine size={17} /> Receive JPG</button><button className="button button-lime" disabled={!!busy || !config || !localWallet} onClick={() => { setFile(null); setTitle(''); setDialog('mint'); }}><Plus size={18} /> Mint a JPG</button></div>}
       </div>
       <div className="collection-meta"><span><span className="status-dot" /> Ownership checked in your browser</span><button className="text-button" onClick={() => { setRefresh((r) => r + 1); reload().catch((e) => toast.error(e.message)); }}><RotateCcw size={13} /> Verify now</button></div>
       {loading && !profile ? <div className="empty-state"><LoaderCircle className="spinner" /><p>Opening the display case…</p></div> : <div className="card-grid">
         {active.map((asset) => <CollectorCard key={asset.id} card={asset} verification={verification[asset.id]} celebrate={asset.id === celebration} onSelect={(id) => { setSelected(id); setFlipped(false); }} />)}
-        {owner && <button className="add-card" onClick={() => { setFile(null); setTitle(''); setDialog('mint'); }} disabled={!!busy || !config}><span className="add-card-orbit"><Plus size={37} strokeWidth={1} /></span><strong>{active.length ? 'One more for the vault' : 'Your first flex starts here'}</strong><span>Upload a JPG. Mint it. Make it yours.</span><span className="add-card-link">Mint a JPG <ArrowUpRight size={16} /></span></button>}
+        {owner && <button className="add-card" onClick={() => { setFile(null); setTitle(''); setDialog('mint'); }} disabled={!!busy || !config || !localWallet}><span className="add-card-orbit"><Plus size={37} strokeWidth={1} /></span><strong>{active.length ? 'One more for the vault' : 'Your first flex starts here'}</strong><span>Upload a JPG. Mint it. Make it yours.</span><span className="add-card-link">Mint a JPG <ArrowUpRight size={16} /></span></button>}
         {!active.length && !owner && <div className="empty-state"><WalletCards size={40} /><h3>The display case is waiting</h3><p>This collector hasn’t added any JPGs yet.</p></div>}
       </div>}</section>
       <section className="sent-section"><div className="section-heading"><div><div className="eyebrow">Passed on, still part of the story</div><h2>Sent <span className="count">{sent.length}</span></h2></div><ArrowUpRight className="sent-section-arrow" size={30} /></div>
@@ -366,7 +392,7 @@ function App() {
           <label className="checkbox-label"><input type="checkbox" checked={backedUp} onChange={(e) => setBackedUp(e.target.checked)} /><span>I saved my key. Losing it means losing access to this profile.</span></label>
         </> : <><label className="field-label" htmlFor="private-key">Private key</label><input id="private-key" type="password" autoComplete="off" placeholder="64-character private key" spellCheck={false} value={inputKey} onChange={(e) => setInputKey(e.target.value)} required /><p className="field-help">Your key stays in this browser. It is never sent to the mint.</p></>}
         <button className="button button-lime full-width" disabled={!!busy || (dialog === 'create' && !backedUp)}>{busy ? <LoaderCircle className="spinner" size={17} /> : <Fingerprint size={18} />}{busy || (dialog === 'create' ? 'Create my portfolio' : 'Unlock portfolio')}<ArrowUpRight size={18} /></button>
-        <p className="fine-print">The mint stores your NFTs and bearer credentials. Your key authorizes owner actions. This browser remembers your key.</p>
+        <p className="fine-print">Your browser holds the spending keys. The mint stores public JPGs and encrypted backups. Your private key restores your wallet.</p>
       </form>
     </Modal>
     <Modal open={dialog === 'open'} close={closeDialog} title="Open a collector’s portfolio" description="Paste their public key or the link to their Cashu NFT profile."><form onSubmit={openProfile}><label className="field-label" htmlFor="profile-link">Public key or profile link</label><input id="profile-link" value={openInput} onChange={(e) => setOpenInput(e.target.value)} placeholder="Public key or /p/…" required /><button className="button button-lime full-width"><Eye size={18} /> Open profile <ArrowUpRight size={17} /></button></form></Modal>
@@ -376,11 +402,11 @@ function App() {
         {file ? <><img src={previewUrl} alt="JPG upload preview" /><span><Check size={16} /> {file.name}</span></> : <><ImagePlus size={35} strokeWidth={1.3} /><strong>Drop your JPG here</strong><span>or click to choose a file · up to {Math.round((config?.max_jpg_bytes || 10485760) / 1048576)} MB</span></>}
       </label><label className="field-label" htmlFor="card-title">Card title</label><input id="card-title" maxLength={80} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="Give your collectible a name" disabled={!!busy} />
         {dialog === 'receive' && <p className="field-help">Use a file attachment. Screenshots, edited images and metadata-stripped copies cannot transfer ownership.</p>}
-        <button className="button button-lime full-width" disabled={!file || !!busy}>{busy ? <LoaderCircle size={18} className="spinner" /> : <Sparkles size={18} />}{busy || (dialog === 'mint' ? 'Mint and add to collection' : 'Receive and add to collection')}</button>
+        <button className="button button-lime full-width" disabled={!file || !!busy || !localWallet}>{busy ? <LoaderCircle size={18} className="spinner" /> : <Sparkles size={18} />}{busy || (dialog === 'mint' ? 'Mint and add to collection' : 'Receive and add to collection')}</button>
       </form>
     </Modal>
-    <Modal open={dialog === 'backup'} close={closeDialog} title="Keep your collection key safe" description="Anyone with this key can act as your profile. Save a private backup outside browser storage."><div className="key-box"><textarea readOnly aria-label="Your private key" value={identity?.secret || ''} spellCheck={false} /><button className="button button-lime full-width" onClick={() => download(new Blob([identity.secret + '\n'], { type: 'text/plain' }), 'cashu-nft-private-key.txt')}><Download size={17} /> Download key backup</button></div></Modal>
-    <Modal open={dialog === 'how'} close={closeDialog} title="A JPG. A proof. A new collector." description="Your display case is public. Your private key controls your profile."><div className="how-steps"><div><ImagePlus /><h3>Mint your JPG</h3><p>The app prepares a clean JPG, mints it for free, and stores the file and its bearer credential at the mint.</p></div><div><ShieldCheck /><h3>Show it’s yours</h3><p>Your browser signs an ownership showing. Visitors check the proof and your profile signature locally, then ask the mint whether it is still unspent.</p></div><div><ArrowUpRight /><h3>Send the original file</h3><p>A transfer download embeds its bearer token in EXIF. Anyone with that original file can receive it. The first successful redemption wins.</p></div><div><RotateCcw /><h3>Changed your mind?</h3><p>Cancel a transfer before it is redeemed. The credential rotates, invalidating every previous transfer file.</p></div></div><p className="fine-print">The mint is a custodian. Public image downloads and ownership proofs never contain bearer tokens. Mint identity is remembered on your first visit.</p></Modal>
+    <Modal open={dialog === 'backup'} close={closeDialog} title="Keep your collection key safe" description="This key unlocks your profile and decrypts your NFT backups. Keep a private copy outside this browser."><div className="key-box"><textarea readOnly aria-label="Your private key" value={identity?.secret || ''} spellCheck={false} /><button className="button button-lime full-width" onClick={() => download(new Blob([identity.secret + '\n'], { type: 'text/plain' }), 'cashu-nft-private-key.txt')}><Download size={17} /> Download key backup</button></div></Modal>
+    <Modal open={dialog === 'how'} close={closeDialog} title="A JPG. A proof. A new collector." description="Your display case is public. Your private key controls your profile."><div className="how-steps"><div><ImagePlus /><h3>Mint your JPG</h3><p>Your browser mints a clean JPG for free and keeps its spending credential encrypted. The public picture lives at the mint.</p></div><div><ShieldCheck /><h3>Show it’s yours</h3><p>Your browser signs an ownership showing. Visitors check the proof and your profile signature locally, then ask the mint whether it is still unspent.</p></div><div><ArrowUpRight /><h3>Send the original file</h3><p>A transfer download embeds its bearer token in EXIF. Anyone with that original file can receive it. The first successful redemption wins.</p></div><div><RotateCcw /><h3>Changed your mind?</h3><p>Cancel a transfer before it is redeemed. The credential rotates, invalidating every previous transfer file.</p></div></div><p className="fine-print">Spending keys stay in your browser. The mint keeps encrypted backups that only your private key can unlock. Public pictures and proofs contain no bearer tokens.</p></Modal>
 
     <Modal open={!!card} close={() => { if (!busy) setSelected(null); }} title={card?.title || 'Collectible'} description={card?.status === 'sent' ? 'Part of this collector’s history. Current ownership has moved on.' : 'A collectible JPG with a verifiable ownership showing.'} wide>
       {card && <div className="card-detail"><div className="detail-art"><Tilt interactive flipped={flipped}><div className={`card-shell detail-face ${card.status === 'sent' ? 'detail-sent' : ''}`}><div className="card-top"><span><Sparkles size={13} /> Cashu NFT</span><span>{short(card.h)}</span></div><div className="card-image"><img src={`/api/images/${card.h}.jpg`} alt={card.title} /><div className="foil-film" /></div><div className="card-bottom"><h3>{card.title}</h3><Fingerprint size={30} /></div><div className="card-verification"><ProofBadge result={verification[card.id]} ready={card.status === 'ready'} /></div></div>
@@ -388,7 +414,7 @@ function App() {
         <button className="text-button rotate-button" onClick={() => setFlipped((v) => !v)}><RotateCcw size={15} /> Flip card <span><MoveHorizontal size={14} /> Drag to rotate</span></button>
       </div><div className="detail-info"><div className="eyebrow">The ownership receipt</div><div className="proof-heading"><ProofBadge result={verification[card.id]} ready={card.status === 'ready'} /></div><dl><div><dt>Collector</dt><dd>{short(card.pubkey)}</dd></div><div><dt>Asset</dt><dd>{short(card.h)}</dd></div><div><dt>Added</dt><dd>{date(card.created)}</dd></div>{card.sent && <div><dt>Transferred</dt><dd>{date(card.sent)}</dd></div>}</dl>
         <div className="verification-checks"><p><span>{verification[card.id]?.valid ? <Check /> : <ScanLine />}</span>NFT showing and profile signature</p><p><span>{verification[card.id]?.state === 'UNSPENT' ? <Check /> : <CircleHelp />}</span>Live mint ownership status</p><small>Proofs are checked in your browser. Current ownership depends on the mint’s live response.</small></div>
-        {owner && card.status !== 'sent' && <><button className="button button-lime full-width" onClick={exportCard} disabled={!!busy || !card.signature}><Download size={17} />{busy || 'Download transfer JPG'}</button><p className="field-help">Anyone with this file can receive the NFT. Send the original as a file attachment.</p>{card.status === 'ready' && <button className="button button-glass full-width" disabled={!!busy} onClick={cancelTransfer}><RotateCcw size={17} /> Cancel transfer</button>}</>}
+        {owner && card.status !== 'sent' && <><button className="button button-lime full-width" onClick={exportCard} disabled={!!busy || !card.signature || !localWallet || card.custody !== 'browser'}><Download size={17} />{busy || 'Download transfer JPG'}</button><p className="field-help">Anyone with this file can receive the NFT. Send the original as a file attachment.</p>{card.status === 'ready' && <button className="button button-glass full-width" disabled={!!busy} onClick={cancelTransfer}><RotateCcw size={17} /> Cancel transfer</button>}</>}
         <button className="text-link" onClick={() => download(new Blob([JSON.stringify({ ...card, mint: { keyset_id: config.keyset_id, public_key: config.public_key } }, null, 2)], { type: 'application/json' }), `cashu-ownership-${card.h.slice(0, 12)}.json`)}><ShieldCheck size={16} /> Download public proof</button>
         <a className="text-link" href={`/api/images/${card.h}.jpg`} download={`cashu-${card.h.slice(0, 12)}.jpg`}><ImagePlus size={16} /> Save image without transfer token</a>
       </div></div>}

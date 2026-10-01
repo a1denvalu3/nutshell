@@ -11,10 +11,11 @@ Transfer orchestration needs both sides:
 """
 
 import hashlib
+import json
 import os
 import sqlite3
-from dataclasses import dataclass
-from typing import List, Optional, Tuple
+from dataclasses import asdict, dataclass
+from typing import Dict, List, Optional, Tuple
 
 import httpx
 
@@ -23,7 +24,10 @@ from ..core.crypto.ps import (
     PS_BURN_BINDING,
     Credential,
     DlogEqProof,
+    LinearProof,
     Presentation,
+    asset_tag,
+    blind_issue_commit,
     blind_transfer_commit,
     hash_asset,
     present,
@@ -83,6 +87,16 @@ class WalletAsset:
     h: int
     description: str
     credential: Credential
+
+
+@dataclass
+class PendingMint:
+    index: int
+    h: int
+    t: int
+    u: str
+    description: str
+    request: Dict[str, str]
 
 
 class NFTWallet:
@@ -147,6 +161,48 @@ class NFTWallet:
         index = int.from_bytes(self._get_meta("next_index") or b"\x00" * 4, "big")
         self._set_meta("next_index", (index + 1).to_bytes(4, "big"))
         return index, _derive_owner_secret(self._seed, index)
+
+    def remember_quote(self, quote_id: str, h: int) -> None:
+        """Keep the hash locally; a blind quote cannot return it later."""
+        self._set_meta("quote:" + quote_id, h.to_bytes(32, "big"))
+
+    def quote_hash(self, quote_id: str) -> Optional[int]:
+        raw = self._get_meta("quote:" + quote_id)
+        return None if raw is None else int.from_bytes(raw, "big")
+
+    def save_pending_mint(
+        self, keyset: str, session: str, pending: PendingMint
+    ) -> None:
+        self._set_meta(
+            f"blind-mint:{keyset}:{session}", json.dumps(asdict(pending)).encode()
+        )
+
+    def pending_mint(self, keyset: str, session: str) -> PendingMint:
+        raw = self._get_meta(f"blind-mint:{keyset}:{session}")
+        if raw is None:
+            raise ValueError("no pending mint for this session and mint keyset")
+        return PendingMint(**json.loads(raw))
+
+    def pending_mint_sessions(self, keyset: str) -> List[str]:
+        prefix = f"blind-mint:{keyset}:"
+        return [
+            row[0][len(prefix) :]
+            for row in self.db.execute(
+                "SELECT key FROM wallet WHERE key LIKE ? ORDER BY key", (prefix + "%",)
+            ).fetchall()
+        ]
+
+    def issuance_commit(
+        self,
+        ticket: ReceiveTicket,
+        mint: MintPublicKeyPS,
+        h: int,
+        u: PublicKey,
+        session: bytes,
+    ) -> Tuple[PublicKey, PublicKey, int, LinearProof]:
+        return blind_issue_commit(
+            mint, h, _derive_owner_secret(self._seed, ticket.index), u, session
+        )
 
     def prepare_receive(self) -> ReceiveTicket:
         """Generate a fresh owner secret and its commitment for a mint or
@@ -273,12 +329,14 @@ class NFTClient:
         """Request a mint quote for an asset. Settle it (pay the invoice,
         or dev-pay), then call mint with the quote id."""
         h = hash_asset(asset)
-        return self._checked(
+        quote = self._checked(
             self.http.post(
-                f"{NFT_API_PREFIX}/mint/quote",
-                json={"asset_hash": h.to_bytes(32, "big").hex()},
+                f"{NFT_API_PREFIX}/mint/private/quote",
+                json={"asset_tag": asset_tag(h).format().hex()},
             )
         ).json()
+        # Local convenience for callers, never sent to the mint.
+        return {**quote, "asset_hash": h.to_bytes(32, "big").hex()}
 
     def get_quote(self, quote_id: str) -> dict:
         return self._checked(
@@ -315,24 +373,75 @@ class NFTClient:
         description: str = "",
     ) -> Credential:
         ticket = wallet.prepare_receive()
-        resp = self._checked(
-            self.http.post(
-                f"{NFT_API_PREFIX}/mint",
-                json={
-                    "asset_hash": h.to_bytes(32, "big").hex(),
+        begin = self._checked(
+            self.http.post(f"{NFT_API_PREFIX}/mint/private/begin")
+        ).json()
+        if begin["keyset_id"] != self.keyset_id:
+            raise RuntimeError("mint changed keyset during issuance")
+        u = self._g1(begin["u"])
+        tag, B, t, proof = wallet.issuance_commit(
+            ticket, self.keyset, h, u, bytes.fromhex(begin["session"])
+        )
+        wallet.save_pending_mint(
+            self.keyset_id,
+            begin["session"],
+            PendingMint(
+                index=ticket.index,
+                h=h,
+                t=t,
+                u=begin["u"],
+                description=description,
+                request={
+                    "session": begin["session"],
+                    "asset_tag": tag.format().hex(),
+                    "b": B.format().hex(),
                     "owner_commitment": ticket.commitment.format().hex(),
-                    "proof": ticket.proof.to_bytes().hex(),
+                    "proof": proof.to_bytes().hex(),
                     **({"quote": quote} if quote else {}),
                 },
-            )
-        ).json()
+            ),
+        )
+        return self.retry_mint(wallet, begin["session"])
+
+    def retry_mint(self, wallet: NFTWallet, session: str) -> Credential:
+        """Recover the exact original response without issuing a second NFT."""
+        pending = wallet.pending_mint(self.keyset_id, session)
+        secret = _derive_owner_secret(wallet._seed, pending.index)
+        S, pok = prove_owner_secret(secret)
+        ticket = ReceiveTicket(pending.index, S, pok)
+        u = self._g1(pending.u)
+        try:
+            resp = self._checked(
+                self.http.post(f"{NFT_API_PREFIX}/mint/private", json=pending.request)
+            ).json()
+        except (httpx.HTTPError, RuntimeError) as exc:
+            raise RuntimeError(
+                f"{exc}. Pending request saved; retry with `cashu nft retry-mint {session}`"
+            ) from exc
+        if resp["keyset_id"] != self.keyset_id or self._g1(resp["u"]) != u:
+            raise RuntimeError("mint changed issuance base or keyset")
+        v = unblind_issued(self._g1(resp["v"]), pending.t, self.keyset)
+        candidate = Credential(
+            u=u,
+            v=v,
+            h=pending.h,
+            s=secret,
+            keyset_id=self.keyset_id,
+        )
+        if not verify_presentation(self.keyset, present(candidate)):
+            raise RuntimeError("mint returned an invalid blind signature")
+        # Delete recovery material in the same commit that stores the NFT.
+        wallet.db.execute(
+            "DELETE FROM wallet WHERE key=?",
+            (f"blind-mint:{self.keyset_id}:{session}",),
+        )
         return wallet.store_credential(
             ticket,
-            self._g1(resp["u"]),
-            self._g1(resp["v"]),
-            h,
+            u,
+            v,
+            pending.h,
             resp["keyset_id"],
-            description,
+            pending.description,
         )
 
     def _transfer_cred(
@@ -347,9 +456,9 @@ class NFTClient:
             self.http.post(
                 f"{NFT_API_PREFIX}/transfer",
                 json={
-                    "presentation": present(
-                        cred, binding=new_owner_commitment
-                    ).to_bytes().hex(),
+                    "presentation": present(cred, binding=new_owner_commitment)
+                    .to_bytes()
+                    .hex(),
                     "new_owner_commitment": new_owner_commitment.hex(),
                     "new_proof": new_proof.hex(),
                 },
@@ -384,7 +493,9 @@ class NFTClient:
                 json={
                     "presentation": present(
                         wallet.get_credential(h), binding=PS_BURN_BINDING
-                    ).to_bytes().hex()
+                    )
+                    .to_bytes()
+                    .hex()
                 },
             )
         )

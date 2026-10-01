@@ -37,6 +37,7 @@ already pinned the old keyset refuse to load the app.
 
 ```bash
 npm test                                          # browser verifier vs Python-generated showings
+npm run typecheck                                # browser wallet types
 poetry run pytest tests/test_nft_portfolio.py -q  # backend
 ```
 
@@ -45,11 +46,29 @@ poetry run pytest tests/test_nft_portfolio.py -q  # backend
 - **Profile keys** are secp256k1 keys generated and kept in the browser's local
   storage. They never reach the server. There is no reset: lose the key and you
   lose the profile. Use "Back up key", and "Import key" on another browser.
-- **Custody.** The mint stores each JPG and the bearer credential that owns it.
-  Owner actions (mint, receive, export, cancel, claim signing) require a
-  Schnorr signature from the profile key over a single-use server challenge.
-  The operator could still move NFTs; this app does not protect against a
-  malicious mint.
+- **Browser custody.** The browser constructs blind issuance and private
+  transfer proofs, unblinds signatures, generates public showings, and
+  embeds or extracts JPG bearer tokens. Spending secrets are encrypted in
+  local IndexedDB and in mint backups using AES-256-GCM. HKDF derives a
+  separate encryption key from the profile private key and mint keyset;
+  associated data binds the collector, keyset and card or operation. The
+  backend stores public JPGs, public proofs and ciphertext. Owner requests
+  require single-use Schnorr authorization. Exporting never asks the backend
+  for a plaintext credential; receiving uploads only the clean JPG.
+- **Recovery.** Importing the same profile key recovers encrypted credentials
+  from the mint. Encrypted operation backups are saved before issuance or
+  transfer. Exact retries return the same cached signature after connection
+  loss or restart. Issued jobs must be recovered; only unissued expired jobs
+  or lost transfer races can be discarded. Browser Web Locks serialize
+  operations across tabs. Keep a private backup of your profile key.
+- **Existing collections.** On opening an owner profile, legacy cards rotate
+  through private transfers to new browser secrets before saving encrypted
+  credentials. Their card IDs, pictures and titles remain. The previous
+  backend-known credential becomes spent, including older transfer JPGs.
+- **Issuer and frontend trust.** Encryption prevents spending by a backend
+  that has only stored records and public proofs. The issuer can still forge
+  credentials, and malicious JavaScript served by the host can steal an
+  unlocked key. Browser custody does not remove those trust assumptions.
 - **Ownership proofs.** Each card carries a PS showing bound to
   `(profile pubkey, JPG hash, keyset)` and a profile-key signature over that
   showing. Visitors verify both in their browser, then ask the mint whether the
@@ -62,6 +81,33 @@ poetry run pytest tests/test_nft_portfolio.py -q  # backend
   verifier; the pin protects against a keyset swap, not a compromised host.
 
 ## JPG identity and transfers
+
+The browser wallet uses [blind hash issuance](../BLIND_ISSUANCE.md).
+The mint checks a public deterministic duplicate tag instead of receiving
+the raw hash scalar in that issuance call. The portfolio still knows the
+public JPG and its hash; spending secrets remain in the browser.
+
+## cashu-ts and Coco integration
+
+The frontend pins cashu-ts `5.0.0-rc.11` and Coco core/IndexedDB `2.0.0`.
+An npm override makes Coco use the same cashu-ts release. The `cashu-ps-nft`
+Coco plugin registers `manager.ext.nft`, uses Coco's durable counters and a
+profile/keyset-derived 64-byte seed, and keeps encrypted NFT records in a
+separate IndexedDB vault. Normal ecash watchers and processors are disabled
+because this app serves PS NFT endpoints.
+
+cashu-ts supplies BLS scalar generation and strict subgroup point decoding.
+The extension adds PS commitments, proof transcripts, unblinding,
+presentations, private swaps and EXIF transfer tokens. PS credentials are
+not standard NUT-00 proofs or cashu tokens; ordinary cashu-ts wallet methods
+cannot spend them. This remains an experimental cryptographic extension.
+
+For an isolated backend during frontend testing, set `NFT_PORTFOLIO_API` to
+its URL when starting Vite. The production bundle always uses same-origin
+routes. The previous custodial mint/receive/export/cancel HTTP endpoints
+return `410`; use the signed `/api/profiles/{pubkey}/wallet/…` workflow.
+
+## JPG handling
 
 - Uploads must be JPGs. Before minting, the app applies EXIF orientation,
   removes EXIF/XMP, keeps the colour profile, and hashes the resulting bytes.

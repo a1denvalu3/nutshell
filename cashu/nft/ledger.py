@@ -1,9 +1,11 @@
 """Persistent ledger for the experimental PS-credential NFT service.
 
 State:
-    ps_assets     -- one row per minted asset: h -> status (active/burned)
+    ps_assets     -- retained legacy clear-h records
+    ps_asset_tags -- public duplicate tag -> status (active/burned)
+    ps_issue_sessions -- single-use, expiring blind issuance bases
     ps_nullifiers -- spent presentation nullifiers (double-spend prevention)
-    ps_quotes     -- mint quotes: h -> settlement state (one NFT per quote)
+    ps_quotes     -- mint quotes: tag (or legacy h) -> settlement state
 
 There is no owner column and no ownership registry: a transfer claims the
 current credential's nullifier and re-issues the asset under a fresh owner
@@ -16,7 +18,7 @@ the per-asset status (asset_status).
 
 Invariants enforced here, on top of the cryptography in
 cashu/core/crypto/ps.py:
-    * one credential per asset hash, enforced by the ps_assets primary key
+    * one credential per asset hash, enforced by the ps_asset_tags primary key
     * a presentation can be spent exactly once, enforced by claiming the
       nullifier inside the caller's transaction
     * transfers are atomic: proof checks, nullifier claim and re-issuance
@@ -25,6 +27,8 @@ cashu/core/crypto/ps.py:
       in the same transaction that inserts the asset
 """
 
+import hashlib
+import time
 import uuid
 from typing import List, Optional, Tuple
 
@@ -39,9 +43,12 @@ from ..core.crypto.ps import (
     MintPublicKeyPS,
     Presentation,
     PrivatePresentation,
+    asset_tag,
+    blind_base_for_issuance,
     blind_base_for_nullifier,
     issue,
     issue_blind,
+    verify_blind_issue,
     verify_blind_transfer,
     verify_owner_secret,
     verify_presentation,
@@ -80,6 +87,13 @@ class PaymentError(NFTError):
 
 def _h_hex(h: int) -> str:
     return h.to_bytes(32, "big").hex()
+
+
+def _tag_id(tag: PublicKey) -> str:
+    return "tag:" + tag.format().hex()
+
+
+ISSUANCE_SESSION_TTL = 300
 
 
 class PSLedger:
@@ -149,14 +163,53 @@ class PSLedger:
                 )
                 """
             )
+            await conn.execute(
+                """CREATE TABLE IF NOT EXISTS ps_asset_tags (
+                    tag TEXT PRIMARY KEY,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created TEXT NOT NULL
+                )"""
+            )
+            # Preserve every old asset, including burned assets, in the shared
+            # uniqueness registry. Legacy hash records are retained as history.
+            for row in await conn.fetchall("SELECT h, status, created FROM ps_assets"):
+                await conn.execute(
+                    """INSERT INTO ps_asset_tags(tag,status,created)
+                    VALUES(:tag,:status,:created) ON CONFLICT(tag) DO NOTHING""",
+                    {
+                        "tag": _tag_id(asset_tag(int(row["h"], 16))),
+                        "status": row["status"],
+                        "created": row["created"],
+                    },
+                )
+            await conn.execute(
+                """CREATE TABLE IF NOT EXISTS ps_issue_sessions (
+                    session TEXT PRIMARY KEY,
+                    created INTEGER NOT NULL,
+                    used INTEGER NOT NULL DEFAULT 0,
+                    request_hash TEXT,
+                    response BLOB
+                )"""
+            )
 
     async def create_quote(self, h: int) -> dict:
         """Create a mint quote for asset hash h. Settle it out of band,
         then mint with the quote id."""
+        return await self._create_quote(_h_hex(h), h)
+
+    async def create_blind_quote(self, tag: PublicKey) -> dict:
+        """Bind payment to a public tag without receiving the hash scalar."""
+        return await self._create_quote(
+            _tag_id(tag), int.from_bytes(tag.format(), "big")
+        )
+
+    async def _create_quote(self, asset_id: str, identifier: int) -> dict:
         if self.quote_backend is None:
             raise PaymentError("this mint does not require quotes")
         quote_id = uuid.uuid4().hex
-        amount, request, external = await self.quote_backend.create_quote(quote_id, h)
+        amount, request, external = await self.quote_backend.create_quote(
+            quote_id, identifier
+        )
         async with self.db.get_connection() as conn:
             await conn.execute(
                 """
@@ -165,20 +218,14 @@ class PSLedger:
                 """,
                 {
                     "quote": quote_id,
-                    "h": _h_hex(h),
+                    "h": asset_id,
                     "amount": amount,
                     "request": request,
                     "external": external,
                     "created": self.db.timestamp_now_str(),
                 },
             )
-        return {
-            "quote": quote_id,
-            "asset_hash": _h_hex(h),
-            "amount": amount,
-            "request": request,
-            "state": "unpaid",
-        }
+        return await self.get_quote(quote_id)
 
     async def _sync_quote(self, conn: Connection, quote_id: str) -> dict:
         row = await conn.fetchone(
@@ -204,11 +251,127 @@ class PSLedger:
             row = await self._sync_quote(conn, quote_id)
         return {
             "quote": quote_id,
-            "asset_hash": row["h"],
+            **(
+                {"asset_tag": row["h"][4:]}
+                if row["h"].startswith("tag:")
+                else {"asset_hash": row["h"]}
+            ),
             "amount": row["amount"],
             "request": row["request"],
             "state": row["state"],
         }
+
+    async def _consume_quote(
+        self, conn: Connection, quote: Optional[str], tag: PublicKey
+    ) -> None:
+        if self.quote_backend is None:
+            return
+        if not quote:
+            raise PaymentError("mint quote required")
+        row = await self._sync_quote(conn, quote)
+        # Already-created clear-h quotes remain usable; new clients only
+        # request tag quotes. The old quote already disclosed its hash.
+        expected = row["h"]
+        if not expected.startswith("tag:"):
+            expected = _tag_id(asset_tag(int(expected, 16)))
+        if expected != _tag_id(tag):
+            raise PaymentError("quote is for a different asset")
+        if row["state"] == "unpaid":
+            raise PaymentError("quote is not paid")
+        result = await conn.execute(
+            "UPDATE ps_quotes SET state='used' WHERE quote=:quote AND state='paid'",
+            {"quote": quote},
+        )
+        if result.rowcount != 1:
+            raise AlreadySpentError("quote was already used")
+
+    async def _register_asset(self, conn: Connection, tag: PublicKey) -> None:
+        try:
+            await conn.execute(
+                """INSERT INTO ps_asset_tags(tag,status,created)
+                VALUES(:tag,'active',:created)""",
+                {"tag": _tag_id(tag), "created": self.db.timestamp_now_str()},
+            )
+        except IntegrityError:
+            raise AlreadyMintedError("asset was already minted")
+
+    async def issue_nft_begin(self, conn: Optional[Connection] = None) -> dict:
+        """Allocate a single-use, mint-controlled issuance base."""
+        session = uuid.uuid4().hex
+        now = int(time.time())
+        async with self.db.get_connection(conn) as c:
+            await c.execute(
+                "DELETE FROM ps_issue_sessions WHERE used=0 AND created < :expiry",
+                {"expiry": now - ISSUANCE_SESSION_TTL},
+            )
+            await c.execute(
+                "INSERT INTO ps_issue_sessions(session,created) VALUES(:session,:now)",
+                {"session": session, "now": now},
+            )
+        _, u = blind_base_for_issuance(self.mint_key, bytes.fromhex(session))
+        return {
+            "session": session,
+            "u": u.format().hex(),
+            "keyset_id": self.keyset.keyset_id,
+        }
+
+    async def issue_nft_blind(
+        self,
+        session: str,
+        tag: PublicKey,
+        B: PublicKey,
+        S: PublicKey,
+        proof: LinearProof,
+        quote: Optional[str] = None,
+        conn: Optional[Connection] = None,
+    ) -> Tuple[PublicKey, PublicKey]:
+        session_bytes = bytes.fromhex(session)
+        k, u = blind_base_for_issuance(self.mint_key, session_bytes)
+        if not verify_blind_issue(self.keyset, tag, B, u, S, proof, session_bytes):
+            raise InvalidProofError("invalid blind issuance proof")
+        quote_bytes = (quote or "").encode()
+        request_hash = hashlib.sha256(
+            bytes.fromhex(self.keyset.keyset_id)
+            + session_bytes
+            + tag.format()
+            + B.format()
+            + S.format()
+            + proof.to_bytes()
+            + len(quote_bytes).to_bytes(4, "big")
+            + quote_bytes
+        ).hexdigest()
+        async with self.db.get_connection(
+            conn, locks=[LockOptions(table="ps_assets")]
+        ) as c:
+            row = await c.fetchone(
+                "SELECT * FROM ps_issue_sessions WHERE session=:session",
+                {"session": session},
+            )
+            if row is None:
+                raise InvalidProofError("unknown or expired issuance session")
+            if row["used"]:
+                if row["request_hash"] == request_hash and row["response"] is not None:
+                    return u, PublicKey(compressed=bytes(row["response"]), group="G1")
+                raise AlreadySpentError("issuance session was already used")
+            if row["created"] < int(time.time()) - ISSUANCE_SESSION_TTL:
+                raise InvalidProofError("unknown or expired issuance session")
+            result = await c.execute(
+                "UPDATE ps_issue_sessions SET used=1 WHERE session=:session AND used=0",
+                {"session": session},
+            )
+            if result.rowcount != 1:
+                raise AlreadySpentError("issuance session was already used")
+            await self._consume_quote(c, quote, tag)
+            await self._register_asset(c, tag)
+            # Sign in the same transaction: failures do not consume payment,
+            # uniqueness or the session. Each base signs at most once.
+            v_raw = issue_blind(self.mint_key, k, u, B, S)
+            await c.execute(
+                """UPDATE ps_issue_sessions SET request_hash=:hash,response=:response
+                WHERE session=:session""",
+                {"hash": request_hash, "response": v_raw.format(), "session": session},
+            )
+        return u, v_raw
 
     async def dev_pay_quote(self, quote_id: str, ticket: bytes) -> None:
         """Settle a quote with a dev ticket (dev backends only)."""
@@ -243,33 +406,9 @@ class PSLedger:
         async with self.db.get_connection(
             conn, locks=[LockOptions(table="ps_assets")]
         ) as c:
-            if self.quote_backend is not None:
-                if not quote:
-                    raise PaymentError("mint quote required")
-                row = await self._sync_quote(c, quote)
-                if row["h"] != _h_hex(h):
-                    raise PaymentError("quote is for a different asset")
-                if row["state"] == "unpaid":
-                    raise PaymentError("quote is not paid")
-                result = await c.execute(
-                    "UPDATE ps_quotes SET state = 'used' WHERE quote = :quote AND state = 'paid'",
-                    {"quote": quote},
-                )
-                if result.rowcount != 1:
-                    raise AlreadySpentError("quote was already used")
-            try:
-                await c.execute(
-                    """
-                    INSERT INTO ps_assets (h, status, created)
-                    VALUES (:h, 'active', :created)
-                    """,
-                    {
-                        "h": _h_hex(h),
-                        "created": self.db.timestamp_now_str(),
-                    },
-                )
-            except IntegrityError:
-                raise AlreadyMintedError("asset was already minted")
+            tag = asset_tag(h)
+            await self._consume_quote(c, quote, tag)
+            await self._register_asset(c, tag)
         return issue(self.mint_key, h, S)
 
     async def is_spent(self, nullifier: bytes) -> bool:
@@ -294,7 +433,8 @@ class PSLedger:
     async def asset_status(self, h: int) -> str:
         """Status of an asset hash: "active", "burned" or "unknown"."""
         row = await self.db.fetchone(
-            "SELECT status FROM ps_assets WHERE h = :h", {"h": _h_hex(h)}
+            "SELECT status FROM ps_asset_tags WHERE tag = :tag",
+            {"tag": _tag_id(asset_tag(h))},
         )
         if row is None:
             return "unknown"
@@ -320,8 +460,8 @@ class PSLedger:
         ):
             raise AlreadySpentError("credential already spent")
         row = await conn.fetchone(
-            "SELECT status FROM ps_assets WHERE h = :h",
-            {"h": _h_hex(pres.h)},
+            "SELECT status FROM ps_asset_tags WHERE tag = :tag",
+            {"tag": _tag_id(asset_tag(pres.h))},
         )
         if row is None:
             raise UnknownAssetError("unknown asset")
@@ -368,8 +508,8 @@ class PSLedger:
         ) as c:
             await self._spend(pres, c, binding=PS_BURN_BINDING)
             await c.execute(
-                "UPDATE ps_assets SET status = 'burned' WHERE h = :h",
-                {"h": _h_hex(pres.h)},
+                "UPDATE ps_asset_tags SET status = 'burned' WHERE tag = :tag",
+                {"tag": _tag_id(asset_tag(pres.h))},
             )
 
     async def transfer_private_begin(self, nullifier: bytes) -> PublicKey:

@@ -2,8 +2,8 @@
 Pointcheval-Sanders credentials on BLS12-381 for asset-bound NFT credentials.
 
 Experimental. A credential signs two attributes:
-    h -- scalar hash of the asset (e.g. a JPEG digest), revealed to the mint at
-         issuance so the mint can enforce one-credential-per-asset.
+    h -- scalar hash of the asset (e.g. a JPEG digest). Blind issuance hides
+         this scalar but reveals a deterministic, candidate-testable asset tag.
     s -- owner secret, never revealed to the mint, bound into the credential
          during issuance with a Diffie-Hellman trick.
 
@@ -79,6 +79,15 @@ PS_BURN_BINDING = b"Cashu_PS_Burn_v1"
 # Nullifier base: nothing-up-my-sleeve G1 point with unknown discrete log
 G_NULL = PublicKey(
     point=pyblst.BlstP1Element().hash_to_group(b"ps_nullifier_base", PS_GNULL_DST),
+    group="G1",
+)
+
+# Public duplicate-detection base, distinct from the owner nullifier base.
+# This tag reveals equality and permits offline tests of candidate assets.
+G_ASSET = PublicKey(
+    point=pyblst.BlstP1Element().hash_to_group(
+        b"ps_asset_tag_base", b"CASHU_PS_ASSET_TAG_XMD:SHA-256_SSWU_RO_"
+    ),
     group="G1",
 )
 
@@ -235,9 +244,7 @@ def verify_dlog_eq(
         _add_p1(base * proof.response, _neg_p1(point * proof.challenge))
         for base, point in zip(bases, points)
     ]
-    expected = _challenge(
-        _dlog_eq_transcript(dst, bases, points, commitments, binding)
-    )
+    expected = _challenge(_dlog_eq_transcript(dst, bases, points, commitments, binding))
     return expected == proof.challenge
 
 
@@ -282,7 +289,9 @@ def _linear_num_witnesses(statements: List[LinearStatement]) -> int:
     return n
 
 
-def _linear_combine(terms: List[Tuple[PublicKey, int]], scalars: List[int]) -> PublicKey:
+def _linear_combine(
+    terms: List[Tuple[PublicKey, int]], scalars: List[int]
+) -> PublicKey:
     acc = _infinity(terms[0][0].group)
     for base, i in terms:
         acc = _add_pk(acc, base * scalars[i])
@@ -326,8 +335,7 @@ def prove_linear(
     commitments = [_linear_combine(terms, nonces) for _, terms in statements]
     challenge = _challenge(_linear_transcript(dst, binding, statements, commitments))
     responses = [
-        (nonce + challenge * w) % curve_order
-        for nonce, w in zip(nonces, witnesses)
+        (nonce + challenge * w) % curve_order for nonce, w in zip(nonces, witnesses)
     ]
     return LinearProof(challenge=challenge, responses=responses)
 
@@ -719,6 +727,91 @@ def verify_presentation_keysets(
 
 PS_COMMIT_DST = b"Cashu_PS_CommitEq_v1"
 PS_K2_DST = b"Cashu_PS_TransferK2_v1"
+PS_BLIND_ISSUE_DST = b"Cashu_PS_BlindIssue_v1"
+PS_ISSUE_K_DST = b"Cashu_PS_IssueK_v1"
+
+
+def asset_tag(h: int) -> PublicKey:
+    """Public deterministic tag D = h * G_ASSET; this is not a hiding hash."""
+    if not 0 <= h < curve_order:
+        raise ValueError("h must be a scalar")
+    return G_ASSET * h
+
+
+def blind_issue_binding(mint_public: MintPublicKeyPS, session: bytes) -> bytes:
+    if len(session) != 16:
+        raise ValueError("issuance session must be 16 bytes")
+    return bytes.fromhex(mint_public.keyset_id) + session
+
+
+def blind_base_for_issuance(
+    mint_key: MintPrivateKeyPS, session: bytes
+) -> Tuple[int, PublicKey]:
+    """Mint-controlled base for a persisted, single-use issuance session."""
+    if len(session) != 16:
+        raise ValueError("issuance session must be 16 bytes")
+    counter = 0
+    while True:
+        digest = hmac.new(
+            mint_key.x.private_key,
+            PS_ISSUE_K_DST + counter.to_bytes(4, "big") + session,
+            hashlib.sha256,
+        ).digest()
+        k = int.from_bytes(digest, "big") % curve_order
+        if k:
+            return k, G1 * k
+        counter += 1
+
+
+def _blind_issue_statements(
+    D: PublicKey, B: PublicKey, u: PublicKey, S: PublicKey
+) -> List[LinearStatement]:
+    return [
+        (D, [(G_ASSET, 0)]),
+        (B, [(u, 0), (G1, 1)]),
+        (S, [(G1, 2)]),
+    ]
+
+
+def blind_issue_commit(
+    mint_public: MintPublicKeyPS, h: int, s: int, u: PublicKey, session: bytes
+) -> Tuple[PublicKey, PublicKey, int, LinearProof]:
+    """Prove the tag and blind commitment contain the same h, and know s.
+
+    Returns (D, B, t, proof). Keep t locally to unblind the signature.
+    The transcript binds the mint keyset, single-use session, base and S.
+    """
+    if u.is_infinity() or not 0 < s < curve_order:
+        raise ValueError("invalid issuance base or owner secret")
+    D = asset_tag(h)
+    t = _random_scalar()
+    B = _add_p1(u * h, G1 * t)
+    proof = prove_linear(
+        _blind_issue_statements(D, B, u, G1 * s),
+        [h, t, s],
+        PS_BLIND_ISSUE_DST,
+        blind_issue_binding(mint_public, session),
+    )
+    return D, B, t, proof
+
+
+def verify_blind_issue(
+    mint_public: MintPublicKeyPS,
+    D: PublicKey,
+    B: PublicKey,
+    u: PublicKey,
+    S: PublicKey,
+    proof: LinearProof,
+    session: bytes,
+) -> bool:
+    if u.is_infinity() or B.is_infinity() or S.is_infinity():
+        return False
+    return verify_linear(
+        _blind_issue_statements(D, B, u, S),
+        proof,
+        PS_BLIND_ISSUE_DST,
+        blind_issue_binding(mint_public, session),
+    )
 
 
 def blind_base_for_nullifier(
@@ -956,7 +1049,9 @@ def _derive_batch_scalars(presentations: List[Presentation]) -> List[int]:
 
 
 def batch_verify_presentations(
-    mint_public: MintPublicKeyPS, presentations: List[Presentation], binding: bytes = b""
+    mint_public: MintPublicKeyPS,
+    presentations: List[Presentation],
+    binding: bytes = b"",
 ) -> bool:
     """Verify many same-keyset presentations with one combined pairing.
 

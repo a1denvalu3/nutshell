@@ -1,4 +1,4 @@
-"""Custodial, public JPG portfolios with browser-authorized owner actions.
+"""Public JPG portfolios with encrypted browser-wallet recovery backups.
 
 Build portfolio_web first, then: poetry run python -m cashu.nft.portfolio
 The ledger, images and collection changes share a single SQLite transaction.
@@ -24,21 +24,28 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, ValidationError
 from starlette.concurrency import run_in_threadpool
 
-from ..core.crypto.bls import curve_order
+from ..core.crypto.bls import PublicKey, curve_order
 from ..core.crypto.ps import (
-    G_NULL,
     Credential,
     MintPrivateKeyPS,
+    blind_issue_commit,
     hash_asset,
     present,
     present_showing,
     prove_owner_secret,
+    unblind_issued,
 )
 from ..core.db import Connection, Database, LockOptions
 from .api import create_router
 from .imgmeta import embed_token
 from .ledger import AlreadyMintedError, AlreadySpentError, NFTError, PSLedger
 from .portfolio_jpg import normalize_jpg, split_transfer_jpg, validate_jpg
+from .portfolio_wallet import (
+    BrowserPortfolio,
+    Envelope,
+    PublishRequest,
+    WalletProofRequest,
+)
 from .wallet import SHOW_TOKEN_PREFIX, TOKEN_PREFIX, NFTClient
 
 AUTH_DOMAIN = "Cashu_NFT_Portfolio_Auth_v1"
@@ -176,7 +183,7 @@ class Portfolio:
     @staticmethod
     def public_card(row: dict) -> dict:
         # Deliberately whitelist fields: never serialize a credential or owner secret.
-        return {
+        public = {
             key: row[key]
             for key in (
                 "id",
@@ -190,6 +197,8 @@ class Portfolio:
                 "sent",
             )
         }
+        public["custody"] = "browser" if row.get("encrypted_credential") else "legacy"
+        return public
 
     async def store_card(
         self, conn: Connection, pubkey: str, cred: Credential, jpg: bytes, title: str
@@ -226,10 +235,20 @@ class Portfolio:
             )
         h = hash_asset(jpg)
         secret = secrets.randbelow(curve_order - 1) + 1
-        commitment, proof = prove_owner_secret(secret)
+        commitment, _ = prove_owner_secret(secret)
         async with self.db.get_connection(locks=CARD_LOCKS) as conn:
             await self.capacity(conn, pubkey, len(jpg))
-            u, v = await self.ledger.issue_nft(h, commitment, proof, conn=conn)
+            begin = await self.ledger.issue_nft_begin(conn=conn)
+            # This server is still the custodial wallet. Its call into the
+            # ledger uses a hidden scalar, but the uploaded JPG is public.
+            base = PublicKey(compressed=bytes.fromhex(begin["u"]), group="G1")
+            tag, B, t, blind_proof = blind_issue_commit(
+                self.ledger.keyset, h, secret, base, bytes.fromhex(begin["session"])
+            )
+            u, v_raw = await self.ledger.issue_nft_blind(
+                begin["session"], tag, B, commitment, blind_proof, conn=conn
+            )
+            v = unblind_issued(v_raw, t, self.ledger.keyset)
             cred = Credential(
                 u=u, v=v, h=h, s=secret, keyset_id=self.ledger.keyset.keyset_id
             )
@@ -273,18 +292,17 @@ class Portfolio:
 
     async def reconcile(self, conn: Connection, pubkey: str) -> None:
         rows = await conn.fetchall(
-            "SELECT id,credential FROM portfolio_cards WHERE pubkey=:p AND status!='sent'",
+            "SELECT id,showing FROM portfolio_cards WHERE pubkey=:p AND status!='sent'",
             {"p": pubkey},
         )
         for row in rows:
-            cred = Credential.from_bytes(bytes(row["credential"]))
-            nullifier = (G_NULL * cred.s).format()
+            nullifier = NFTClient.decode_showing(row["showing"])[1].nullifier.format()
             if await conn.fetchone(
                 "SELECT nullifier FROM ps_nullifiers WHERE nullifier=:n",
                 {"n": nullifier},
             ):
                 await conn.execute(
-                    "UPDATE portfolio_cards SET status='sent',sent=:t,credential=NULL WHERE id=:id",
+                    "UPDATE portfolio_cards SET status='sent',sent=:t,credential=NULL,encrypted_credential=NULL WHERE id=:id",
                     {"id": row["id"], "t": int(time.time())},
                 )
 
@@ -368,10 +386,12 @@ def create_portfolio_app(
     max_storage_bytes: int = 1024**3,
 ) -> FastAPI:
     portfolio = Portfolio(data_dir, max_jpg_bytes, max_cards, max_storage_bytes)
+    browser_wallet = BrowserPortfolio(portfolio)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await portfolio.migrate()
+        await browser_wallet.migrate()
         yield
         await portfolio.db.engine.dispose()
 
@@ -379,6 +399,7 @@ def create_portfolio_app(
         title="Cashu NFT portfolio", lifespan=lifespan, docs_url=None, redoc_url=None
     )
     app.state.portfolio = portfolio
+    app.state.browser_wallet = browser_wallet
     requests: Dict[str, Deque[float]] = defaultdict(deque)
 
     @app.middleware("http")
@@ -495,6 +516,8 @@ def create_portfolio_app(
             "public_key": portfolio.ledger.keyset.to_bytes().hex(),
             "max_jpg_bytes": max_jpg_bytes,
             "max_cards": max_cards,
+            "wallet_mode": "browser",
+            "wallet_version": 2,
         }
 
     @app.post("/api/auth/challenge")
@@ -571,7 +594,7 @@ def create_portfolio_app(
     ):
         raw = await read_body(request, max_jpg_bytes)
         await authorize(request, pubkey, raw)
-        return await portfolio.mint(pubkey, raw, title)
+        raise HTTPException(410, "Mint JPGs with the browser wallet.")
 
     @app.post("/api/profiles/{pubkey}/receive")
     async def receive(
@@ -581,7 +604,9 @@ def create_portfolio_app(
     ):
         raw = await read_body(request, max_jpg_bytes + 65536)
         await authorize(request, pubkey, raw)
-        return await portfolio.receive(pubkey, raw, title)
+        raise HTTPException(
+            410, "Receive transfer JPGs locally with the browser wallet."
+        )
 
     @app.post("/api/profiles/{pubkey}/cards/{card_id}/claim")
     async def sign_claim(pubkey: str, card_id: str, request: Request):
@@ -610,20 +635,90 @@ def create_portfolio_app(
     async def export(pubkey: str, card_id: str, request: Request):
         raw = await read_body(request, 0)
         await authorize(request, pubkey, raw)
-        jpg = await portfolio.export(pubkey, card_id)
-        return Response(
-            jpg,
-            media_type="image/jpeg",
-            headers={
-                "Content-Disposition": f'attachment; filename="cashu-transfer-{card_id[:8]}.jpg"'
-            },
+        raise HTTPException(
+            410, "Generate transfer JPGs locally with the browser wallet."
         )
 
     @app.post("/api/profiles/{pubkey}/cards/{card_id}/cancel")
     async def cancel(pubkey: str, card_id: str, request: Request):
         raw = await read_body(request, 0)
         await authorize(request, pubkey, raw)
-        return await portfolio.cancel(pubkey, card_id)
+        raise HTTPException(
+            410, "Rotate the credential locally with the browser wallet."
+        )
+
+    @app.post("/api/profiles/{pubkey}/wallet/prepare")
+    async def wallet_prepare(
+        pubkey: str,
+        request: Request,
+        kind: Literal["mint", "receive", "rotate", "migrate"] = Query(),
+        title: str = Query(default="Untitled JPG", min_length=1, max_length=80),
+        card_id: Optional[str] = Query(default=None),
+    ):
+        raw = await read_body(request, max_jpg_bytes)
+        await authorize(request, pubkey, raw)
+        return await browser_wallet.prepare(pubkey, kind, raw, title, card_id)
+
+    @app.post("/api/profiles/{pubkey}/wallet/operations/{operation_id}/backup")
+    async def wallet_backup(pubkey: str, operation_id: str, request: Request):
+        raw = await read_body(request, 40000)
+        await authorize(request, pubkey, raw)
+        try:
+            body = Envelope.model_validate_json(raw)
+        except ValidationError:
+            raise HTTPException(400, "Invalid encrypted recovery envelope.")
+        await browser_wallet.backup(pubkey, operation_id, body)
+        return {"saved": True}
+
+    @app.post("/api/profiles/{pubkey}/wallet/operations/{operation_id}/finish")
+    async def wallet_finish(pubkey: str, operation_id: str, request: Request):
+        raw = await read_body(request, 8192)
+        await authorize(request, pubkey, raw)
+        try:
+            body = WalletProofRequest.model_validate_json(raw)
+        except ValidationError:
+            raise HTTPException(400, "Invalid browser wallet proof.")
+        return await browser_wallet.finish(pubkey, operation_id, body)
+
+    @app.post("/api/profiles/{pubkey}/wallet/operations/{operation_id}/discard")
+    async def wallet_discard(pubkey: str, operation_id: str, request: Request):
+        raw = await read_body(request, 0)
+        await authorize(request, pubkey, raw)
+        await browser_wallet.discard(pubkey, operation_id)
+        return {"discarded": True}
+
+    @app.post("/api/profiles/{pubkey}/wallet/operations/{operation_id}/publish")
+    async def wallet_publish(pubkey: str, operation_id: str, request: Request):
+        raw = await read_body(request, 40000)
+        await authorize(request, pubkey, raw)
+        try:
+            body = PublishRequest.model_validate_json(raw)
+        except ValidationError:
+            raise HTTPException(400, "Invalid encrypted NFT publication.")
+        return await browser_wallet.publish(pubkey, operation_id, body)
+
+    @app.post("/api/profiles/{pubkey}/wallet/recover")
+    async def wallet_recover(pubkey: str, request: Request):
+        raw = await read_body(request, 0)
+        await authorize(request, pubkey, raw)
+        return await browser_wallet.recover(pubkey)
+
+    @app.post("/api/profiles/{pubkey}/wallet/cards/{card_id}/ready")
+    async def wallet_ready(pubkey: str, card_id: str, request: Request):
+        raw = await read_body(request, 0)
+        await authorize(request, pubkey, raw)
+        async with portfolio.db.get_connection(locks=CARD_LOCKS) as conn:
+            await portfolio.reconcile(conn, pubkey)
+            row = await portfolio.owned_card(conn, pubkey, card_id)
+            if not row["encrypted_credential"]:
+                raise HTTPException(
+                    409, "Move this NFT into your browser wallet first."
+                )
+            await conn.execute(
+                "UPDATE portfolio_cards SET status='ready' WHERE id=:id",
+                {"id": card_id},
+            )
+            return portfolio.public_card({**row, "status": "ready"})
 
     @app.get("/api/images/{h}.jpg")
     async def image(h: str):

@@ -6,6 +6,7 @@ import { readFileSync } from 'node:fs';
 import { bytesToHex, hexToBytes, newPrivateKey, parseShowing, signClaim, profileKey, verifyCard } from '../src/crypto.mjs';
 
 const fx = JSON.parse(readFileSync(new URL('./fixtures/showings.json', import.meta.url)));
+const blind = JSON.parse(readFileSync(new URL('./fixtures/blind-showing.json', import.meta.url)));
 const ORDER = 52435875175126190479447740508185965837690552500527637822603658699938581184513n;
 
 function withPresentation(card, offset, bytes) {
@@ -21,6 +22,12 @@ test('accepts a Python-generated showing with a valid profile signature', () => 
   const r = reason(fx.owned);
   assert.equal(r.valid, true, r.reason);
   assert.match(r.nullifier, /^[0-9a-f]{96}$/);
+});
+
+test('accepts an unblinded issuance credential through the existing public verifier', () => {
+  const result = verifyCard(blind.card, blind.card.pubkey, blind.config);
+  assert.equal(result.valid, true, result.reason);
+  assert.match(result.nullifier, /^[0-9a-f]{96}$/);
 });
 
 test('accepts a historical (spent) showing; spent status comes from the mint', () => {

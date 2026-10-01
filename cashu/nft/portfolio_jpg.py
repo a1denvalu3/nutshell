@@ -14,6 +14,8 @@ MAX_PIXELS = 25_000_000
 def validate_jpg(data: bytes) -> None:
     if not data.startswith(b"\xff\xd8"):
         raise ValueError("Only JPG files are supported.")
+    if not data.endswith(b"\xff\xd9"):
+        raise ValueError("This JPG is truncated or has bytes after its end marker.")
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)

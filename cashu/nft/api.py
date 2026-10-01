@@ -7,7 +7,8 @@ directly for experiments:
 
 All cryptographic objects cross the wire as hex of their canonical
 encodings from cashu/core/crypto/ps.py. Asset hashes are computed
-client-side: the mint only ever sees h, never the asset bytes.
+client-side. Blind issuance reveals a deterministic duplicate tag rather
+than h; the legacy clear-h endpoints remain available for compatibility.
 """
 
 from typing import List, Optional
@@ -47,6 +48,19 @@ class MintRequest(BaseModel):
 
 class MintQuoteRequest(BaseModel):
     asset_hash: str
+
+
+class BlindMintQuoteRequest(BaseModel):
+    asset_tag: str
+
+
+class BlindMintRequest(BaseModel):
+    session: str
+    asset_tag: str
+    b: str
+    owner_commitment: str
+    proof: str  # LinearProof over h, t and s
+    quote: Optional[str] = None
 
 
 class DevPayRequest(BaseModel):
@@ -146,6 +160,8 @@ def create_router(ledger: PSLedger) -> APIRouter:
         return {
             "keyset_id": ledger.keyset.keyset_id,
             "public_key": ledger.keyset.to_bytes().hex(),
+            "blind_issuance": True,
+            "duplicate_detection": "public_asset_tag_v1",
             "payment_required": ledger.quote_backend is not None,
             "mint_price_sats": ledger.quote_backend.price_sats
             if ledger.quote_backend
@@ -183,6 +199,40 @@ def create_router(ledger: PSLedger) -> APIRouter:
                 h=_parse_scalar(req.asset_hash),
                 S=_parse_g1(req.owner_commitment),
                 pok=_parse_proof(req.proof),
+                quote=req.quote,
+            )
+        except NFTError as e:
+            raise _http_error(e)
+        return IssueResponse(
+            u=u.format().hex(), v=v.format().hex(), keyset_id=ledger.keyset.keyset_id
+        )
+
+    @router.post("/mint/private/quote")
+    async def blind_mint_quote(req: BlindMintQuoteRequest):
+        try:
+            return await ledger.create_blind_quote(_parse_g1(req.asset_tag))
+        except NFTError as e:
+            raise _http_error(e)
+
+    @router.post("/mint/private/begin")
+    async def blind_mint_begin():
+        return await ledger.issue_nft_begin()
+
+    @router.post("/mint/private", response_model=IssueResponse)
+    async def blind_mint(req: BlindMintRequest):
+        try:
+            session = bytes.fromhex(req.session)
+        except ValueError:
+            raise HTTPException(400, "issuance session must be hex")
+        if len(session) != 16 or req.session != session.hex():
+            raise HTTPException(400, "issuance session must be 32 lowercase hex chars")
+        try:
+            u, v = await ledger.issue_nft_blind(
+                session=req.session,
+                tag=_parse_g1(req.asset_tag),
+                B=_parse_g1(req.b),
+                S=_parse_g1(req.owner_commitment),
+                proof=_parse_linear_proof(req.proof),
                 quote=req.quote,
             )
         except NFTError as e:
@@ -277,8 +327,7 @@ def create_router(ledger: PSLedger) -> APIRouter:
         states = await ledger.check_nullifiers(nullifiers)
         return {
             "states": [
-                {"nullifier": n.hex(), "state": s}
-                for n, s in zip(nullifiers, states)
+                {"nullifier": n.hex(), "state": s} for n, s in zip(nullifiers, states)
             ]
         }
 

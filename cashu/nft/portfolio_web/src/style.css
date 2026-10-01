@@ -352,3 +352,11 @@ button:disabled { cursor: not-allowed; opacity: .5; }
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
   .hero-card-main, .hero-card-back { animation: none; }
 }
+
+.wallet-panel { display:flex; align-items:center; gap:18px; padding:20px 24px; margin:24px 0 32px; border:1px solid rgba(208,255,134,.28); border-radius:18px; background:linear-gradient(115deg,rgba(196,255,122,.09),rgba(153,118,255,.07)); box-shadow:inset 0 1px rgba(255,255,255,.05); }
+.wallet-panel-icon { display:grid; place-items:center; width:46px; height:46px; flex-shrink:0; border-radius:13px; color:#d0ff86; background:rgba(208,255,134,.1); }
+.wallet-panel strong { font-size:15px; }
+.wallet-panel p { margin:6px 0 0; color:#b7b3c7; font-size:13px; line-height:1.5; }
+.wallet-panel > div { flex:1; min-width:0; }
+.wallet-needs-attention { border-color:rgba(255,178,124,.5); }
+@media(max-width:640px) { .wallet-panel { flex-wrap:wrap; padding:18px; gap:12px; } .wallet-panel .button { width:100%; } }

@@ -152,6 +152,8 @@ def nft_quote(ctx: click.Context, file: str):
     with open(file, "rb") as f:
         asset = f.read()
     quote = client.mint_quote(asset)
+    wallet = _open_wallet(ctx.obj["NFT_WALLET_DB"])
+    wallet.remember_quote(quote["quote"], int(quote["asset_hash"], 16))
     print(f"quote:  {quote['quote']}")
     print(f"asset:  {quote['asset_hash']}")
     print(f"amount: {quote['amount']} sat")
@@ -205,15 +207,39 @@ def nft_mint(
         if not quote_id:
             raise click.UsageError(
                 "give a file to mint, or --quote to mint from a settled quote "
-                "(the mint already knows the asset hash for the quote)"
+                "(the wallet keeps the asset hash for blind quotes)"
             )
         quote = client.get_quote(quote_id)
+        h = wallet.quote_hash(quote_id)
+        if h is None and "asset_hash" in quote:
+            h = int(quote["asset_hash"], 16)
+        if h is None:
+            raise click.UsageError(
+                "the hash for this blind quote is not in this wallet; supply the file"
+            )
         cred = client.mint_h(
             wallet,
-            int(quote["asset_hash"], 16),
+            h,
             quote=quote_id,
             description=description,
         )
+    print(f"minted: {cred.h.to_bytes(32, 'big').hex()}")
+
+
+@nft.command(
+    "retry-mint", help="Recover a pending blind issuance after a lost response."
+)
+@click.argument("session", required=False)
+@click.pass_context
+@_cli_errors
+def nft_retry_mint(ctx: click.Context, session: Optional[str]):
+    client = _make_client(ctx.obj["NFT_MINT_URL"])
+    wallet = _open_wallet(ctx.obj["NFT_WALLET_DB"])
+    if session is None:
+        for pending in wallet.pending_mint_sessions(client.keyset_id):
+            print(f"pending: {pending}")
+        return
+    cred = client.retry_mint(wallet, session)
     print(f"minted: {cred.h.to_bytes(32, 'big').hex()}")
 
 

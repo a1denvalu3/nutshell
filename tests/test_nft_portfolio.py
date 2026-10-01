@@ -1,17 +1,33 @@
-"""Tests for the custodial JPG portfolio app (cashu/nft/portfolio.py)."""
+"""Tests for the encrypted browser JPG portfolio app (cashu/nft/portfolio.py)."""
 
 import hashlib
 import io
+import json
 import secrets
 import time
-from typing import Iterator, Optional
+from typing import Dict, Iterator, Optional
 
+import httpx
 import pytest
 from coincurve import PrivateKey, PublicKeyXOnly
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from fastapi.testclient import TestClient
 from PIL import Image
 
-from cashu.core.crypto.ps import hash_asset, present, prove_owner_secret
+from cashu.core.crypto.bls import PublicKey, curve_order
+from cashu.core.crypto.ps import (
+    G_NULL,
+    Credential,
+    MintPublicKeyPS,
+    blind_issue_commit,
+    blind_transfer_commit,
+    hash_asset,
+    present,
+    present_private,
+    present_showing,
+    prove_owner_secret,
+    unblind_issued,
+)
 from cashu.nft.imgmeta import embed_token, extract_token
 from cashu.nft.portfolio import (
     auth_message,
@@ -56,6 +72,7 @@ class Profile:
     def __init__(self, client: TestClient, secret: Optional[bytes] = None):
         self.client = client
         self.secret = secret or secrets.token_bytes(32)
+        self.credentials: Dict[str, Credential] = {}
         self.key = PrivateKey(self.secret)
         self.pubkey = PublicKeyXOnly.from_secret(self.secret).format().hex()
 
@@ -105,8 +122,122 @@ class Profile:
         assert resp.status_code == 200, resp.text
         return resp.json()
 
+    def json_post(self, path, value):
+        return self.post(path, json.dumps(value).encode())
+
+    def prepare(self, kind, jpg=b"", title="Art", card_id=None):
+        suffix = f"&card_id={card_id}" if card_id else ""
+        return self.post(
+            f"{self.base}/wallet/prepare?kind={kind}&title={title}{suffix}", jpg
+        )
+
+    def encrypt(self, value):
+        nonce = secrets.token_bytes(12)
+        ciphertext = AESGCM(hashlib.sha256(self.secret).digest()).encrypt(
+            nonce, json.dumps(value).encode(), None
+        )
+        return {"version": 1, "nonce": nonce.hex(), "ciphertext": ciphertext.hex()}
+
+    def finish(self, stage, s, t, u, request):
+        root = f"{self.base}/wallet/operations/{stage['id']}"
+        backup = self.json_post(
+            root + "/backup", self.encrypt({"s": s, "t": t, "request": request})
+        )
+        assert backup.status_code == 200, backup.text
+        response = self.json_post(root + "/finish", request)
+        if response.status_code != 200:
+            return response
+        config = self.client.get("/api/config").json()
+        keyset = MintPublicKeyPS.from_bytes(bytes.fromhex(config["public_key"]))
+        raw = response.json()
+        cred = Credential(
+            u,
+            unblind_issued(
+                PublicKey(compressed=bytes.fromhex(raw["v"]), group="G1"), t, keyset
+            ),
+            int(stage["h"], 16),
+            s,
+            keyset.keyset_id,
+        )
+        context = f"Cashu_NFT_Portfolio_Show_v1\n{self.pubkey}\n{stage['h']}\n{keyset.keyset_id}".encode()
+        showing = (
+            "pshow1"
+            + (
+                len(context).to_bytes(2, "big")
+                + context
+                + present_showing(cred, context).to_bytes()
+            ).hex()
+        )
+        published = self.json_post(
+            root + "/publish",
+            {
+                "encrypted_credential": self.encrypt(
+                    {"credential": cred.to_bytes().hex()}
+                ),
+                "showing": showing,
+                "signature": self.key.sign_schnorr(claim_digest(showing)).hex(),
+            },
+        )
+        if published.status_code == 200:
+            self.credentials[published.json()["id"]] = cred
+        return published
+
     def mint(self, jpg: bytes, title: str = "Art"):
-        return self.post(f"{self.base}/mint?title={title}", jpg)
+        response = self.prepare("mint", jpg, title)
+        if response.status_code != 200:
+            return response
+        stage = response.json()
+        config = self.client.get("/api/config").json()
+        keyset = MintPublicKeyPS.from_bytes(bytes.fromhex(config["public_key"]))
+        s = secrets.randbelow(curve_order - 1) + 1
+        u = PublicKey(compressed=bytes.fromhex(stage["begin"]["u"]), group="G1")
+        D, B, t, proof = blind_issue_commit(
+            keyset, int(stage["h"], 16), s, u, bytes.fromhex(stage["id"])
+        )
+        S, _ = prove_owner_secret(s)
+        return self.finish(
+            stage,
+            s,
+            t,
+            u,
+            {
+                "session": stage["id"],
+                "asset_tag": D.format().hex(),
+                "b": B.format().hex(),
+                "owner_commitment": S.format().hex(),
+                "proof": proof.to_bytes().hex(),
+            },
+        )
+
+    def swap(self, stage, cred):
+        begin = self.client.post(
+            "/v1/nft/transfer/private/begin",
+            json={"nullifier": (G_NULL * cred.s).format().hex()},
+        )
+        if begin.status_code != 200:
+            return begin
+        config = self.client.get("/api/config").json()
+        keyset = MintPublicKeyPS.from_bytes(bytes.fromhex(config["public_key"]))
+        s = secrets.randbelow(curve_order - 1) + 1
+        S, owner_proof = prove_owner_secret(s)
+        pres, o = present_private(keyset, cred, binding=S.format())
+        u = PublicKey(compressed=bytes.fromhex(begin.json()["u"]), group="G1")
+        B, t, proof = blind_transfer_commit(
+            keyset, cred.h, o, pres.kappa_h, u, binding=S.format()
+        )
+        return self.finish(
+            stage,
+            s,
+            t,
+            u,
+            {
+                "presentation": pres.to_bytes().hex(),
+                "b": B.format().hex(),
+                "proof": proof.to_bytes().hex(),
+                "new_owner_commitment": S.format().hex(),
+                "new_proof": owner_proof.to_bytes().hex(),
+            },
+        )
 
     def claim(self, card: dict):
         body = (
@@ -119,13 +250,49 @@ class Profile:
         return self.post(f"{self.base}/cards/{card['id']}/claim", body)
 
     def export(self, card_id: str):
-        return self.post(f"{self.base}/cards/{card_id}/export")
+        response = self.post(f"{self.base}/wallet/cards/{card_id}/ready")
+        if response.status_code != 200:
+            return response
+        card = response.json()
+        jpg = self.client.get(f"/api/images/{card['h']}.jpg").content
+        return httpx.Response(
+            200,
+            content=embed_token(
+                jpg, TOKEN_PREFIX + self.credentials[card_id].to_bytes().hex()
+            ),
+            headers={"content-type": "image/jpeg"},
+        )
 
     def cancel(self, card_id: str):
-        return self.post(f"{self.base}/cards/{card_id}/cancel")
+        response = self.prepare("rotate", card_id=card_id)
+        return (
+            self.swap(response.json(), self.credentials[card_id])
+            if response.status_code == 200
+            else response
+        )
 
     def receive(self, jpg: bytes, title: str = "Got"):
-        return self.post(f"{self.base}/receive?title={title}", jpg)
+        try:
+            clean, token = split_transfer_jpg(jpg)
+            if token is None:
+                raise ValueError("No transfer token")
+            cred = NFTClient.decode_token(token)
+            if cred.h != hash_asset(clean):
+                raise ValueError("Wrong JPG. Nothing was redeemed")
+        except ValueError as error:
+            return httpx.Response(400, json={"detail": str(error)})
+        state = self.client.post(
+            "/v1/nft/checkstate",
+            json={"nullifiers": [(G_NULL * cred.s).format().hex()]},
+        ).json()
+        if state["states"][0]["state"] != "UNSPENT":
+            return httpx.Response(409, json={"detail": "Already spent"})
+        response = self.prepare("receive", clean, title)
+        return (
+            self.swap(response.json(), cred)
+            if response.status_code == 200
+            else response
+        )
 
     def get(self) -> dict:
         resp = self.client.get(self.base)
@@ -257,7 +424,7 @@ def test_claim_requires_matching_profile_signature(client):
     alice = Profile(client)
     alice.create()
     card = minted_card(alice)
-    assert alice.export(card["id"]).status_code == 409  # not yet claimed
+    assert card["signature"]  # browser signs before publishing
     bad_sig = (
         PrivateKey(secrets.token_bytes(32))
         .sign_schnorr(claim_digest(card["showing"]))
@@ -295,6 +462,7 @@ def test_public_endpoints_never_expose_credentials(client):
             "status",
             "created",
             "sent",
+            "custody",
         }
     image = client.get(f"/api/images/{card['h']}.jpg")
     assert image.status_code == 200
@@ -506,7 +674,7 @@ def test_cancel_invalidates_exported_jpg(client):
     resp = alice.cancel(card["id"])
     assert resp.status_code == 200, resp.text
     cancelled = resp.json()
-    assert cancelled["status"] == "owned" and cancelled["signature"] is None
+    assert cancelled["status"] == "owned" and cancelled["signature"] is not None
     assert cancelled["showing"] != card["showing"]
     assert alice.cancel(card["id"]).status_code == 409
 
@@ -627,3 +795,120 @@ def test_restart_persistence(tmp_path):
         assert bob.receive(transfer).status_code == 200
     with TestClient(create_portfolio_app(str(tmp_path / "other"))) as client:
         assert client.get("/api/config").json()["keyset_id"] != keyset
+
+
+def test_new_cards_persist_only_encrypted_credentials(client):
+    alice = Profile(client)
+    alice.create()
+    card = minted_card(alice)
+    rows = client.portal.call(
+        client.app.state.portfolio.db.fetchall, "SELECT * FROM portfolio_cards"
+    )
+    assert rows[0]["credential"] is None
+    assert rows[0]["encrypted_credential"]
+    raw = alice.credentials[card["id"]].to_bytes().hex()
+    assert raw not in rows[0]["encrypted_credential"]
+    assert card["custody"] == "browser"
+    assert "encrypted_credential" not in card
+    backups = alice.post(alice.base + "/wallet/recover").json()
+    assert backups["cards"][0]["id"] == card["id"]
+    assert backups["operations"] == []
+    bob = Profile(client)
+    bob.create()
+    assert bob.post(bob.base + "/wallet/recover").json()["cards"] == []
+
+
+def test_interrupted_publication_recovers_exact_issued_response(client, monkeypatch):
+    alice = Profile(client)
+    alice.create()
+    original = alice.json_post
+    saved = {}
+
+    def interrupt(path, body):
+        if path.endswith("/finish"):
+            saved["finish_path"], saved["finish_body"] = path, body
+            response = original(path, body)
+            saved["response"] = response.json()
+            return response
+        if path.endswith("/publish"):
+            saved["publish_path"], saved["publish_body"] = path, body
+            return httpx.Response(503, json={"detail": "simulated connection loss"})
+        return original(path, body)
+
+    monkeypatch.setattr(alice, "json_post", interrupt)
+    assert alice.mint(make_jpg()).status_code == 503
+    assert alice.get()["cards"] == []
+    backups = alice.post(alice.base + "/wallet/recover").json()
+    assert len(backups["operations"]) == 1
+    assert backups["operations"][0]["state"] == "issued"
+    root = saved["finish_path"].removesuffix("/finish")
+    assert alice.post(root + "/discard").status_code == 409
+    retry = original(saved["finish_path"], saved["finish_body"])
+    assert retry.json() == saved["response"]
+    altered = {**saved["finish_body"], "proof": "00" * 128}
+    assert original(saved["finish_path"], altered).status_code == 409
+    published = original(saved["publish_path"], saved["publish_body"])
+    assert published.status_code == 200
+    assert (
+        original(saved["publish_path"], saved["publish_body"]).json()
+        == published.json()
+    )
+    assert alice.post(alice.base + "/wallet/recover").json()["operations"] == []
+
+
+def test_legacy_migration_rotates_away_backend_known_secret(client):
+    alice = Profile(client)
+    alice.create()
+    portfolio = client.app.state.portfolio
+    legacy = client.portal.call(portfolio.mint, alice.pubkey, make_jpg(), "Legacy")
+    stage = alice.prepare("migrate", card_id=legacy["id"])
+    assert stage.status_code == 200
+    old = NFTClient.decode_token(stage.json()["legacy_token"])
+    migrated = alice.swap(stage.json(), old)
+    assert migrated.status_code == 200, migrated.text
+    assert migrated.json()["id"] == legacy["id"]
+    assert migrated.json()["custody"] == "browser"
+    assert migrated.json()["signature"]
+    states = client.post(
+        "/v1/nft/checkstate", json={"nullifiers": [(G_NULL * old.s).format().hex()]}
+    ).json()
+    assert states["states"][0]["state"] == "SPENT"
+    rows = client.portal.call(portfolio.db.fetchall, "SELECT * FROM portfolio_cards")
+    assert len(rows) == 1 and rows[0]["credential"] is None
+    assert alice.prepare("migrate", card_id=legacy["id"]).status_code == 409
+
+
+def test_server_refuses_transfer_tokens_and_custodial_wallet_routes(client):
+    alice = Profile(client)
+    alice.create()
+    card, transfer = exported(alice)
+    assert alice.prepare("receive", transfer).status_code == 400
+    for suffix in (
+        "mint",
+        "receive",
+        f"cards/{card['id']}/export",
+        f"cards/{card['id']}/cancel",
+    ):
+        assert alice.post(alice.base + "/" + suffix).status_code == 410
+
+
+def test_proofs_require_encrypted_backup_and_operation_owner(client):
+    alice, bob = Profile(client), Profile(client)
+    alice.create()
+    bob.create()
+    stage = alice.prepare("mint", make_jpg()).json()
+    path = "/wallet/operations/" + stage["id"]
+    proof = {"b": "invalid", "proof": "invalid"}
+    assert alice.json_post(alice.base + path + "/finish", proof).status_code == 409
+    assert alice.post(alice.base + path + "/discard").status_code == 200
+    assert alice.json_post(alice.base + path + "/finish", proof).status_code == 404
+    stage = alice.prepare("mint", make_jpg()).json()
+    path = "/wallet/operations/" + stage["id"]
+    envelope = alice.encrypt({"recovery": "data"})
+    assert bob.json_post(bob.base + path + "/backup", envelope).status_code == 404
+    assert (
+        alice.json_post(
+            alice.base + path + "/backup", {**envelope, "s": "secret"}
+        ).status_code
+        == 400
+    )

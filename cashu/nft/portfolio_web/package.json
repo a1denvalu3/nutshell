@@ -2,13 +2,20 @@
   "name": "cashu-nft-portfolio",
   "private": true,
   "type": "module",
+  "overrides": {
+    "@cashu/cashu-ts": "$@cashu/cashu-ts"
+  },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "test": "node --test tests/*.test.mjs"
+    "test": "node --import tsx --test tests/*.test.mjs",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@base-ui/react": "^1.8.0",
+    "@cashu/cashu-ts": "5.0.0-rc.11",
+    "@cashu/coco-core": "2.0.0",
+    "@cashu/coco-indexeddb": "2.0.0",
     "@fontsource/manrope": "^5.3.0",
     "@fontsource/unbounded": "^5.3.0",
     "@noble/curves": "^2.4.0",
@@ -21,6 +28,9 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.7.0",
+    "fake-indexeddb": "6.2.4",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
     "vite": "^6.4.3"
   }
 }
