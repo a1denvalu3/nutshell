@@ -55,7 +55,7 @@ function readRoute() {
   const listing = path.match(/^\/market\/([0-9a-f]{32})\/?$/);
   if (listing) return { page: 'listing', id: listing[1], offer: params.get('offer') === '1' };
   if (/^\/wallet\/?$/.test(path)) return { page: 'wallet', then: safeReturn(params.get('then')) };
-  if (/^\/offers\/?$/.test(path)) return { page: 'offers', tab: ['received', 'made'].includes(params.get('tab')) ? params.get('tab') : null };
+  if (/^\/offers\/?$/.test(path)) return { page: 'offers', tab: ['received', 'made'].includes(params.get('tab')) ? params.get('tab') : null, offer: /^[0-9a-f]{32}$/.test(params.get('offer') || '') ? params.get('offer') : null };
   const claim = path.match(/^\/claim\/([0-9a-f]{32})\/?$/);
   if (claim) return { page: 'claim', id: claim[1] };
   return { page: 'home' };
@@ -631,7 +631,7 @@ function App() {
 
       : route.page === 'wallet' ? (identity ? <WalletPage market={market} navigate={navigate} then={route.then} /> : <SignInFirst onStart={openCreate} />)
 
-      : route.page === 'offers' ? (identity ? <OffersPage navigate={navigate} market={market} nftWallet={localWallet} cards={myCards} initialTab={route.tab} /> : <SignInFirst onStart={openCreate} />)
+      : route.page === 'offers' ? (identity ? <OffersPage navigate={navigate} market={market} nftWallet={localWallet} cards={myCards} initialTab={route.tab} focus={route.offer} /> : <SignInFirst onStart={openCreate} />)
 
       : route.page === 'how' ? <HowItWorks view={route.view} onStart={() => identity ? navigate(`/p/${identity.pubkey}`) : openCreate()}
         onView={(view) => { window.history.replaceState({}, '', view === 'cryptography' ? '/how-it-works?view=cryptography' : '/how-it-works'); setRoute(readRoute()); }} />

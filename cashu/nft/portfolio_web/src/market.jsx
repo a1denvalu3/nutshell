@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
-import { ArrowLeft, Clock, Coins, Search, Store, Tag, Wallet, Zap } from 'lucide-react';
+import { ChevronRight, Clock, Coins, Search, Store, Tag, Wallet, Zap } from 'lucide-react';
 import { getJSON } from './api.mjs';
 import { BackButton, Button, CheckRow, HoldButton, Identicon, Modal, Notice, Spinner, Tilt, panel, short, useTint } from './ui.jsx';
 import { Segmented, ago, imageUrl } from './social.jsx';
@@ -211,15 +211,16 @@ export function ListingPage({ id, navigate, identity, market, onStart, startOffe
         {step === 'info' && <motion.div key="info" className="detail-panel" {...panel}>
           <div className="detail-head"><span className={`badge ${open ? 'badge-good' : 'badge-warn'}`}>{open ? 'For sale' : listing.state === 'reserved' ? 'Sale in progress' : 'Not for sale'}</span><h2>{listing.title}</h2></div>
           <Price value={listing.price} big />
+          {mine && <ListingOffers listing={listing} market={market} navigate={navigate} />}
           <dl className="props">
             <div><dt>Seller</dt><dd><button className="who" onClick={() => navigate(`/p/${listing.seller}`)}><Identicon pubkey={listing.seller} size={22} /><span>{listing.seller_name || short(listing.seller)}</span></button></dd></div>
             <div><dt>Listed</dt><dd>{ago(listing.updated)}</dd></div>
           </dl>
-          <ul className="send-facts">
+          {!mine && <ul className="send-facts">
             <li><span className="mono">01</span>You pay now. The ecash is locked to this sale and can only go to the seller if they deliver this NFT to you.</li>
             <li><span className="mono">02</span>You can close the tab once the offer is funded. If it isn’t accepted, the money returns to you after the deadline.</li>
-          </ul>
-          {mine ? <Notice>This is your listing. Manage it from the NFT in your collection.</Notice>
+          </ul>}
+          {mine ? null
             : !identity ? <Button variant="primary" size="lg" className="full" onClick={onStart}>Start a collection to make an offer</Button>
               : <Button variant="primary" size="lg" className="full" icon={<Coins size={16} />} disabled={!open || market.state !== 'ready'} onClick={() => setStep('offer')}>Make an offer</Button>}
           {identity && !mine && market.state === 'elsewhere' && <p className="hint">Your wallet is open on another device. Open Wallet to use it here.</p>}
@@ -259,6 +260,50 @@ export function ListingPage({ id, navigate, identity, market, onStart, startOffe
       </AnimatePresence></div>
     </div>
   </main>;
+}
+
+/* ---------- offers on the seller's own listing ---------- */
+
+const STATUS = { funded: ['Waiting for you', 'warn'], accepted: ['Accepted', 'good'], declined: ['Declined', ''], superseded: ['Another offer won', ''], closed: ['Closed', ''] };
+const rank = (o) => (o.disposition === 'funded' ? 0 : o.disposition === 'accepted' ? 1 : 2);
+
+function ListingOffers({ listing, market, navigate }) {
+  const [offers, setOffers] = useState(null);
+  useEffect(() => {
+    if (!market.money) return;
+    market.money.api.offers()
+      .then((all) => setOffers(all.filter((o) => o.listing_id === listing.id && o.role === 'seller').sort((a, b) => rank(a) - rank(b) || b.price - a.price)))
+      .catch(() => setOffers([]));
+  }, [market.money, market.version, listing.id]);
+  const waiting = offers?.filter((o) => o.disposition === 'funded').length ?? 0;
+  const open = (o) => navigate(`/offers?tab=received&offer=${o.id}`);
+  return <section className="listing-offers">
+    <header className="row-between">
+      <h3>Offers {offers?.length ? <span className="tab-count">{offers.length}</span> : null}</h3>
+      {offers?.length ? <Button size="sm" variant="secondary" onClick={() => navigate('/offers?tab=received')}>All offers</Button> : null}
+    </header>
+    {!offers ? <div className="feed-loading"><Spinner /> Loading offers…</div>
+      : !offers.length ? <p className="muted">No offers yet. New offers appear here and in your inbox.</p>
+        : <>
+          {waiting > 0 && <p className="listing-offers-lead">{waiting === 1 ? '1 offer is waiting for your review.' : `${waiting} offers are waiting for your review.`}</p>}
+          <ul className="listing-offer-list">{offers.slice(0, 5).map((o, i) => <motion.li key={o.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}>
+            <button className={`listing-offer ${o.disposition === 'funded' ? 'is-open' : ''}`} onClick={() => open(o)}>
+              <Identicon pubkey={o.buyer} size={30} />
+              <span className="listing-offer-main">
+                <strong className="ellipsis">{o.buyer_name || short(o.buyer)}</strong>
+                <span className="muted small ellipsis">{host(o.mint)}{o.disposition === 'funded' ? ` · accept by ${when(o.accept_deadline)}` : ''}</span>
+              </span>
+              <span className="listing-offer-side">
+                <Price value={o.price} />
+                <span className="listing-offer-tags"><TestBadge on={o.test_value} />{STATUS[o.disposition] && <span className={`badge ${STATUS[o.disposition][1] ? 'badge-' + STATUS[o.disposition][1] : ''}`}>{STATUS[o.disposition][0]}</span>}</span>
+              </span>
+              <ChevronRight size={18} className="listing-offer-go" />
+            </button>
+          </motion.li>)}</ul>
+          {offers.length > 5 && <button className="link" onClick={() => navigate('/offers?tab=received')}>{offers.length - 5} more</button>}
+        </>}
+    <button className="link" onClick={() => navigate(`/p/${listing.seller}?nft=${listing.card_id}`)}>Edit price or unlist</button>
+  </section>;
 }
 
 /* ---------- seller controls on a card ---------- */
@@ -316,12 +361,24 @@ function Legs({ offer }) {
   })}</div>;
 }
 
-export function OffersPage({ navigate, market, nftWallet, cards, initialTab }) {
+export function OffersPage({ navigate, market, nftWallet, cards, initialTab, focus }) {
   const [tab, setTabState] = useState(initialTab), [offers, setOffers] = useState(null), [review, setReview] = useState(null);
+  const [highlight, setHighlight] = useState(null), focused = useRef(null);
   useEffect(() => { if (initialTab) setTabState(initialTab); }, [initialTab]);
   // Without an explicit tab, open the side with the most recent activity.
   useEffect(() => { if (!tab && offers) setTabState(offers[0]?.role === 'buyer' ? 'made' : 'received'); }, [tab, offers]);
   const setTab = (t) => { setTabState(t); window.history.replaceState({}, '', `/offers?tab=${t}`); };
+  // Deep link from a listing (?offer=<id>): open its review, or point at the row.
+  useEffect(() => {
+    if (!focus || !offers || focused.current === focus) return;
+    const o = offers.find((x) => x.id === focus);
+    if (!o) return;
+    focused.current = focus;
+    setTabState(o.role === 'seller' ? 'received' : 'made');
+    if (o.role === 'seller' && o.disposition === 'funded') setReview(o);
+    else { setHighlight(o.id); setTimeout(() => document.getElementById(`offer-${o.id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 300); }
+  }, [focus, offers]);
+  const closeReview = () => { setReview(null); if (focus) window.history.replaceState({}, '', `/offers?tab=${tab || 'received'}`); };
   const load = useCallback(async () => { if (market.money) setOffers(await market.money.api.offers()); }, [market.money]);
   useEffect(() => { load().catch((e) => toast.error(e.message)); }, [load, market.version]);
   const { markRead, unread } = market;
@@ -336,7 +393,7 @@ export function OffersPage({ navigate, market, nftWallet, cards, initialTab }) {
     {!offers || !tab ? <div className="feed-loading"><Spinner /> Loading offers…</div>
       : !shown.length ? <div className="empty"><strong>{tab === 'received' ? 'No offers yet' : 'You haven’t made any offers'}</strong><span className="muted">{tab === 'received' ? 'List an NFT and offers show up here.' : 'Offers you make on listed NFTs show up here.'}</span>
         <Button variant="secondary" onClick={() => navigate('/market')}>Go to market</Button></div>
-        : <ul className="offer-list">{shown.map((o, i) => <motion.li key={o.id} className="offer-row" initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(i, 10) * .03 }}>
+        : <ul className="offer-list">{shown.map((o, i) => <motion.li key={o.id} id={`offer-${o.id}`} className={`offer-row ${highlight === o.id ? 'is-focus' : ''}`} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(i, 10) * .03 }}>
           <img className="offer-thumb" src={imageUrl(o.h)} alt="" loading="lazy" />
           <div className="offer-main">
             <div className="row-between"><strong className="ellipsis">{o.title || 'NFT'}</strong><Price value={o.price} /></div>
@@ -346,7 +403,7 @@ export function OffersPage({ navigate, market, nftWallet, cards, initialTab }) {
           </div>
           {o.role === 'seller' && o.disposition === 'funded' && <Button variant="primary" size="sm" onClick={() => setReview(o)}>Review</Button>}
         </motion.li>)}</ul>}
-    <ReviewDialog offer={review} close={() => setReview(null)} market={market} nftWallet={nftWallet} cards={cards} onDone={() => { setReview(null); load(); market.bump(); }} />
+    <ReviewDialog offer={review} close={closeReview} market={market} nftWallet={nftWallet} cards={cards} onDone={() => { closeReview(); load(); market.bump(); }} />
   </main>;
 }
 

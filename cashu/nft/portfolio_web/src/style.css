@@ -781,3 +781,28 @@ main.page > .back { margin-bottom: 20px; }
   .footer-inner .brand, .footer-inner .muted { flex-basis: 100%; }
   .footer-inner .nav-link { height: auto; padding: 0; border: 0; white-space: nowrap; }
 }
+
+/* Hold-to-confirm is always the primary action. */
+.hold, .pending-box .hold { background: var(--lime); color: #111; border-color: #111; }
+.hold:disabled { opacity: .45; }
+
+/* Offers on the seller's own listing */
+.listing-offers { display: flex; flex-direction: column; gap: 12px; padding: 18px; border: 2px solid var(--ink); border-radius: 20px; background: var(--paper); box-shadow: var(--shadow); }
+.listing-offers h3 { display: flex; align-items: center; gap: 8px; font-size: 22px; }
+.listing-offers-lead { font-weight: 700; }
+.listing-offer-list { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 8px; }
+.listing-offer { display: grid; grid-template-columns: auto minmax(0, 1fr) auto auto; align-items: center; gap: 12px; width: 100%; padding: 10px 12px; text-align: left; border: 2px solid var(--ink); border-radius: 14px; background: var(--bg); transition: transform .15s var(--ease), box-shadow .15s var(--ease), background .15s; }
+.listing-offer.is-open { background: color-mix(in srgb, var(--yellow) 30%, var(--paper)); }
+.listing-offer:hover { transform: translate(-1px, -1px); box-shadow: 3px 3px 0 var(--ink); }
+.listing-offer .identicon { border-radius: 50%; border: 1.5px solid var(--ink); }
+.listing-offer-main { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.listing-offer-side { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.listing-offer-tags { display: flex; gap: 4px; }
+.listing-offer-go { color: var(--muted); transition: transform .2s var(--pop); }
+.listing-offer:hover .listing-offer-go { transform: translateX(3px); color: var(--text); }
+.listing-offers .link { align-self: flex-start; }
+.offer-row.is-focus { box-shadow: 0 0 0 4px var(--lime), var(--shadow); }
+@media (max-width: 640px) {
+  .listing-offer { grid-template-columns: auto minmax(0, 1fr) auto; }
+  .listing-offer-go { display: none; }
+}
