@@ -753,6 +753,7 @@ def create_portfolio_app(
         )
 
     @app.get("/")
+    @app.get("/how-it-works")
     @app.get("/p/{pubkey}")
     async def frontend(pubkey: Optional[str] = None):
         if pubkey is not None:
