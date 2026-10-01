@@ -567,7 +567,7 @@ function App() {
           {identity
             ? <Menu.Root>
               <Menu.Trigger className="profile-pill"><Identicon pubkey={identity.pubkey} size={24} /><span>My collection</span></Menu.Trigger>
-              <Menu.Portal><Menu.Positioner sideOffset={6} align="end"><Menu.Popup className="menu">
+              <Menu.Portal><Menu.Positioner className="menu-layer" sideOffset={6} align="end"><Menu.Popup className="menu">
                 <Menu.Item className="menu-item" onClick={() => navigate(`/p/${identity.pubkey}`)}><ArrowRight size={15} />Open my collection</Menu.Item>
                 <Menu.Item className="menu-item" onClick={openCreate} disabled={!config}><Plus size={15} />Start another collection</Menu.Item>
                 <Menu.Item className="menu-item" onClick={() => { setName(''); setDialog('import'); }}><KeyRound size={15} />Import a key</Menu.Item>
@@ -693,7 +693,7 @@ function App() {
               {owner && <Button variant="primary" icon={<Plus size={16} />} onClick={() => setDialog('add')} disabled={!canAdd}>Add JPG</Button>}
               {identity?.pubkey === pubkey && <Menu.Root>
                 <Menu.Trigger className="icon-btn icon-btn-bordered" aria-label="More actions"><Ellipsis size={17} /></Menu.Trigger>
-                <Menu.Portal><Menu.Positioner sideOffset={6} align="end"><Menu.Popup className="menu">
+                <Menu.Portal><Menu.Positioner className="menu-layer" sideOffset={6} align="end"><Menu.Popup className="menu">
                   <Menu.Item className="menu-item" onClick={() => setDialog('edit')} disabled={!profile}><Pencil size={15} />Edit name and cover</Menu.Item>
                   <Menu.Item className="menu-item" onClick={() => setVisitor((v) => !v)}>{visitor ? <EyeOff size={15} /> : <Eye size={15} />}{visitor ? 'Back to owner view' : 'View as visitor'}</Menu.Item>
                   <Menu.Item className="menu-item" onClick={() => setDialog('backup')}><KeyRound size={15} />Back up private key</Menu.Item>

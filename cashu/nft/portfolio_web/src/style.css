@@ -290,6 +290,8 @@ button.nft-card:hover .nft-media img, .is-preview:hover .nft-media svg { transfo
 .tab-underline { position: absolute; inset: 0; z-index: -1; border-radius: 999px; background: var(--lime); border: 2px solid #111; }
 
 /* Menu */
+/* Menus render in a portal at the end of <body>; keep them above page artwork (z 1–5) and the top bar (30), below dialogs (50). */
+.menu-layer { z-index: 40; }
 .menu { min-width: 230px; padding: 6px; border-radius: 16px; background: var(--paper); border: 2px solid var(--ink); box-shadow: var(--shadow); transform-origin: var(--transform-origin); transition: opacity .15s, transform .25s var(--pop); }
 .menu[data-starting-style], .menu[data-ending-style] { opacity: 0; transform: scale(.9) rotate(-2deg); }
 .menu-item { display: flex; align-items: center; gap: 10px; height: 40px; padding: 0 12px; border-radius: 10px; font-size: 14px; font-weight: 650; cursor: pointer; outline: none; transition: background .1s; }
