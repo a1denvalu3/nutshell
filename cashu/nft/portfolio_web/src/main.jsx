@@ -4,7 +4,7 @@ import { Menu } from '@base-ui/react/menu';
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import { Toaster, toast } from 'sonner';
 import { ArrowLeft, ArrowRight, Check, Download, Ellipsis, Eye, EyeOff, FileJson, ImageDown, KeyRound, Link2, Plus,
-  RefreshCw, RotateCcw, Send, ShieldX, Upload, Undo2 } from 'lucide-react';
+  Pencil, RefreshCw, RotateCcw, Send, ShieldX, Upload, Undo2 } from 'lucide-react';
 import '@fontsource-variable/inter';
 import '@fontsource-variable/bricolage-grotesque';
 import '@fontsource/jetbrains-mono/400.css';
@@ -15,6 +15,10 @@ import { checked, download, getJSON, signedRequest } from './api.mjs';
 import { Button, CheckRow, CopyChip, DrawnCheck, HoldButton, Identicon, Modal, Notice, PreviewArt, Spinner, StatusBadge,
   Tilt, copyText, date, identiconColor, panel, short, useTint, verdict } from './ui.jsx';
 import HowItWorks from './HowItWorks.jsx';
+import ClaimPage from './claim.jsx';
+import { linkUrl, newLinkId, sealLink } from './link.mjs';
+import { ActivityItem, ActivityList, ActivityPage, CollectionCard, EditCollectionDialog, ExplorePage, FollowButton, LikeButton, MarketCard,
+  NetworkDialog, Segmented, useRelations } from './social.jsx';
 
 const openWallet = (...args) => import('./wallet/index.ts').then((module) => module.openWallet(...args));
 const transferTools = () => Promise.all([import('./wallet/jpg.ts'), import('./wallet/ps.ts')]);
@@ -36,9 +40,15 @@ function initialIdentity() {
 const keepSame = (prev, next) => prev && JSON.stringify(prev) === JSON.stringify(next) ? prev : next;
 function routeKey() { return window.location.pathname.match(/^\/p\/([0-9a-f]{64})\/?$/)?.[1] || null; }
 function readRoute() {
+  const path = window.location.pathname, nft = new URLSearchParams(window.location.search).get('nft');
   const pubkey = routeKey();
-  if (pubkey) return { page: 'profile', pubkey };
-  if (/^\/how-it-works\/?$/.test(window.location.pathname)) return { page: 'how' };
+  if (pubkey) return { page: 'profile', pubkey, nft };
+  if (/^\/how-it-works\/?$/.test(path)) return { page: 'how' };
+  if (/^\/explore\/nfts\/?$/.test(path)) return { page: 'explore', tab: 'nfts' };
+  if (/^\/explore\/?$/.test(path)) return { page: 'explore', tab: 'collections' };
+  if (/^\/activity\/?$/.test(path)) return { page: 'activity' };
+  const claim = path.match(/^\/claim\/([0-9a-f]{32})\/?$/);
+  if (claim) return { page: 'claim', id: claim[1] };
   return { page: 'home' };
 }
 const imageUrl = (h) => `/api/images/${h}.jpg`;
@@ -127,7 +137,10 @@ function CardDetail({ card, result, owner, busy, config, canSend, onSend, onCanc
   const [view, setView] = useState('info');
   const [ack, setAck] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
-  useEffect(() => { setView('info'); setAck(false); setFlipped(false); setConfirmCancel(false); }, [card.id]);
+  const [method, setMethod] = useState('link'), [locked, setLocked] = useState(false);
+  const [password, setPassword] = useState(''), [repeat, setRepeat] = useState(''), [result2, setResult2] = useState(null);
+  const resetSend = () => { setAck(false); setPassword(''); setRepeat(''); setLocked(false); setMethod('link'); };
+  useEffect(() => { setView('info'); resetSend(); setResult2(null); setFlipped(false); setConfirmCancel(false); }, [card.id]);
   useEffect(() => { if (!confirmCancel) return; const t = setTimeout(() => setConfirmCancel(false), 4000); return () => clearTimeout(t); }, [confirmCancel]);
   const sent = card.status === 'sent', ready = card.status === 'ready';
   const v = verdict(result, ready);
@@ -135,7 +148,14 @@ function CardDetail({ card, result, owner, busy, config, canSend, onSend, onCanc
   const liveState = !result?.valid ? (result ? 'unknown' : 'pending') : result.state === 'UNSPENT' ? 'ok' : result.state === 'SPENT' ? 'fail' : 'unknown';
   const nullifier = (() => { try { return short(Array.from(parseShowing(card.showing).presentation.slice(209, 257), (b) => b.toString(16).padStart(2, '0')).join(''), 10, 8); } catch { return ''; } })();
 
-  const send = async () => { if (await onSend(card)) setView('sent'); };
+  const passwordOk = !locked || (password.length >= 6 && password === repeat);
+  const send = async () => {
+    const outcome = await onSend(card, { method, password: locked ? password : '' });
+    if (outcome) { setResult2(outcome); setView('sent'); setPassword(''); setRepeat(''); }
+  };
+  const share = async () => {
+    try { await navigator.share({ title: card.title, text: `I sent you "${card.title}" on Cashu NFT`, url: result2.url }); } catch { /* dismissed */ }
+  };
 
   return <div className="detail">
     <div className="detail-art">
@@ -178,9 +198,9 @@ function CardDetail({ card, result, owner, busy, config, canSend, onSend, onCanc
 
           {owner && !sent && ready && <div className="pending-box">
             <strong>Transfer pending</strong>
-            <p>A transfer JPG exists for this NFT. Whoever redeems it first becomes the owner. Cancel to void every copy.</p>
+            <p>A transfer link or JPG exists for this NFT. Whoever claims it first becomes the owner. Cancel to void every link and file.</p>
             <div className="row">
-              <Button variant="secondary" icon={<Download size={15} />} disabled={!!busy || !canSend} onClick={() => onSend(card)}>Download again</Button>
+              <Button variant="secondary" icon={<Send size={15} />} disabled={!!busy || !canSend} onClick={() => { resetSend(); setView('send'); }}>Send again</Button>
               <Button variant={confirmCancel ? 'danger' : 'secondary'} icon={<Undo2 size={15} />} disabled={!!busy}
                 onClick={() => { if (confirmCancel) { setConfirmCancel(false); onCancel(card); } else setConfirmCancel(true); }}>
                 {confirmCancel ? 'Confirm cancel' : 'Cancel transfer'}
@@ -200,27 +220,58 @@ function CardDetail({ card, result, owner, busy, config, canSend, onSend, onCanc
         {view === 'send' && <motion.div key="send" className="detail-panel" {...panel}>
           <button className="back" onClick={() => setView('info')} disabled={!!busy}><ArrowLeft size={14} /> Back</button>
           <h2>Send this NFT</h2>
-          <p className="muted">Sending creates a transfer JPG: this picture with its ownership credential inside. There is no recipient address. Whoever redeems the file first owns the NFT.</p>
-          <ul className="send-facts">
-            <li><span className="mono">01</span>Send it as a file or document. Screenshots, edits and chat-app compression remove the credential.</li>
-            <li><span className="mono">02</span>Treat the file like cash. Anyone who gets a copy can claim it.</li>
-            <li><span className="mono">03</span>Until it's claimed you can cancel. Canceling voids every copy of the file.</li>
-          </ul>
+          <Segmented id={`send-${card.id}`} value={method} onChange={(m) => { if (!busy) setMethod(m); }} options={[['link', 'Share a link'], ['file', 'Transfer JPG']]} />
+          <AnimatePresence mode="wait" initial={false}>
+            <motion.div key={method} className="stack" initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -6 }} transition={{ duration: .18 }}>
+              {method === 'link' ? <>
+                <p className="muted">Creates a link anyone can open in a browser. The NFT’s credential travels inside it, encrypted. There’s no recipient address: whoever claims the link first owns the NFT.</p>
+                <label className="ack">
+                  <input type="checkbox" checked={locked} onChange={(e) => setLocked(e.target.checked)} disabled={!!busy} />
+                  <span className="ack-box"><DrawnCheck on={locked} size={14} /></span>
+                  <span><strong>Protect with a password.</strong> The receiver needs the link and the password. Share them over different channels.</span>
+                </label>
+                <AnimatePresence initial={false}>{locked && <motion.div className="pw-fields" initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }}>
+                  <label className="field"><span>Password</span><input type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} placeholder="At least 6 characters" disabled={!!busy} /></label>
+                  <label className="field"><span>Repeat password</span><input type="password" autoComplete="new-password" value={repeat} onChange={(e) => setRepeat(e.target.value)} disabled={!!busy} /></label>
+                  {repeat && password !== repeat && <p className="field-error">The passwords don’t match.</p>}
+                  <p className="hint">There’s no way to recover a forgotten password, but you can always cancel the transfer.</p>
+                </motion.div>}</AnimatePresence>
+              </> : <>
+                <p className="muted">Creates a transfer JPG: this picture with its ownership credential inside. Whoever adds the file to their collection first owns the NFT.</p>
+                <ul className="send-facts">
+                  <li><span className="mono">01</span>Send it as a file or document. Screenshots, edits and chat-app compression remove the credential.</li>
+                  <li><span className="mono">02</span>Treat the file like cash. Anyone who gets a copy can claim it.</li>
+                </ul>
+              </>}
+            </motion.div>
+          </AnimatePresence>
           <label className="ack">
             <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} disabled={!!busy} />
             <span className="ack-box"><DrawnCheck on={ack} size={14} /></span>
-            <span>I understand that anyone holding this file can take ownership of <strong>{card.title}</strong>.</span>
+            <span>I understand that anyone holding this {method === 'link' ? (locked ? 'link and password' : 'link') : 'file'} can take ownership of <strong>{card.title}</strong> until I cancel.</span>
           </label>
           {busy ? <Button variant="primary" size="lg" className="full" disabled icon={<Spinner />}>{busy}</Button>
-            : <HoldButton disabled={!ack || !canSend} onComplete={send} icon={<Send size={16} />}>Hold to create transfer JPG</HoldButton>}
+            : <HoldButton disabled={!ack || !canSend || !passwordOk} onComplete={send} icon={method === 'link' ? <Link2 size={16} /> : <Send size={16} />}>{method === 'link' ? 'Hold to create link' : 'Hold to create transfer JPG'}</HoldButton>}
           <p className="hint" id="hold-hint">Press and hold to confirm. Releasing early cancels.</p>
         </motion.div>}
 
         {view === 'sent' && <motion.div key="sent" className="detail-panel" {...panel}>
           <motion.span className="success-mark" initial={{ scale: .6, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: 'spring', stiffness: 400, damping: 18 }}><DrawnCheck on size={26} /></motion.span>
-          <h2>Transfer JPG saved</h2>
-          <p className="muted">Send <span className="mono">cashu-transfer-{card.h.slice(0, 12)}.jpg</span> to the new owner as a file. They open their collection, choose <strong>Add JPG</strong> and drop it in.</p>
-          <p className="muted">This card stays in your collection as <strong>Transfer pending</strong> until it's claimed.</p>
+          {result2?.url ? <>
+            <h2>{result2.protected ? 'Your locked link is ready' : 'Your link is ready'}</h2>
+            <div className="link-box">
+              <code className="mono">{result2.url}</code>
+              <div className="row">
+                <CopyChip value={result2.url} display="Copy link" message="Link copied" />
+                {typeof navigator !== 'undefined' && navigator.share && <Button variant="ghost" size="sm" icon={<Send size={14} />} onClick={share}>Share</Button>}
+              </div>
+            </div>
+            <p className="muted">{result2.protected ? 'Send the password separately, ideally through a different app. ' : 'Anyone with this link can claim the NFT. '}Copy it now: for safety the link isn’t stored anywhere, not even here.</p>
+          </> : <>
+            <h2>Transfer JPG saved</h2>
+            <p className="muted">Send <span className="mono">cashu-transfer-{card.h.slice(0, 12)}.jpg</span> to the new owner as a file. They open their collection, choose <strong>Add JPG</strong> and drop it in.</p>
+          </>}
+          <p className="muted">This card stays in your collection as <strong>Transfer pending</strong> until it’s claimed.</p>
           <Button variant="secondary" className="full" onClick={() => setView('info')}>Done</Button>
         </motion.div>}
       </AnimatePresence>
@@ -338,6 +389,8 @@ function App() {
   const [generated, setGenerated] = useState(''), [inputKey, setInputKey] = useState(''), [name, setName] = useState(''), [backedUp, setBackedUp] = useState(false);
   const [openInput, setOpenInput] = useState(''), [fresh, setFresh] = useState(null);
   const [localWallet, setLocalWallet] = useState(null), [walletState, setWalletState] = useState('opening'), [walletError, setWalletError] = useState('');
+  const [relations, toggleRelation] = useRelations(identity);
+  const [home, setHome] = useState(null);
   const migrationAttempts = useRef(new Set());
   const recovery = useRef(false), reloadRef = useRef(null);
   const owner = Boolean(identity && identity.pubkey === pubkey && !visitor);
@@ -346,6 +399,7 @@ function App() {
   const active = profile?.cards.filter((c) => c.status !== 'sent') || [];
   const sent = profile?.cards.filter((c) => c.status === 'sent') || [];
   const shown = tab === 'sent' ? sent : active;
+  const openCard = (item) => navigate(`/p/${item.pubkey || item.actor}?nft=${item.card_id || item.id}`);
 
   const navigate = useCallback((path) => {
     window.history.pushState({}, '', path);
@@ -354,8 +408,21 @@ function App() {
   }, []);
   useEffect(() => { const pop = () => { setRoute(readRoute()); setProfile(null); setSelected(null); }; window.addEventListener('popstate', pop); return () => window.removeEventListener('popstate', pop); }, []);
   useEffect(() => {
-    document.title = route.page === 'how' ? 'How it works · Cashu NFT' : profile?.name ? `${profile.name} · Cashu NFT` : 'Cashu NFT · The NFT is the JPG';
+    const titles = { how: 'How it works', explore: route.tab === 'nfts' ? 'Explore NFTs' : 'Explore collections', activity: 'Activity', claim: 'Claim an NFT' };
+    document.title = titles[route.page] ? `${titles[route.page]} · Cashu NFT` : profile?.name ? `${profile.name} · Cashu NFT` : 'Cashu NFT · The NFT is the JPG';
   }, [route, profile?.name]);
+  useEffect(() => {
+    if (!route.nft || !profile?.cards.some((c) => c.id === route.nft)) return;
+    setSelected(route.nft); setTab(profile.cards.find((c) => c.id === route.nft).status === 'sent' ? 'sent' : 'collection');
+    window.history.replaceState({}, '', `/p/${route.pubkey}`); setRoute((r) => ({ ...r, nft: null }));
+  }, [route.nft, route.pubkey, profile]);
+  useEffect(() => {
+    if (route.page !== 'home') return;
+    let live = true;
+    Promise.all([getJSON('/api/explore/collections?sort=popular&limit=6'), getJSON('/api/explore/nfts?sort=new&limit=8'), getJSON('/api/activity?limit=14')])
+      .then(([collections, nfts, activity]) => { if (live) setHome({ collections: collections.items, nfts: nfts.items, activity }); }).catch(() => {});
+    return () => { live = false; };
+  }, [route.page]);
   useEffect(() => {
     getJSON('/api/config').then((data) => {
       validateKeyset(data);
@@ -431,7 +498,8 @@ function App() {
       const response = await signedRequest(secret, `/api/profiles/${p}`, JSON.stringify({ name: name.trim() || 'Untitled collection' }), 'application/json');
       const data = await response.json(); saveIdentity(secret);
       setDialog(null); setGenerated(''); setInputKey(''); setBackedUp(false);
-      navigate(`/p/${p}`); setProfile(data); toast.success(dialog === 'create' ? 'Collection created.' : 'Collection unlocked.');
+      if (readRoute().page === 'claim') toast.success('Collection ready. Now claim your NFT.');
+      else { navigate(`/p/${p}`); setProfile(data); toast.success(dialog === 'create' ? 'Collection created.' : 'Collection unlocked.'); }
     } catch (e) { toast.error(e.message); } finally { setBusy(''); }
   };
   const added = async (asset, kind) => {
@@ -440,18 +508,27 @@ function App() {
     toast.success(kind === 'mint' ? 'Minted. The JPG is now an NFT.' : 'Received. The old credential is spent and the NFT is yours.');
     setTimeout(() => setFresh(null), 2200);
   };
-  const sendCard = async (target) => {
-    setBusy('Creating transfer JPG');
+  const sendCard = async (target, { method = 'file', password = '' } = {}) => {
+    setBusy(method === 'link' ? (password ? 'Encrypting link' : 'Creating link') : 'Creating transfer JPG');
     try {
+      if (method === 'link') {
+        const { token, nullifier } = await localWallet.sendToken(target);
+        const id = newLinkId();
+        const { fragment, envelope } = await sealLink(token, { id, h: target.h, password });
+        await signedRequest(identity.secret, `/api/profiles/${identity.pubkey}/links`, JSON.stringify({ id, card_id: target.id, nullifier, envelope }), 'application/json');
+        await reload().catch(() => {});
+        toast.success('Link created. Copy it before closing.');
+        return { url: linkUrl(window.location.origin, id, fragment), protected: !!password };
+      }
       const jpg = await localWallet.send(target);
       download(new Blob([jpg], { type: 'image/jpeg' }), `cashu-transfer-${target.h.slice(0, 12)}.jpg`);
       await reload(); toast.success('Transfer JPG saved. Send it as a file.');
-      return true;
-    } catch (e) { toast.error(e.message); return false; } finally { setBusy(''); }
+      return { file: true };
+    } catch (e) { toast.error(e.message); await reload().catch(() => {}); return null; } finally { setBusy(''); }
   };
   const cancelTransfer = async (target) => {
     setBusy('Canceling transfer');
-    try { await localWallet.cancel(target); await reload(); toast.success('Transfer canceled. Every copy of the transfer JPG is now void.'); }
+    try { await localWallet.cancel(target); await reload(); toast.success('Transfer canceled. Every link and transfer JPG for it is now void.'); }
     catch (e) { toast.error(e.message); await reload().catch(() => {}); } finally { setBusy(''); }
   };
   const openProfile = (event) => {
@@ -461,14 +538,32 @@ function App() {
     setDialog(null); navigate(`/p/${match[1]}`);
   };
   const canAdd = owner && !!localWallet && !!config && !busy;
+  const needsIdentity = () => { toast('Start a collection first, then you can like and follow.'); openCreate(); };
+  const applySummary = (target, summary) => {
+    if (profile?.pubkey === target) setProfile((p) => p && ({ ...p, likes: summary.likes, followers: summary.followers }));
+    setHome((h) => h && ({ ...h, collections: h.collections.map((c) => c.pubkey === target ? { ...c, likes: summary.likes, followers: summary.followers } : c) }));
+  };
+  const likeCollection = async (target, on) => {
+    if (!identity) { needsIdentity(); return null; }
+    try { const summary = await toggleRelation('likes', target, on); applySummary(target, summary); return summary; }
+    catch (e) { toast.error(e.message); throw e; }
+  };
+  const followCollection = async (target, on) => {
+    if (!identity) { needsIdentity(); return; }
+    try { const summary = await toggleRelation('follows', target, on); applySummary(target, summary); toast.success(on ? `Following ${profile?.name || 'this collection'}.` : 'Unfollowed.'); }
+    catch (e) { toast.error(e.message); }
+  };
+  const verbs = { mint: 'minted', receive: 'received', collection: 'joined', like: 'liked', follow: 'followed' };
+  const ticker = home?.activity?.length ? home.activity.map((e) => `${e.actor_name || 'Someone'} ${verbs[e.kind]} ${e.title || e.target_name || ''}`.trim())
+    : ['The NFT is the JPG', 'Free mint', 'Send it like a meme', 'No seed phrase drama', 'Your key, your vibes', '1 of 1 by default', 'gm'];
 
   return <MotionConfig reducedMotion="user">
     <header className="topbar">
       <div className="topbar-inner">
         <a className="brand" href="/" onClick={(e) => { e.preventDefault(); navigate('/'); }}><span className="brand-mark" aria-hidden="true" />Cashu NFT</a>
         <nav aria-label="Main">
-          <a className={`nav-link ${route.page === 'how' ? 'is-active' : ''}`} href="/how-it-works" onClick={(e) => { e.preventDefault(); navigate('/how-it-works'); }}>How it works</a>
-          <button className="nav-link" onClick={() => setDialog('open')}>Find a profile</button>
+          {[['/explore', 'Explore', 'explore'], ['/activity', 'Activity', 'activity'], ['/how-it-works', 'How it works', 'how']].map(([href, label, page]) =>
+            <a key={href} className={`nav-link ${route.page === page ? 'is-active' : ''}`} href={href} onClick={(e) => { e.preventDefault(); navigate(href); }}>{label}</a>)}
           {identity
             ? <Menu.Root>
               <Menu.Trigger className="profile-pill"><Identicon pubkey={identity.pubkey} size={24} /><span>My collection</span></Menu.Trigger>
@@ -476,6 +571,7 @@ function App() {
                 <Menu.Item className="menu-item" onClick={() => navigate(`/p/${identity.pubkey}`)}><ArrowRight size={15} />Open my collection</Menu.Item>
                 <Menu.Item className="menu-item" onClick={openCreate} disabled={!config}><Plus size={15} />Start another collection</Menu.Item>
                 <Menu.Item className="menu-item" onClick={() => { setName(''); setDialog('import'); }}><KeyRound size={15} />Import a key</Menu.Item>
+                <Menu.Item className="menu-item" onClick={() => setDialog('open')}><Link2 size={15} />Open by public key</Menu.Item>
               </Menu.Popup></Menu.Positioner></Menu.Portal>
             </Menu.Root>
             : <Button variant="primary" size="sm" onClick={openCreate} disabled={!config}>Get started</Button>}
@@ -484,6 +580,13 @@ function App() {
     </header>
 
     {fatal ? <main className="page error-page"><ShieldX size={32} /><h1>The mint is unavailable</h1><p className="muted">{fatal}</p><Button variant="primary" onClick={() => window.location.reload()}>Try again</Button></main>
+
+      : route.page === 'explore' ? <ExplorePage tab={route.tab} navigate={navigate} relations={relations} onLike={likeCollection} openCard={openCard} />
+
+      : route.page === 'claim' ? <ClaimPage linkId={route.id} config={config} identity={identity} wallet={localWallet} walletState={walletState} navigate={navigate}
+        onCreate={openCreate} onImport={() => { setName(''); setDialog('import'); }} onReceived={() => toast.success('Claimed. The NFT is in your collection.')} />
+
+      : route.page === 'activity' ? <ActivityPage identity={identity} navigate={navigate} openCard={openCard} />
 
       : route.page === 'how' ? <HowItWorks onStart={() => identity ? navigate(`/p/${identity.pubkey}`) : openCreate()} />
 
@@ -510,7 +613,25 @@ function App() {
           </div>
         </section>
 
-        <Marquee items={['The NFT is the JPG', 'Free mint', 'Send it like a meme', 'No seed phrase drama', 'Your key, your vibes', '1 of 1 by default', 'gm']} />
+        <Marquee items={ticker} />
+
+        {home?.collections.length > 0 && <section className="home-section">
+          <div className="section-head"><h2>Popular collections</h2><Button variant="secondary" size="sm" icon={<ArrowRight size={14} />} onClick={() => navigate('/explore')}>See all</Button></div>
+          <div className="grid grid-collections">{home.collections.map((item, i) => <CollectionCard key={item.pubkey} item={item} index={i} rank={i < 3 && item.likes > 0 ? i + 1 : null}
+            liked={relations.likes.includes(item.pubkey)} onLike={(pk, on) => likeCollection(pk, on).catch(() => {})} onOpen={(pk) => navigate(`/p/${pk}`)} />)}</div>
+        </section>}
+
+        {home?.nfts.length > 0 && <section className="home-section home-split">
+          <div className="fresh">
+            <div className="section-head"><h2>Fresh mints</h2><Button variant="secondary" size="sm" icon={<ArrowRight size={14} />} onClick={() => navigate('/explore/nfts')}>Browse all</Button></div>
+            <div className="grid grid-tight">{home.nfts.slice(0, 6).map((item, i) => <MarketCard key={item.id} item={item} index={i} onOpen={openCard} />)}</div>
+          </div>
+          <aside className="happening">
+            <div className="section-head"><h2>Happening now</h2></div>
+            <ul className="feed feed-compact">{home.activity.slice(0, 7).map((e, i) => <ActivityItem key={e.id} event={e} index={i} onProfile={(pk) => navigate(`/p/${pk}`)} onCard={openCard} />)}</ul>
+            <Button variant="secondary" className="full" icon={<ArrowRight size={15} />} onClick={() => navigate('/activity')}>All activity</Button>
+          </aside>
+        </section>}
 
         <section className="bento">
           <motion.article className="tile tone-peach tile-wide" {...tileIn(0)}>
@@ -522,7 +643,7 @@ function App() {
             <div className="mini mini-badges" aria-hidden="true"><span className="badge badge-good"><span className="badge-inner"><span className="dot" />Verified owner</span></span></div>
           </motion.article>
           <motion.article className="tile tone-mint" {...tileIn(2)}>
-            <div className="tile-text"><h3>Send it like a photo</h3><p>Attach the JPG to a message. Whoever adds it to their collection first owns it.</p></div>
+            <div className="tile-text"><h3>Send it like a photo</h3><p>Share a link or attach the JPG. Lock it with a password if you like. Whoever claims it first owns it.</p></div>
             <div className="mini mini-send" aria-hidden="true"><span className="mini-file"><ImageDown size={14} />sunset.jpg</span><Send size={16} /></div>
           </motion.article>
           <motion.article className="tile tone-butter tile-wide" {...tileIn(3)}>
@@ -548,9 +669,11 @@ function App() {
 
       : <main className="page profile">
         <section className="profile-card">
-          <div className={`profile-banner banner-${Math.min(active.length >= 6 ? 6 : active.length >= 3 ? 3 : active.length, 6)}`} style={{ '--tint': identiconColor(pubkey) }}>
-            {active.slice(0, active.length >= 6 ? 6 : active.length >= 3 ? 3 : 1).map((c) => <img key={c.id} src={imageUrl(c.h)} alt="" />)}
-          </div>
+          {profile?.custom_cover
+            ? <div className="profile-banner banner-1 is-cover" style={{ '--tint': identiconColor(pubkey) }}><img src={imageUrl(profile.cover)} alt="" /></div>
+            : <div className={`profile-banner banner-${active.length >= 6 ? 6 : active.length >= 3 ? 3 : active.length ? 1 : 0}`} style={{ '--tint': identiconColor(pubkey) }}>
+              {active.slice(0, active.length >= 6 ? 6 : active.length >= 3 ? 3 : 1).map((c) => <img key={c.id} src={imageUrl(c.h)} alt="" />)}
+            </div>}
           <div className="profile-main">
             <div className="profile-avatar"><Identicon pubkey={pubkey} size={88} /></div>
             <div className="profile-id">
@@ -564,11 +687,14 @@ function App() {
               </div>
             </div>
             <div className="profile-actions">
+              {identity?.pubkey !== pubkey && profile && <LikeButton liked={relations.likes.includes(pubkey)} count={profile.likes ?? 0} onToggle={(on) => likeCollection(pubkey, on).catch(() => {})} />}
+              {identity?.pubkey !== pubkey && profile && <FollowButton following={relations.following.includes(pubkey)} onToggle={(on) => followCollection(pubkey, on)} />}
               <Button variant="secondary" icon={<Link2 size={15} />} onClick={() => copyText(window.location.href, 'Profile link copied')}>Share</Button>
               {owner && <Button variant="primary" icon={<Plus size={16} />} onClick={() => setDialog('add')} disabled={!canAdd}>Add JPG</Button>}
               {identity?.pubkey === pubkey && <Menu.Root>
                 <Menu.Trigger className="icon-btn icon-btn-bordered" aria-label="More actions"><Ellipsis size={17} /></Menu.Trigger>
                 <Menu.Portal><Menu.Positioner sideOffset={6} align="end"><Menu.Popup className="menu">
+                  <Menu.Item className="menu-item" onClick={() => setDialog('edit')} disabled={!profile}><Pencil size={15} />Edit name and cover</Menu.Item>
                   <Menu.Item className="menu-item" onClick={() => setVisitor((v) => !v)}>{visitor ? <EyeOff size={15} /> : <Eye size={15} />}{visitor ? 'Back to owner view' : 'View as visitor'}</Menu.Item>
                   <Menu.Item className="menu-item" onClick={() => setDialog('backup')}><KeyRound size={15} />Back up private key</Menu.Item>
                   <Menu.Item className="menu-item" onClick={recoverWallet} disabled={!!busy || !config}><RefreshCw size={15} />Sync wallet from backup</Menu.Item>
@@ -580,7 +706,9 @@ function App() {
           <div className="profile-stats">
             <div className="stat"><strong>{active.length}</strong><span>Collected</span></div>
             <div className="stat"><strong>{sent.length}</strong><span>Sent</span></div>
-            <div className="stat"><strong>{profile?.created ? new Date(profile.created * 1000).toLocaleDateString(undefined, { month: 'short', year: '2-digit' }) : '–'}</strong><span>Collecting since</span></div>
+            <div className="stat"><strong>{profile?.likes ?? 0}</strong><span>Likes</span></div>
+            <button className="stat" onClick={() => setDialog('followers')}><strong>{profile?.followers ?? 0}</strong><span>Followers</span></button>
+            <button className="stat" onClick={() => setDialog('following')}><strong>{profile?.following ?? 0}</strong><span>Following</span></button>
           </div>
         </section>
 
@@ -589,16 +717,18 @@ function App() {
 
         <div className="tabs-row">
           <div className="tabs" role="tablist">
-            {[['collection', 'Collection', active.length], ['sent', 'Sent', sent.length]].map(([id, label, count]) =>
+            {[['collection', 'Collection', active.length], ['sent', 'Sent', sent.length], ['activity', 'Activity', null]].map(([id, label, count]) =>
               <button key={id} role="tab" aria-selected={tab === id} className={`tab ${tab === id ? 'is-active' : ''}`} onClick={() => setTab(id)}>
-                {label}<motion.span key={count} className="tab-count" initial={{ scale: .7 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 500, damping: 20 }}>{count}</motion.span>
+                {label}{count !== null && <motion.span key={count} className="tab-count" initial={{ scale: .7 }} animate={{ scale: 1 }} transition={{ type: 'spring', stiffness: 500, damping: 20 }}>{count}</motion.span>}
                 {tab === id && <motion.span layoutId="tab-underline" className="tab-underline" transition={{ type: 'spring', stiffness: 500, damping: 38 }} />}
               </button>)}
           </div>
           <button className="link" onClick={() => { setRefresh((r) => r + 1); reload().catch((e) => toast.error(e.message)); }}><RefreshCw size={13} /> Re-verify</button>
         </div>
 
-        {loading && !profile ? <div className="grid">{[0, 1, 2, 3].map((i) => <div key={i} className="nft-card skeleton" />)}</div>
+        {tab === 'activity' ? <ActivityList source={`/api/activity?actor=${pubkey}`} onProfile={(pk) => navigate(`/p/${pk}`)} onCard={openCard}
+          empty={{ title: 'No activity yet', text: 'Mints, receipts, likes and follows by this collector show up here.' }} />
+          : loading && !profile ? <div className="grid">{[0, 1, 2, 3].map((i) => <div key={i} className="nft-card skeleton" />)}</div>
           : <motion.div className="grid" key={tab}>
             {shown.map((asset, i) => <NFTCard key={asset.id} index={i} card={asset} verification={verification[asset.id]} isNew={asset.id === fresh} onOpen={setSelected} />)}
             {tab === 'collection' && owner && <motion.button className="nft-card add-tile" onClick={() => setDialog('add')} disabled={!canAdd}
@@ -616,7 +746,10 @@ function App() {
       <div className="footer-inner">
         <span className="brand small"><span className="brand-mark" aria-hidden="true" />Cashu NFT</span>
         <span className="muted">Experimental, unaudited cryptography. Pointcheval–Sanders credentials on BLS12-381.</span>
+        <a className="nav-link" href="/explore" onClick={(e) => { e.preventDefault(); navigate('/explore'); }}>Explore</a>
+        <a className="nav-link" href="/activity" onClick={(e) => { e.preventDefault(); navigate('/activity'); }}>Activity</a>
         <a className="nav-link" href="/how-it-works" onClick={(e) => { e.preventDefault(); navigate('/how-it-works'); }}>How it works</a>
+        <button className="nav-link" onClick={() => setDialog('open')}>Open by public key</button>
       </div>
     </footer>
 
@@ -663,6 +796,8 @@ function App() {
       </div>
     </Modal>
 
+    {identity && <EditCollectionDialog open={dialog === 'edit'} close={() => setDialog(null)} profile={profile} identity={identity} onSaved={(p) => setProfile((prev) => ({ ...prev, ...p }))} />}
+    {pubkey && <NetworkDialog pubkey={pubkey} open={dialog === 'followers' || dialog === 'following'} initial={dialog} close={() => setDialog(null)} navigate={navigate} />}
     <AddDialog open={dialog === 'add'} close={() => setDialog(null)} config={config} wallet={owner ? localWallet : null} onAdded={added} />
 
     <Modal open={!!card} close={() => { if (!busy) setSelected(null); }} size="wide" title={card?.title}>

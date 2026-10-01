@@ -7,6 +7,7 @@ Profile private keys never enter this process.
 
 import hashlib
 import os
+import re
 import secrets
 import time
 import uuid
@@ -40,6 +41,14 @@ from .api import create_router
 from .imgmeta import embed_token
 from .ledger import AlreadyMintedError, AlreadySpentError, NFTError, PSLedger
 from .portfolio_jpg import normalize_jpg, split_transfer_jpg, validate_jpg
+from .portfolio_links import LinkRequest, Links
+from .portfolio_social import (
+    CollectionSort,
+    NFTSort,
+    SettingsRequest,
+    Social,
+    ToggleRequest,
+)
 from .portfolio_wallet import (
     BrowserPortfolio,
     Envelope,
@@ -387,11 +396,15 @@ def create_portfolio_app(
 ) -> FastAPI:
     portfolio = Portfolio(data_dir, max_jpg_bytes, max_cards, max_storage_bytes)
     browser_wallet = BrowserPortfolio(portfolio)
+    social = Social(portfolio)
+    links = Links(portfolio)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         await portfolio.migrate()
         await browser_wallet.migrate()
+        await social.migrate()
+        await links.migrate()
         yield
         await portfolio.db.engine.dispose()
 
@@ -584,7 +597,110 @@ def create_portfolio_app(
     @app.get("/api/profiles/{pubkey}")
     async def get_profile(pubkey: str):
         validate_pubkey(pubkey)
-        return await portfolio.profile(pubkey)
+        profile = await portfolio.profile(pubkey)
+        return {**profile, **await social.summary(pubkey)}
+
+    @app.post("/api/profiles/{pubkey}/settings")
+    async def update_settings(pubkey: str, request: Request):
+        raw = await read_body(request, 1024)
+        await authorize(request, pubkey, raw)
+        try:
+            body = SettingsRequest.model_validate_json(raw)
+        except ValidationError as error:
+            fields = {str(e["loc"][0]) for e in error.errors() if e["loc"]}
+            raise HTTPException(
+                400,
+                "Pick a cover from the NFTs in your collection."
+                if fields == {"cover"}
+                else "Use a name between 1 and 40 characters.",
+            )
+        await social.update(pubkey, body)
+        return await get_profile(pubkey)
+
+    async def toggle(request: Request, pubkey: str, target: str) -> bool:
+        validate_pubkey(target)
+        raw = await read_body(request, 256)
+        await authorize(request, pubkey, raw)
+        try:
+            return ToggleRequest.model_validate_json(raw).on
+        except ValidationError:
+            raise HTTPException(400, 'Send {"on": true} or {"on": false}.')
+
+    @app.post("/api/profiles/{pubkey}/likes/{target}")
+    async def like(pubkey: str, target: str, request: Request):
+        return await social.set_like(
+            pubkey, target, await toggle(request, pubkey, target)
+        )
+
+    @app.post("/api/profiles/{pubkey}/follows/{target}")
+    async def follow(pubkey: str, target: str, request: Request):
+        return await social.set_follow(
+            pubkey, target, await toggle(request, pubkey, target)
+        )
+
+    @app.get("/api/profiles/{pubkey}/relations")
+    async def relations(pubkey: str):
+        validate_pubkey(pubkey)
+        return await social.relations(pubkey)
+
+    @app.get("/api/profiles/{pubkey}/network")
+    async def network(pubkey: str):
+        validate_pubkey(pubkey)
+        return await social.network(pubkey)
+
+    @app.get("/api/profiles/{pubkey}/feed")
+    async def feed(
+        pubkey: str,
+        limit: int = Query(default=30, ge=1, le=100),
+        before: Optional[int] = Query(default=None, ge=0),
+    ):
+        validate_pubkey(pubkey)
+        followees = await social.following(pubkey)
+        return await social.activity(
+            limit, before, followees, ["mint", "receive", "collection"]
+        )
+
+    @app.post("/api/profiles/{pubkey}/links")
+    async def create_link(pubkey: str, request: Request):
+        raw = await read_body(request, 8192)
+        await authorize(request, pubkey, raw)
+        try:
+            body = LinkRequest.model_validate_json(raw)
+        except ValidationError:
+            raise HTTPException(400, "Invalid transfer link.")
+        return await links.create(pubkey, body)
+
+    @app.get("/api/links/{link_id}")
+    async def get_link(link_id: str):
+        if not re.fullmatch(r"[0-9a-f]{32}", link_id):
+            raise HTTPException(404, "This link doesn't exist.")
+        return await links.get(link_id)
+
+    @app.get("/api/explore/collections")
+    async def explore_collections(
+        sort: CollectionSort = "popular",
+        q: str = Query(default="", max_length=40),
+        limit: int = Query(default=24, ge=1, le=60),
+        offset: int = Query(default=0, ge=0, le=10000),
+    ):
+        return await social.collections(sort, q.strip(), limit, offset)
+
+    @app.get("/api/explore/nfts")
+    async def explore_nfts(
+        sort: NFTSort = "new",
+        q: str = Query(default="", max_length=80),
+        limit: int = Query(default=30, ge=1, le=60),
+        offset: int = Query(default=0, ge=0, le=10000),
+    ):
+        return await social.nfts(sort, q.strip(), limit, offset)
+
+    @app.get("/api/activity")
+    async def activity(
+        limit: int = Query(default=30, ge=1, le=100),
+        before: Optional[int] = Query(default=None, ge=0),
+        actor: Optional[str] = Query(default=None, pattern=r"^[0-9a-f]{64}$"),
+    ):
+        return await social.activity(limit, before, [actor] if actor else None)
 
     @app.post("/api/profiles/{pubkey}/mint")
     async def mint(
@@ -754,6 +870,9 @@ def create_portfolio_app(
 
     @app.get("/")
     @app.get("/how-it-works")
+    @app.get("/explore")
+    @app.get("/explore/nfts")
+    @app.get("/activity")
     @app.get("/p/{pubkey}")
     async def frontend(pubkey: Optional[str] = None):
         if pubkey is not None:
@@ -768,6 +887,12 @@ def create_portfolio_app(
         return FileResponse(
             WEB_DIR / "index.html", headers={"Cache-Control": "no-cache"}
         )
+
+    @app.get("/claim/{link_id}")
+    async def claim_page(link_id: str):
+        if not re.fullmatch(r"[0-9a-f]{32}", link_id):
+            raise HTTPException(404, "This link doesn't exist.")
+        return await frontend()
 
     return app
 

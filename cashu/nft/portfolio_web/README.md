@@ -107,6 +107,23 @@ its URL when starting Vite. The production bundle always uses same-origin
 routes. The previous custodial mint/receive/export/cancel HTTP endpoints
 return `410`; use the signed `/api/profiles/{pubkey}/wallet/…` workflow.
 
+## Transfer links
+
+"Send NFT" offers a link as well as a transfer JPG. The sender's browser
+encrypts the bearer token with AES-256-GCM under a random 256-bit key that is
+placed only in the link's URL fragment (`/claim/<id>#<key>`); browsers never
+send fragments to servers, so the backend stores ciphertext it cannot decrypt.
+An optional password is stretched with PBKDF2-SHA256 (600,000 iterations) and
+mixed into the HKDF key derivation, so the link alone is not enough. The
+ciphertext is bound to the link ID, the asset hash and the protection flag.
+
+`GET /api/links/<id>` returns public metadata and, while the link is open, the
+ciphertext. Status is derived from the mint: `open` while the linked
+credential is unspent, `claimed` once a new card holds the asset, and `void`
+after the sender cancels. The receiving browser decrypts, checks the
+credential against the public JPG and redeems it through the normal receive
+flow. A forgotten password cannot be recovered; the sender can cancel.
+
 ## JPG handling
 
 - Uploads must be JPGs. Before minting, the app applies EXIF orientation,

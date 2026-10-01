@@ -82,7 +82,11 @@ export default function HowItWorks({ onStart }) {
             <li>The mint verifies, marks the old <span className="mono">N</span> as spent in the same database transaction, and blind-signs the new credential. The first valid redemption wins; every later one fails.</li>
           </ol>
           <p>The mint learns neither the asset nor the new owner secret. On the sender's profile, the old nullifier now reads spent and the card moves to <strong>Sent</strong>.</p>
-          <p className="aside">Canceling is a transfer to yourself: a fresh <span className="mono">s′</span>, the old <span className="mono">N</span> spent, every exported file void.</p>
+          <h3 className="how-sub">Sending with a link</h3>
+          <p>Instead of a file you can send a link. Your browser encrypts the credential with AES-256-GCM under a fresh random key <span className="mono">K</span>, which is placed only in the link's <span className="mono">#fragment</span>. Browsers never send fragments to servers, so the platform stores ciphertext it cannot open.</p>
+          <Eq>{'key = HKDF(K ‖ PBKDF2(password, salt, 600 000), "link id ‖ h")\nlink = /claim/<id>#base64url(K)'}</Eq>
+          <p>With a password, the receiver needs both the link and the password. The ciphertext is bound to the link ID and the asset hash, and the receiving browser re-checks <span className="mono">H(jpg) = h</span> and the PS signature before claiming.</p>
+          <p className="aside">Canceling is a transfer to yourself: a fresh <span className="mono">s′</span>, the old <span className="mono">N</span> spent, every exported file and link void.</p>
         </motion.section>
 
         <motion.section id="trust" {...reveal}>

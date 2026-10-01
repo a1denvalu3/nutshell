@@ -155,6 +155,14 @@ export class BrowserNFTWallet {
       return result;
     });
   }
+  /** The bearer token for a transfer link; marks the card as pending like a JPG export. */
+  async sendToken(card: Card): Promise<{ token: string; nullifier: string }> {
+    return this.lock(async () => {
+      const cred = await this.credential(card);
+      await this.post(`/cards/${card.id}/ready`);
+      return { token: encodeToken(cred), nullifier: nullifier(cred) };
+    });
+  }
   async cancel(card: Card): Promise<Card> {
     return this.lock(async () => {
       const cred = await this.credential(card), stage = await this.prepare('rotate', new Uint8Array(), card.title, card.id);
