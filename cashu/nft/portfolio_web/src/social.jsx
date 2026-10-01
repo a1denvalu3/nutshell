@@ -117,6 +117,7 @@ export function ActivityItem({ event, onProfile, onCard, index = 0 }) {
       <span className="verb">{VERB[event.kind]}</span>
       {(event.kind === 'mint' || event.kind === 'receive' || event.kind === 'sale') && <button className="event-title" onClick={() => onCard(event)}>{event.title}</button>}
       {(event.kind === 'receive' || event.kind === 'sale') && event.target && <><span className="verb">from</span>{who(event.target, event.target_name)}</>}
+      {event.kind === 'sale' && event.price != null && <><span className="verb">for</span><span className="event-price"><Tag size={12} />{Number(event.price).toLocaleString()} sats</span></>}
       {(event.kind === 'like' || event.kind === 'follow') && event.target && who(event.target, event.target_name)}
     </div>
     <span className="event-time">{ago(event.created)}</span>

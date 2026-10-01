@@ -1655,11 +1655,12 @@ class Market:
     # --- public projections ---------------------------------------------------
 
     async def sales(self, limit: int, before: Optional[int]) -> List[Dict[str, Any]]:
-        """Completed sales for public activity: NFT, buyer, seller, time.
-        Amounts, mints and settlement details are never part of this."""
+        """Completed sales for public activity: NFT, buyer, seller, sale price
+        and time. Mints and settlement details are never part of this."""
         rows = await self.db.fetchall(
-            """SELECT s.offer_id, s.card_id, s.h, s.title, s.seller, s.buyer, s.created,
+            """SELECT s.offer_id, s.card_id, s.h, s.title, s.seller, s.buyer, s.created, o.price,
             sp.name AS seller_name, bp.name AS buyer_name FROM market_sales s
+            LEFT JOIN market_offers o ON o.id=s.offer_id
             LEFT JOIN portfolio_profiles sp ON sp.pubkey=s.seller LEFT JOIN portfolio_profiles bp ON bp.pubkey=s.buyer
             WHERE s.created < :before ORDER BY s.created DESC LIMIT :limit""",
             {

@@ -640,7 +640,7 @@ button.stat { text-align: left; cursor: pointer; }
 /* How it works · the basics */
 .how-head .tabs { align-self: flex-start; margin-top: 8px; }
 .basics { display: flex; flex-direction: column; gap: 28px; }
-.basics-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 24px; }
+.basics-grid { display: grid; grid-template-columns: 1fr; gap: 40px; }
 .basics-card { display: flex; flex-direction: column; overflow: hidden; border: 2px solid var(--ink); border-radius: 24px; background: var(--paper); box-shadow: var(--shadow); transition: transform .3s var(--pop), box-shadow .3s var(--ease); }
 .basics-card:hover { transform: translate(-2px, -3px) rotate(-.4deg); box-shadow: var(--shadow-lg); }
 .basics-art { aspect-ratio: 16 / 10; border-bottom: 2px solid var(--ink); display: grid; place-items: center; padding: 10px; }
@@ -805,4 +805,28 @@ main.page > .back { margin-bottom: 20px; }
 @media (max-width: 640px) {
   .listing-offer { grid-template-columns: auto minmax(0, 1fr) auto; }
   .listing-offer-go { display: none; }
+}
+.event-price { display: inline-flex; align-items: center; gap: 4px; padding: 0 8px; border-radius: 999px; border: 1.5px solid #111; background: var(--lime); color: #111; font-size: 12px; font-weight: 800; white-space: nowrap; }
+.offer-thumb-link { display: block; border-radius: 12px; transition: transform .2s var(--pop); }
+.offer-thumb-link:hover { transform: rotate(-3deg) scale(1.04); }
+.offer-title { min-width: 0; text-align: left; font-weight: 800; }
+.offer-title:hover { text-decoration: underline; text-decoration-thickness: 2px; text-underline-offset: 3px; }
+
+/* The basics: one idea per row, art and copy side by side, alternating. */
+.basics { gap: 40px; }
+.basics-card { flex-direction: row; align-items: stretch; }
+.basics-card:nth-child(even) { flex-direction: row-reverse; }
+.basics-card .basics-art { flex: 0 0 50%; aspect-ratio: 16 / 11; padding: 28px; border-bottom: 0; border-right: 2px solid var(--ink); cursor: default; }
+.basics-card:nth-child(even) .basics-art { border-right: 0; border-left: 2px solid var(--ink); }
+.basics-card .basics-copy { flex: 1; justify-content: center; gap: 16px; padding: 40px 44px; }
+.basics-card .basics-copy h2 { font-size: 32px; }
+.basics-card .basics-copy p { font-size: 17px; line-height: 1.7; max-width: 46ch; }
+.basics-card:hover { transform: translate(-2px, -3px); }
+@media (max-width: 860px) {
+  .basics, .basics-grid { gap: 28px; }
+  .basics-card, .basics-card:nth-child(even) { flex-direction: column; }
+  .basics-card .basics-art, .basics-card:nth-child(even) .basics-art { flex: none; aspect-ratio: 16 / 10; padding: 16px; border: 0; border-bottom: 2px solid var(--ink); }
+  .basics-card .basics-copy { padding: 24px 22px 28px; }
+  .basics-card .basics-copy h2 { font-size: 26px; }
+  .basics-card .basics-copy p { font-size: 16px; }
 }

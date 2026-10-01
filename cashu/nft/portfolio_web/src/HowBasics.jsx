@@ -1,8 +1,8 @@
 // Beginner version of "How it works": four illustrated ideas. Illustrations
-// animate when they scroll into view (and replay on re-entry); nothing loops,
-// so an idle page costs no GPU time.
-import React from 'react';
-import { motion } from 'motion/react';
+// play when they scroll into view and replay on hover; nothing loops, so an
+// idle page costs no GPU time.
+import React, { useRef } from 'react';
+import { motion, useAnimationControls } from 'motion/react';
 import { ArrowRight, Check, X } from 'lucide-react';
 import { Button } from './ui.jsx';
 
@@ -12,9 +12,20 @@ const label = { fontFamily: 'var(--mono)', fontWeight: 700, fontSize: 11, fill: 
 const spring = { type: 'spring', stiffness: 260, damping: 20 };
 const at = (delay, extra = {}) => ({ ...spring, delay, ...extra });
 
-/** Runs its children's `hidden` → `show` variants each time it scrolls into view. */
+/** Plays its children's `hidden` → `show` variants on entering the viewport
+ *  and again whenever the pointer moves onto it. */
 function Scene({ children, tone }) {
-  return <motion.div className={`basics-art tone-${tone}`} initial="hidden" whileInView="show" viewport={{ amount: 0.6 }}>
+  const controls = useAnimationControls();
+  const busy = useRef(false);
+  const play = async () => {
+    if (busy.current) return;
+    busy.current = true;
+    controls.set('hidden');
+    await controls.start('show');
+    busy.current = false;
+  };
+  return <motion.div className={`basics-art tone-${tone}`} initial="hidden" animate={controls}
+    viewport={{ amount: 0.5 }} onViewportEnter={play} onHoverStart={play}>
     <svg viewBox="0 0 320 200" role="img" aria-hidden="true">{children}</svg>
   </motion.div>;
 }

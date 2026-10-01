@@ -17,6 +17,7 @@ import time
 from pathlib import Path
 from typing import Any, Dict
 
+import httpx
 import pytest
 import pytest_asyncio
 import uvicorn
@@ -198,7 +199,8 @@ async def test_browser_offline_purchase_competing_refund_and_payout(server):
     assert bob_after["balance"]["available"] == 500
     assert bob_after["balance"]["offerLocked"] == 0
 
-    # Public sale activity shows NFT/buyer/seller/time only.
+    # Public sale activity shows NFT, buyer, seller, sale price and time;
+    # the payment mint and settlement details stay private.
     sales = (await server.market.sales(10, None))[0]
     assert set(sales) == {
         "offer_id",
@@ -208,9 +210,15 @@ async def test_browser_offline_purchase_competing_refund_and_payout(server):
         "seller",
         "buyer",
         "created",
+        "price",
         "seller_name",
         "buyer_name",
     }
+    assert sales["price"] == 100
+    async with httpx.AsyncClient(base_url=server.url) as http:
+        feed = (await http.get("/api/activity?limit=20")).json()
+    sale = next(e for e in feed if e["kind"] == "sale")
+    assert sale["price"] == 100 and "mint" not in sale
 
 
 @pytest.mark.asyncio

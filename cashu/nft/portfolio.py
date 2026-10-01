@@ -192,8 +192,10 @@ class Portfolio:
             raise HTTPException(507, "The mint has reached its image storage limit.")
 
     @staticmethod
-    def public_card(row: dict) -> dict:
+    def public_card(row: dict, owner: bool = True) -> dict:
         # Deliberately whitelist fields: never serialize a credential or owner secret.
+        # A pending transfer ('ready': a transfer JPG or link exists) is the
+        # owner's business; public views show such a card as plainly owned.
         public = {
             key: row[key]
             for key in (
@@ -208,6 +210,8 @@ class Portfolio:
                 "sent",
             )
         }
+        if not owner and public["status"] == "ready":
+            public["status"] = "owned"
         public["custody"] = "browser" if row.get("encrypted_credential") else "legacy"
         return public
 
@@ -331,7 +335,17 @@ class Portfolio:
                 "SELECT * FROM portfolio_cards WHERE pubkey=:p ORDER BY created DESC,rowid DESC",
                 {"p": pubkey},
             )
-            return {**dict(profile), "cards": [self.public_card(dict(r)) for r in rows]}
+            return {
+                **dict(profile),
+                "cards": [self.public_card(dict(r), owner=False) for r in rows],
+            }
+
+    async def pending_cards(self, pubkey: str) -> List[str]:
+        rows = await self.db.fetchall(
+            "SELECT id FROM portfolio_cards WHERE pubkey=:p AND status='ready'",
+            {"p": pubkey},
+        )
+        return [r["id"] for r in rows]
 
     async def owned_card(self, conn: Connection, pubkey: str, card_id: str) -> dict:
         row = await conn.fetchone(
@@ -865,6 +879,12 @@ def create_portfolio_app(
                 {"id": card_id},
             )
             return portfolio.public_card({**row, "status": "ready"})
+
+    @app.post("/api/profiles/{pubkey}/cards/pending")
+    async def pending_cards(pubkey: str, request: Request):
+        # Owner-only: which cards have an outstanding transfer JPG or link.
+        await authorize(request, pubkey, await read_body(request, 0))
+        return {"ids": await portfolio.pending_cards(pubkey)}
 
     @app.get("/api/images/{h}.jpg")
     async def image(h: str):

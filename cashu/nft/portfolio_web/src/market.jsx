@@ -378,6 +378,9 @@ export function OffersPage({ navigate, market, nftWallet, cards, initialTab, foc
     if (o.role === 'seller' && o.disposition === 'funded') setReview(o);
     else { setHighlight(o.id); setTimeout(() => document.getElementById(`offer-${o.id}`)?.scrollIntoView({ block: 'center', behavior: 'smooth' }), 300); }
   }, [focus, offers]);
+  // The NFT behind an offer: the buyer's card once the purchase is published,
+  // otherwise the listing it was made on.
+  const openNft = (o) => navigate(o.publication === 'published' ? `/p/${o.buyer}?nft=${o.id}` : `/market/${o.listing_id}`);
   const closeReview = () => { setReview(null); if (focus) window.history.replaceState({}, '', `/offers?tab=${tab || 'received'}`); };
   const load = useCallback(async () => { if (market.money) setOffers(await market.money.api.offers()); }, [market.money]);
   useEffect(() => { load().catch((e) => toast.error(e.message)); }, [load, market.version]);
@@ -394,9 +397,9 @@ export function OffersPage({ navigate, market, nftWallet, cards, initialTab, foc
       : !shown.length ? <div className="empty"><strong>{tab === 'received' ? 'No offers yet' : 'You haven’t made any offers'}</strong><span className="muted">{tab === 'received' ? 'List an NFT and offers show up here.' : 'Offers you make on listed NFTs show up here.'}</span>
         <Button variant="secondary" onClick={() => navigate('/market')}>Go to market</Button></div>
         : <ul className="offer-list">{shown.map((o, i) => <motion.li key={o.id} id={`offer-${o.id}`} className={`offer-row ${highlight === o.id ? 'is-focus' : ''}`} initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: Math.min(i, 10) * .03 }}>
-          <img className="offer-thumb" src={imageUrl(o.h)} alt="" loading="lazy" />
+          <button className="offer-thumb-link" onClick={() => openNft(o)} aria-label={`Open ${o.title || 'NFT'}`}><img className="offer-thumb" src={imageUrl(o.h)} alt="" loading="lazy" /></button>
           <div className="offer-main">
-            <div className="row-between"><strong className="ellipsis">{o.title || 'NFT'}</strong><Price value={o.price} /></div>
+            <div className="row-between"><button className="offer-title ellipsis" onClick={() => openNft(o)}>{o.title || 'NFT'}</button><Price value={o.price} /></div>
             <span className="muted small">{o.role === 'seller' ? `From ${o.buyer_name || short(o.buyer)}` : `To ${o.seller_name || short(o.seller)}`} · <span className="mono">{host(o.mint)}</span> <TestBadge on={o.test_value} /></span>
             <Legs offer={o} />
             {['locked', 'refund_pending', 'needs_attention'].includes(o.cash_leg) && <span className="muted small">{o.disposition === 'funded' ? `Accept by ${when(o.accept_deadline)} · ` : ''}Refund opens {when(o.cash_deadline)}</span>}

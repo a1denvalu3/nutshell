@@ -952,3 +952,16 @@ and `make check` clean.
   "See my offers" → Made with the Orbit offer. `/offers` without a tab opened
   Made for that buyer and Received for a profile whose latest offer was a
   received one. The toast "View" action is covered by code review only.
+
+## Product changes (2026-10-02)
+
+- **Sale price is public.** At the user's request, completed sales now show
+  the sale price (the accepted offer's net price) in `/api/market/sales` and
+  in `sale` activity events. This replaces the original rule that offer
+  amounts are participant-only. The payment mint, proofs, deadlines and
+  settlement details remain participant-only.
+- **Pending transfers are private.** A card with an outstanding transfer
+  JPG or link (`status = 'ready'`) is shown as `owned` on the public profile
+  and in Explore. The owner's app reads pending card ids from the signed
+  `POST /api/profiles/{pk}/cards/pending` and shows "Transfer pending" only
+  to the owner.

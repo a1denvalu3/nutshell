@@ -299,6 +299,17 @@ class Profile:
         assert resp.status_code == 200, resp.text
         return resp.json()
 
+    def mine(self) -> dict:
+        """The owner's view: the public profile plus pending transfers."""
+        data = self.get()
+        resp = self.post(f"{self.base}/cards/pending")
+        assert resp.status_code == 200, resp.text
+        pending = set(resp.json()["ids"])
+        for c in data["cards"]:
+            if c["id"] in pending:
+                c["status"] = "ready"
+        return data
+
 
 @pytest.fixture
 def client(tmp_path) -> Iterator[TestClient]:
@@ -589,7 +600,12 @@ def test_full_transfer_flow_and_double_redeem(client):
     for p in (alice, bob, carol):
         p.create()
     card, transfer = exported(alice)
-    assert alice.get()["cards"][0]["status"] == "ready"
+    assert alice.mine()["cards"][0]["status"] == "ready"
+    # A pending transfer is the owner's business: the public profile shows it as owned.
+    assert alice.get()["cards"][0]["status"] == "owned"
+    assert alice.client.post(f"{alice.base}/cards/pending").status_code >= 400
+    explore = alice.client.get("/api/explore/nfts").json()["items"]
+    assert {c["status"] for c in explore if c["pubkey"] == alice.pubkey} == {"owned"}
 
     resp = bob.receive(transfer)
     assert resp.status_code == 200, resp.text
@@ -706,7 +722,7 @@ def test_image_token_mismatch_rejected_before_spending(client):
     assert resp.status_code == 400
     assert "Nothing was redeemed" in resp.json()["detail"]
     assert bob.get()["cards"] == []
-    assert [c["status"] for c in alice.get()["cards"]] == ["ready"]
+    assert [c["status"] for c in alice.mine()["cards"]] == ["ready"]
     # The genuine transfer JPG is still redeemable.
     assert bob.receive(transfer).status_code == 200
 
@@ -734,7 +750,7 @@ def test_max_cards_limit(tmp_path):
         # Receiving also counts against the limit, and must not spend.
         card, transfer = exported(bob, make_jpg(color=(7, 8, 9)))
         assert alice.receive(transfer).status_code == 409
-        assert [c["status"] for c in bob.get()["cards"]] == ["ready"]
+        assert [c["status"] for c in bob.mine()["cards"]] == ["ready"]
 
 
 def test_max_jpg_bytes_limit(tmp_path):

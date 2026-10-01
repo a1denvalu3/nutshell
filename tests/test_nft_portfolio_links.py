@@ -75,7 +75,7 @@ def create_link(profile: Profile, body: dict):
 def ready_card(profile: Profile, jpg: Optional[bytes] = None) -> dict:
     """Mint a card and mark it 'ready' through the browser export path."""
     card, _ = exported(profile, jpg)
-    current = next(c for c in profile.get()["cards"] if c["id"] == card["id"])
+    current = next(c for c in profile.mine()["cards"] if c["id"] == card["id"])
     assert current["status"] == "ready"
     return current
 

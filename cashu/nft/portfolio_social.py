@@ -164,7 +164,12 @@ class Social:
                     "offset": offset,
                 },
             )
-        return {"items": [dict(r) for r in rows[:limit]], "more": len(rows) > limit}
+        # Pending transfers stay private: public listings show the card as owned.
+        items = [
+            {**dict(r), "status": "owned" if r["status"] == "ready" else r["status"]}
+            for r in rows[:limit]
+        ]
+        return {"items": items, "more": len(rows) > limit}
 
     async def activity(
         self,
@@ -274,10 +279,12 @@ class Social:
                     for r in rows
                 ]
             if "sale" in wanted:
-                # Public sale projection: NFT, buyer, seller and time only.
+                # Public sale projection: NFT, buyer, seller, sale price and time.
+                # The payment mint and settlement details stay participant-only.
                 rows = await conn.fetchall(
-                    f"""SELECT s.offer_id, s.card_id, s.h, s.title, s.seller, s.buyer, s.created
-                    FROM market_sales s WHERE s.created<:before{actor_filter["sales"]}
+                    f"""SELECT s.offer_id, s.card_id, s.h, s.title, s.seller, s.buyer, s.created, o.price
+                    FROM market_sales s LEFT JOIN market_offers o ON o.id=s.offer_id
+                    WHERE s.created<:before{actor_filter["sales"]}
                     ORDER BY s.created DESC LIMIT :limit""",
                     params,
                 )
@@ -291,6 +298,7 @@ class Social:
                         "card_id": r["offer_id"],
                         "h": r["h"],
                         "title": r["title"],
+                        "price": r["price"],
                         "created": r["created"],
                     }
                     for r in rows

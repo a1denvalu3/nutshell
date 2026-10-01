@@ -535,7 +535,7 @@ async def test_offline_buyer_purchase_settles_and_recovers(env, cash):
     assert {"offer_received", "sold", "paid"} <= {
         e["kind"] for e in seller_inbox["events"]
     }
-    # Public sale activity: NFT, buyer, seller, time. No price, mint or proofs.
+    # Public sale activity: NFT, buyer, seller, sale price, time. No mint or proofs.
     sales = (await env.http.get("/api/market/sales")).json()
     assert sales and set(sales[0]) == {
         "offer_id",
@@ -545,6 +545,7 @@ async def test_offline_buyer_purchase_settles_and_recovers(env, cash):
         "seller",
         "buyer",
         "created",
+        "price",
         "seller_name",
         "buyer_name",
     }

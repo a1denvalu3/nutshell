@@ -457,12 +457,28 @@ function App() {
       setConfig(data);
     }).catch((e) => setFatal(e.message));
   }, []);
+  // Public profile, plus (for your own) which cards have a pending transfer:
+  // the server only tells the owner that a transfer JPG or link exists.
+  const identityRef = useRef(identity);
+  identityRef.current = identity;
+  const fetchProfile = useCallback(async (key) => {
+    const data = await getJSON(`/api/profiles/${key}`);
+    const me = identityRef.current;
+    if (me?.pubkey === key) {
+      try {
+        const { ids } = await (await signedRequest(me.secret, `/api/profiles/${key}/cards/pending`)).json();
+        const pending = new Set(ids);
+        data.cards = data.cards.map((c) => (pending.has(c.id) ? { ...c, status: 'ready' } : c));
+      } catch { /* shown as owned until the next refresh */ }
+    }
+    return data;
+  }, []);
   const reload = useCallback(async (key = pubkey) => {
     if (!key) return;
-    const data = await getJSON(`/api/profiles/${key}`);
+    const data = await fetchProfile(key);
     if (routeKey() === key) { setProfile((prev) => keepSame(prev, data)); setProfileError(''); }
     return data;
-  }, [pubkey]);
+  }, [pubkey, fetchProfile]);
   reloadRef.current = reload;
   useEffect(() => { if (pubkey && market.version) reloadRef.current(pubkey).catch(() => {}); }, [market.version, pubkey]);
   useEffect(() => {
@@ -479,11 +495,11 @@ function App() {
     if (!pubkey) return;
     let disposed = false;
     setLoading(true); setProfileError('');
-    getJSON(`/api/profiles/${pubkey}`).then((data) => { if (!disposed) setProfile(data); })
+    fetchProfile(pubkey).then((data) => { if (!disposed) setProfile(data); })
       .catch((e) => { if (!disposed) setProfileError(e.message); }).finally(() => { if (!disposed) setLoading(false); });
     const timer = setInterval(() => { if (document.visibilityState === 'visible') reloadRef.current(pubkey).catch(() => { setProfileError('Connection lost. Ownership status will refresh when the mint is reachable.'); setRefresh((r) => r + 1); }); }, 15000);
     return () => { disposed = true; clearInterval(timer); };
-  }, [pubkey]);
+  }, [pubkey, fetchProfile]);
 
   useEffect(() => {
     const missing = owner && localWallet && profile?.cards.filter((c) => c.status !== 'sent' && c.custody !== 'browser' && !migrationAttempts.current.has(c.id));
