@@ -9,14 +9,14 @@ import hashlib
 import json
 import time
 import uuid
-from typing import TYPE_CHECKING, Literal, Optional
+from typing import TYPE_CHECKING, Awaitable, Callable, Literal, Optional
 
 from coincurve import PublicKeyXOnly
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 from starlette.concurrency import run_in_threadpool
 
-from ..core.crypto.ps import asset_tag, hash_asset, verify_showing
+from ..core.crypto.ps import Presentation, asset_tag, hash_asset, verify_showing
 from ..core.db import Connection, LockOptions
 from .api import (
     PrivatePresentation,
@@ -58,6 +58,12 @@ class WalletProofRequest(BaseModel):
     presentation: Optional[str] = None
     new_owner_commitment: Optional[str] = None
     new_proof: Optional[str] = None
+
+
+class DeleteRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    # The card's current credential, presented for the mint's burn binding.
+    presentation: str = Field(pattern=r"^[0-9a-f]{642}$")
 
 
 class PublishRequest(BaseModel):
@@ -172,10 +178,14 @@ class BrowserPortfolio:
             if len(jpg) > self.portfolio.max_jpg_bytes:
                 raise HTTPException(413, "The public JPG is too large.")
             h = hash_asset(jpg).to_bytes(32, "big").hex()
-            if (
-                kind == "mint"
-                and await self.ledger.asset_status(int(h, 16)) != "unknown"
-            ):
+            status = (
+                await self.ledger.asset_status(int(h, 16)) if kind == "mint" else ""
+            )
+            if status == "burned":
+                raise HTTPException(
+                    409, "This JPG was deleted and can't be minted again."
+                )
+            if status not in ("", "unknown"):
                 raise AlreadyMintedError("asset was already minted")
             pending = await conn.fetchone(
                 "SELECT count(*) AS n FROM portfolio_wallet_ops WHERE pubkey=:p AND state!='completed'",
@@ -435,6 +445,51 @@ class BrowserPortfolio:
         if row is None:
             raise HTTPException(404, "Card not found.")
         return self.portfolio.public_card(dict(row))
+
+    async def delete(
+        self,
+        pubkey: str,
+        card_id: str,
+        body: DeleteRequest,
+        listed: Callable[[Connection, str], Awaitable[bool]],
+    ) -> None:
+        """Burn an NFT the profile holds and erase its JPG.
+
+        The mint retires the asset for good, so pending links and transfer
+        JPGs die with it. Every card that showed this JPG (earlier owners'
+        sent history included) goes too: the image is gone."""
+        try:
+            pres = Presentation.from_bytes(bytes.fromhex(body.presentation))
+        except ValueError:
+            raise HTTPException(400, "Invalid burn presentation.")
+        locks = LOCKS + [
+            LockOptions(table=name)
+            for name in ("portfolio_images", "portfolio_links", "market_listings")
+        ]
+        async with self.db.get_connection(locks=locks) as conn:
+            await self.portfolio.reconcile(conn, pubkey)
+            card = await self.portfolio.owned_card(conn, pubkey, card_id)
+            if await listed(conn, card_id):
+                raise HTTPException(409, "Unlist this NFT before deleting it.")
+            if await conn.fetchone(
+                "SELECT id FROM portfolio_wallet_ops WHERE pubkey=:p AND h=:h AND state!='completed'",
+                {"p": pubkey, "h": card["h"]},
+            ):
+                raise HTTPException(
+                    409, "Finish this NFT's pending wallet action first."
+                )
+            current = NFTClient.decode_showing(card["showing"])[1]
+            if pres.h != current.h or pres.nullifier != current.nullifier:
+                raise HTTPException(403, "Burn this card's current credential.")
+            await self.ledger.burn(pres, conn=conn)
+            for statement in (
+                "DELETE FROM portfolio_links WHERE h=:h",
+                "DELETE FROM portfolio_covers WHERE h=:h",
+                "DELETE FROM market_sales WHERE h=:h",
+                "DELETE FROM portfolio_cards WHERE h=:h",
+                "DELETE FROM portfolio_images WHERE h=:h",
+            ):
+                await conn.execute(statement, {"h": card["h"]})
 
     @staticmethod
     def _verify_claim(pubkey: str, signature: str, showing: str) -> bool:

@@ -794,6 +794,9 @@ main.page > .back { margin-bottom: 20px; }
 /* Hold-to-confirm is always the primary action. */
 .hold, .pending-box .hold { background: var(--lime); color: #111; border-color: #111; }
 .hold:disabled { opacity: .45; }
+.hold.hold-danger { background: var(--paper); color: var(--text); }
+.hold-danger .hold-fill { background: var(--bad-bg); }
+.delete-link { color: var(--bad-bg); }
 
 /* Offers on the seller's own listing */
 .listing-offers { display: flex; flex-direction: column; gap: 12px; padding: 18px; border: 2px solid var(--ink); border-radius: 20px; background: var(--paper); box-shadow: var(--shadow); }

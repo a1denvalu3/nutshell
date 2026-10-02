@@ -205,7 +205,7 @@ export function CheckRow({ state, children, detail }) {
 }
 
 // Press-and-hold confirmation for irreversible asset movements.
-export function HoldButton({ onComplete, disabled = false, children, duration = 1400, icon = null }) {
+export function HoldButton({ onComplete, disabled = false, children, duration = 1400, icon = null, danger = false }) {
   const progress = useMotionValue(0);
   const width = useTransform(progress, (v) => `${v * 100}%`);
   const run = useRef(null);
@@ -223,7 +223,7 @@ export function HoldButton({ onComplete, disabled = false, children, duration = 
     run.current.stop(); run.current = null; setHolding(false);
     animate(progress, 0, { duration: .25, ease: 'easeOut' });
   };
-  return <motion.button type="button" className={`btn btn-primary btn-lg hold ${holding ? 'is-holding' : ''}`} disabled={disabled}
+  return <motion.button type="button" className={`btn btn-primary btn-lg hold ${danger ? 'hold-danger' : ''} ${holding ? 'is-holding' : ''}`} disabled={disabled}
     animate={{ scale: holding ? .985 : 1 }} transition={snappy}
     onPointerDown={(e) => { if (e.button === 0) start(); }} onPointerUp={stop} onPointerLeave={stop} onPointerCancel={stop}
     onKeyDown={(e) => { if ((e.key === ' ' || e.key === 'Enter') && !e.repeat) { e.preventDefault(); start(); } }}

@@ -4,7 +4,7 @@ import { Menu } from '@base-ui/react/menu';
 import { AnimatePresence, MotionConfig, motion } from 'motion/react';
 import { Toaster, toast } from 'sonner';
 import { ArrowLeft, ArrowRight, Check, Compass, Monitor, Moon, Sun, Image as ImageIcon, Download, Ellipsis, Eye, EyeOff, FileJson, HandCoins, ImageDown, Info, KeyRound, Link2, Plus,
-  Pencil, Radio, RefreshCw, RotateCcw, Send, ShieldX, Upload, Undo2, Wallet } from 'lucide-react';
+  Pencil, Radio, RefreshCw, RotateCcw, Send, ShieldX, Trash2, Upload, Undo2, Wallet } from 'lucide-react';
 import '@fontsource-variable/inter';
 import '@fontsource-variable/bricolage-grotesque';
 import '@fontsource/jetbrains-mono/400.css';
@@ -62,6 +62,13 @@ function readRoute() {
   return { page: 'home' };
 }
 const imageUrl = (h) => `/api/images/${h}.jpg`;
+// A deleted NFT's JPG is gone, but sales, offers and old listings still name
+// it: show a neutral placeholder rather than a broken image.
+const MISSING_JPG = 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><rect width="100" height="100" fill="#ebe6d9"/><path d="M38 38 L62 62 M62 38 L38 62" stroke="#5d5a52" stroke-width="5" stroke-linecap="round"/></svg>');
+window.addEventListener('error', (e) => {
+  const img = e.target;
+  if (img instanceof HTMLImageElement && img.src.includes('/api/images/')) img.src = MISSING_JPG;
+}, true);
 const tileIn = (i) => ({ initial: { opacity: 0, y: 16 }, whileInView: { opacity: 1, y: 0 }, viewport: { once: true, margin: '-40px' }, transition: { delay: i * .06, type: 'spring', stiffness: 220, damping: 26 } });
 
 function useVerification(profile, config, refresh) {
@@ -142,7 +149,7 @@ function PreviewCard({ variant, title, note }) {
 
 /* ---------- Card detail with guarded send flow ---------- */
 
-function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend, onSend, onCancel, isNew, market, nftWallet, onChanged, navigate }) {
+function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend, onSend, onCancel, onDelete, isNew, market, nftWallet, onChanged, navigate }) {
   const [listed, setListed] = useState(null);
   const canSend = walletCanSend && !listed;
   const [flipped, setFlipped] = useState(false);
@@ -151,6 +158,12 @@ function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend,
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [method, setMethod] = useState('link'), [locked, setLocked] = useState(false);
   const [password, setPassword] = useState(''), [repeat, setRepeat] = useState(''), [result2, setResult2] = useState(null);
+  const [unlisting, setUnlisting] = useState(false);
+  const unlist = async () => {
+    setUnlisting(true);
+    try { await market.money.api.unlist(listed.id); setListed(null); onChanged(); toast.success('Unlisted. Pending offers were declined and refund at their deadlines.'); }
+    catch (e) { toast.error(e.message); } finally { setUnlisting(false); }
+  };
   const resetSend = () => { setAck(false); setPassword(''); setRepeat(''); setLocked(false); setMethod('link'); };
   useEffect(() => { setView('info'); resetSend(); setResult2(null); setFlipped(false); setConfirmCancel(false); setListed(null); }, [card.id]);
   useEffect(() => { if (!confirmCancel) return; const t = setTimeout(() => setConfirmCancel(false), 4000); return () => clearTimeout(t); }, [confirmCancel]);
@@ -225,6 +238,7 @@ function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend,
 
           <div className="detail-links">
             <Button variant="ghost" size="sm" icon={<ImageDown size={14} />} onClick={() => { const a = document.createElement('a'); a.href = imageUrl(card.h); a.download = `cashu-${card.h.slice(0, 12)}.jpg`; a.click(); }}>Save image</Button>
+            {owner && !sent && <Button variant="ghost" size="sm" className="delete-link" icon={<Trash2 size={14} />} disabled={!!busy} onClick={() => setView('delete')}>Delete</Button>}
             <Button variant="ghost" size="sm" icon={<FileJson size={14} />} onClick={() => download(new Blob([JSON.stringify({ ...card, mint: { keyset_id: config.keyset_id, public_key: config.public_key } }, null, 2)], { type: 'application/json' }), `cashu-proof-${card.h.slice(0, 12)}.json`)}>Public proof</Button>
           </div>
           <p className="hint">Saved images and proofs contain no transfer credential.</p>
@@ -266,6 +280,18 @@ function CardDetail({ card, result, owner, busy, config, canSend: walletCanSend,
           {busy ? <Button variant="primary" size="lg" className="full" disabled icon={<Spinner />}>{busy}</Button>
             : <HoldButton disabled={!ack || !canSend || !passwordOk} onComplete={send} icon={method === 'link' ? <Link2 size={16} /> : <Send size={16} />}>{method === 'link' ? 'Hold to create link' : 'Hold to create transfer JPG'}</HoldButton>}
           <p className="hint" id="hold-hint">Press and hold to confirm. Releasing early cancels.</p>
+        </motion.div>}
+
+        {view === 'delete' && <motion.div key="delete" className="detail-panel" {...panel}>
+          <BackButton onClick={() => setView('info')} disabled={!!busy} />
+          <h2>Delete this NFT</h2>
+          <p className="muted">The mint burns it for good and the picture is removed from Cashu NFT, including earlier owners’ history.{ready ? ' The pending link or transfer JPG stops working.' : ''} You can’t mint this exact JPG again.</p>
+          {listed ? <Notice action={listed.state === 'active' ? <Button size="sm" variant="secondary" disabled={!!busy || unlisting || !market?.money}
+              icon={unlisting ? <Spinner /> : null} onClick={unlist}>Unlist</Button> : null}>
+              {listed.state === 'active' ? 'This NFT is listed on the market. Unlist it first: pending offers are declined and refund at their deadlines.' : 'A sale of this NFT is settling, so it can’t be deleted.'}
+            </Notice>
+            : !walletCanSend ? <p className="hint">Your wallet is still syncing this NFT.</p> : null}
+          <HoldButton danger disabled={!!busy || !!listed || !walletCanSend} onComplete={() => onDelete(card)} icon={<Trash2 size={16} />}>Hold to delete</HoldButton>
         </motion.div>}
 
         {view === 'sent' && <motion.div key="sent" className="detail-panel" {...panel}>
@@ -597,6 +623,11 @@ function App() {
       return { file: true };
     } catch (e) { toast.error(e.message); await reload().catch(() => {}); return null; } finally { setBusy(''); }
   };
+  const deleteCard = async (target) => {
+    setBusy('Deleting');
+    try { await localWallet.destroy(target); setSelected(null); await reload(); toast.success('Deleted. The NFT is burned and its picture is gone.'); }
+    catch (e) { toast.error(e.message); await reload().catch(() => {}); } finally { setBusy(''); }
+  };
   const cancelTransfer = async (target) => {
     setBusy('Canceling transfer');
     try { await localWallet.cancel(target); await reload(); toast.success('Transfer canceled. Every link and transfer JPG for it is now void.'); }
@@ -898,7 +929,7 @@ function App() {
 
     <Modal open={!!card} close={() => { if (!busy) setSelected(null); }} size="wide" title={card?.title}>
       {card && <CardDetail card={card} result={verification[card.id]} owner={owner} busy={busy} config={config}
-        canSend={!!localWallet && !!card.signature && card.custody === 'browser'} onSend={sendCard} onCancel={cancelTransfer} isNew={card.id === fresh}
+        canSend={!!localWallet && !!card.signature && card.custody === 'browser'} onSend={sendCard} onCancel={cancelTransfer} onDelete={deleteCard} isNew={card.id === fresh}
         market={owner ? market : null} nftWallet={localWallet} onChanged={() => reload()} navigate={navigate} />}
     </Modal>
     <Toaster theme={theme.dark ? 'dark' : 'light'} position="bottom-center" toastOptions={{ className: 'toast' }} />

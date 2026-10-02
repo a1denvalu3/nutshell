@@ -96,6 +96,33 @@ const phases = {
     } finally { await manager.dispose(); }
   },
 
+  /** Owner creates a transfer link, then deletes the NFT: the mint burns it. */
+  async nft_delete({ secret }) {
+    const pubkey = await profile(secret, 'Collector');
+    const { manager, wallet } = await nftWallet(secret);
+    try {
+      const minted = await wallet.mint(jpg, 'Doomed');
+      const { nullifier: N } = await wallet.sendToken(minted);
+      await wallet.destroy(await card(pubkey, minted.id));
+      const state = await (await realFetch(ORIGIN + '/v1/nft/checkstate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nullifiers: [N] }) })).json();
+      let remint = '';
+      try { await wallet.mint(jpg, 'Again'); } catch (error) { remint = error.message; }
+      const image = (await realFetch(`${ORIGIN}/api/images/${minted.h}.jpg`)).status;
+      return { cards: (await get(`/api/profiles/${pubkey}`)).cards, image, spent: state.states[0]?.state, remint };
+    } finally { await manager.dispose(); }
+  },
+
+  /** A listed NFT can't be deleted (a fresh device recovers its wallet first). */
+  async nft_delete_listed({ secret, card_id }) {
+    const { manager, wallet } = await nftWallet(secret);
+    try {
+      await wallet.recover();
+      await wallet.destroy(await card(profileKey(secret), card_id));
+      return { deleted: true };
+    } catch (error) { return { error: error.message }; }
+    finally { await manager.dispose(); }
+  },
+
   /** Seller mints an NFT in the browser wallet and lists it (rotating it first). */
   async seller_list({ secret, price, jpg_path, title = 'Sunset' }) {
     const pubkey = await profile(secret, 'Seller');

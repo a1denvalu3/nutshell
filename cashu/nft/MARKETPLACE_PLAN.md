@@ -978,3 +978,22 @@ and `make check` clean.
   no IndexedDB at all, and by a headless Chromium run with `indexedDB`
   removed: the collection was created, the wallet opened, and there were no
   console errors.
+- **Deleting an NFT.** Owners can delete an NFT from its detail view (Delete,
+  then hold to confirm). The browser wallet presents the card's current
+  credential for the mint's burn binding (`Cashu_PS_Burn_v1`). The signed
+  `POST /api/profiles/{pk}/wallet/cards/{id}/delete` burns the asset at the mint
+  and, in the same transaction, removes:
+  - every card for that JPG, including earlier owners' sent history;
+  - its links, cover and sales records;
+  - the JPG itself.
+
+  Pending links and transfer JPGs die with the burn. Re-minting the same JPG
+  is refused with "This JPG was deleted and can't be minted again." Deleting is
+  refused while the NFT is listed or a sale is settling. The delete panel offers
+  Unlist inline (unlisting already existed in the listing controls). Pictures
+  that history still points at show a neutral placeholder. Covered by:
+  - `test_delete_burns_nft_and_erases_jpg` and
+    `test_delete_needs_the_current_credential`;
+  - `test_listed_nft_cannot_be_deleted_until_unlisted`;
+  - the browser end-to-end tests `test_browser_deletes_nft_and_voids_its_link`
+    and `test_browser_refuses_to_delete_a_listed_nft`.

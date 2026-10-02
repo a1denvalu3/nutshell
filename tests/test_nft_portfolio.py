@@ -17,6 +17,7 @@ from PIL import Image
 from cashu.core.crypto.bls import PublicKey, curve_order
 from cashu.core.crypto.ps import (
     G_NULL,
+    PS_BURN_BINDING,
     Credential,
     MintPublicKeyPS,
     blind_issue_commit,
@@ -728,6 +729,55 @@ def test_cancel_invalidates_exported_jpg(client):
     assert fresh.status_code == 200
     assert fresh.content != transfer
     assert bob.receive(fresh.content).status_code == 200
+
+
+def burn(
+    profile: Profile,
+    card_id: str,
+    binding: bytes = PS_BURN_BINDING,
+    cred: Optional[Credential] = None,
+):
+    pres = present(cred or profile.credentials[card_id], binding=binding)
+    return profile.json_post(
+        f"{profile.base}/wallet/cards/{card_id}/delete",
+        {"presentation": pres.to_bytes().hex()},
+    )
+
+
+def test_delete_burns_nft_and_erases_jpg(client):
+    alice, bob = Profile(client), Profile(client)
+    alice.create()
+    bob.create()
+    jpg = make_jpg()
+    card, transfer = exported(alice, jpg)
+    keep = minted_card(alice, make_jpg(color=(20, 160, 40)))
+    # Only the burn binding works, and only the owner can ask.
+    assert burn(alice, card["id"], binding=b"not a burn").status_code != 200
+    stolen = alice.credentials[card["id"]]
+    assert burn(bob, card["id"], cred=stolen).status_code == 404
+    assert [c["id"] for c in alice.get()["cards"]] == [keep["id"], card["id"]]
+
+    resp = burn(alice, card["id"])
+    assert resp.status_code == 200, resp.text
+    assert [c["id"] for c in alice.get()["cards"]] == [keep["id"]]
+    assert client.get(f"/api/images/{card['h']}.jpg").status_code == 404
+    assert client.get(f"/api/images/{keep['h']}.jpg").status_code == 200
+    # The pending transfer JPG died with it, and the JPG can't come back.
+    assert bob.receive(transfer).status_code != 200
+    assert bob.get()["cards"] == []
+    remint = alice.mint(jpg)
+    assert remint.status_code == 409 and "deleted" in remint.json()["detail"]
+    assert burn(alice, card["id"]).status_code == 404
+
+
+def test_delete_needs_the_current_credential(client):
+    alice = Profile(client)
+    alice.create()
+    card = minted_card(alice)
+    other = minted_card(alice, make_jpg(color=(20, 160, 40)))
+    alice.credentials[card["id"]] = alice.credentials[other["id"]]
+    assert burn(alice, card["id"]).status_code == 403
+    assert len(alice.get()["cards"]) == 2
 
 
 # --- (9) image/token mismatch -------------------------------------------------

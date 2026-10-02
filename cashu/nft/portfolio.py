@@ -53,6 +53,7 @@ from .portfolio_social import (
 )
 from .portfolio_wallet import (
     BrowserPortfolio,
+    DeleteRequest,
     Envelope,
     PublishRequest,
     WalletProofRequest,
@@ -897,6 +898,17 @@ def create_portfolio_app(
                 {"id": card_id},
             )
             return portfolio.public_card({**row, "status": "ready"})
+
+    @app.post("/api/profiles/{pubkey}/wallet/cards/{card_id}/delete")
+    async def wallet_delete(pubkey: str, card_id: str, request: Request):
+        raw = await read_body(request, 2048)
+        await authorize(request, pubkey, raw)
+        try:
+            body = DeleteRequest.model_validate_json(raw)
+        except ValidationError:
+            raise HTTPException(400, "Invalid burn presentation.")
+        await browser_wallet.delete(pubkey, card_id, body, market.card_listed)
+        return {"deleted": card_id}
 
     @app.post("/api/profiles/{pubkey}/cards/pending")
     async def pending_cards(pubkey: str, request: Request):

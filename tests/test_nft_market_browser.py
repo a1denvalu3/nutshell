@@ -139,6 +139,26 @@ async def test_browser_one_request_issuance_and_recovery(
 
 
 @pytest.mark.asyncio
+async def test_browser_deletes_nft_and_voids_its_link(server):
+    result = await server.browser("nft_delete", secret=key())
+    assert result["cards"] == []
+    assert result["image"] == 404
+    assert result["spent"] == "SPENT"
+    assert "deleted" in result["remint"]
+
+
+@pytest.mark.asyncio
+async def test_browser_refuses_to_delete_a_listed_nft(server):
+    seller = key()
+    listed = await server.browser("seller_list", secret=seller, price=100)
+    card_id = listed["listing"]["card_id"]
+    result = await server.browser("nft_delete_listed", secret=seller, card_id=card_id)
+    assert "Unlist" in result["error"]
+    profile = await server.db.fetchall("SELECT id FROM portfolio_cards")
+    assert [row["id"] for row in profile] == [card_id]
+
+
+@pytest.mark.asyncio
 async def test_browser_offline_purchase_competing_refund_and_payout(server):
     seller, alice, bob = key(), key(), key()
 

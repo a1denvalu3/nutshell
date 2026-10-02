@@ -25,6 +25,7 @@ import cashu.nft.market_net as net
 from cashu.core.crypto.bls import PublicKey as G1Point
 from cashu.core.crypto.ps import (
     G1,
+    PS_BURN_BINDING,
     Credential,
     present,
     present_showing,
@@ -816,6 +817,27 @@ async def test_listing_guards_revisions_and_unlisting(env, cash):
         seller.actor.base() + f"/wallet/cards/{seller.card_id}/ready"
     )
     assert r.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_listed_nft_cannot_be_deleted_until_unlisted(env):
+    seller = await give_nft(env, await env.actor("Ana"))
+    listing = await list_nft(env, seller, 10)
+    path = seller.actor.base() + f"/wallet/cards/{seller.card_id}/delete"
+    body = {
+        "presentation": present(seller.cred, binding=PS_BURN_BINDING).to_bytes().hex()
+    }
+    r = await seller.actor.post(path, body)
+    assert r.status_code == 409 and "Unlist" in r.json()["detail"]
+    r = await seller.actor.post(
+        seller.actor.base() + f"/market/listings/{listing['id']}/unlist"
+    )
+    assert r.json()["state"] == "unlisted"
+    r = await seller.actor.post(path, body)
+    assert r.status_code == 200, r.text
+    assert await env.ledger.asset_status(seller.cred.h) == "burned"
+    h = seller.cred.h.to_bytes(32, "big").hex()
+    assert (await env.http.get(f"/api/images/{h}.jpg")).status_code == 404
 
 
 @pytest.mark.asyncio

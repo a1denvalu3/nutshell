@@ -195,6 +195,15 @@ export class BrowserNFTWallet {
       await publish({ encrypted_credential: encrypted, ...publicCard(cred, this.secret, this.pubkey) });
     });
   }
+  /** Delete for good: the mint burns the credential (pending links and
+   *  transfer JPGs die with it), then the server drops the card and its JPG. */
+  async destroy(card: Card): Promise<void> {
+    return this.lock(async () => {
+      const cred = await this.credential(card);
+      await this.post(`/cards/${card.id}/delete`, { presentation: boundPresentation(cred, utf8('Cashu_PS_Burn_v1')) });
+      await this.vault.remove('card:' + card.id);
+    });
+  }
   async cancel(card: Card): Promise<Card> {
     return this.lock(async () => {
       const cred = await this.credential(card), stage = await this.prepare('rotate', new Uint8Array(), card.title, card.id);
