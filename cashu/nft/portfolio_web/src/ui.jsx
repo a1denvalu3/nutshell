@@ -3,6 +3,7 @@ import { Dialog } from '@base-ui/react/dialog';
 import { AnimatePresence, animate, motion, useMotionValue, useReducedMotion, useSpring, useTransform } from 'motion/react';
 import { toast } from 'sonner';
 import { Check, CircleAlert, CircleHelp, Copy, LoaderCircle, X, ArrowLeft } from 'lucide-react';
+import { onDeviceStorage } from './storage.ts';
 
 export const short = (s, head = 8, tail = 6) => s ? `${s.slice(0, head)}…${s.slice(-tail)}` : '';
 export const date = (n) => new Date(n * 1000).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
@@ -284,6 +285,14 @@ export function Notice({ tone = 'warn', children, action = null }) {
   return <motion.div className={`notice notice-${tone}`} role="status" initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}>
     <CircleAlert size={16} /><div>{children}</div>{action}
   </motion.div>;
+}
+
+// Shown when the browser keeps no on-device storage (e.g. Lockdown Mode).
+export function StorageNotice() {
+  const [ephemeral, setEphemeral] = useState(false);
+  useEffect(() => { onDeviceStorage().then((ok) => setEphemeral(!ok)); }, []);
+  if (!ephemeral) return null;
+  return <Notice>This browser doesn't allow on-device storage, so your wallets load from their encrypted server backup on each visit. Keep your collection key saved.</Notice>;
 }
 
 // Shared panel transition for multi-step dialogs.

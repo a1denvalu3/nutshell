@@ -12,13 +12,14 @@ import '@fontsource/jetbrains-mono/500.css';
 import './style.css';
 import { newPrivateKey, parseShowing, profileKey, validateKeyset } from './crypto.mjs';
 import { checked, download, getJSON, signedRequest } from './api.mjs';
-import { BackButton, Button, CheckRow, SkeletonCards, CopyChip, DrawnCheck, HoldButton, Identicon, Modal, Notice, PreviewArt, Spinner, StatusBadge,
+import { BackButton, Button, CheckRow, SkeletonCards, CopyChip, DrawnCheck, HoldButton, Identicon, Modal, Notice, PreviewArt, StorageNotice, Spinner, StatusBadge,
   Tilt, copyText, date, identiconColor, panel, short, useTint, verdict } from './ui.jsx';
 import HowItWorks from './HowItWorks.jsx';
 import ClaimPage from './claim.jsx';
 import { linkUrl, newLinkId, sealLink } from './link.mjs';
 import { ListingControls, ListingPage, MarketPage, OffersPage, PendingPurchases, useMarket } from './market.jsx';
 import { WalletPage } from './WalletPage.jsx';
+import { local } from './storage.ts';
 import { ActivityItem, ActivityList, ActivityPage, CollectionCard, EditCollectionDialog, ExplorePage, FollowButton, LikeButton, MarketCard,
   NetworkDialog, Segmented, useRelations } from './social.jsx';
 
@@ -27,12 +28,12 @@ const transferTools = () => Promise.all([import('./wallet/jpg.ts'), import('./wa
 
 const KEYRING = 'cashu-nft-keys-v1', ACTIVE = 'cashu-nft-active-v1', MINT_PIN = 'cashu-nft-mint-v1';
 function storedKeys() {
-  try { const keys = JSON.parse(localStorage.getItem(KEYRING) || '{}'); return keys && typeof keys === 'object' && !Array.isArray(keys) ? keys : {}; }
+  try { const keys = JSON.parse(local.get(KEYRING) || '{}'); return keys && typeof keys === 'object' && !Array.isArray(keys) ? keys : {}; }
   catch { return {}; }
 }
 function initialIdentity() {
   try {
-    const keys = storedKeys(), active = localStorage.getItem(ACTIVE);
+    const keys = storedKeys(), active = local.get(ACTIVE);
     const secret = keys[active];
     return secret && profileKey(secret) === active ? { secret, pubkey: active } : null;
   } catch { return null; }
@@ -475,10 +476,10 @@ function App() {
   useEffect(() => {
     getJSON('/api/config').then((data) => {
       validateKeyset(data);
-      const pinned = localStorage.getItem(MINT_PIN);
+      const pinned = local.get(MINT_PIN);
       const buildPin = import.meta.env.VITE_MINT_KEYSET_ID;
       if ((pinned && pinned !== data.keyset_id) || (buildPin && buildPin !== data.keyset_id)) throw new Error('The mint identity has changed. Restore the original mint before using this app.');
-      localStorage.setItem(MINT_PIN, data.keyset_id);
+      local.set(MINT_PIN, data.keyset_id);
       setConfig(data);
     }).catch((e) => setFatal(e.message));
   }, []);
@@ -553,7 +554,7 @@ function App() {
   const openCreate = () => { setName(''); setGenerated(newPrivateKey()); setBackedUp(false); setDialog('create'); };
   const saveIdentity = (secret) => {
     const p = profileKey(secret), keys = storedKeys(); keys[p] = secret;
-    localStorage.setItem(KEYRING, JSON.stringify(keys)); localStorage.setItem(ACTIVE, p);
+    local.set(KEYRING, JSON.stringify(keys)); local.set(ACTIVE, p);
     const next = { secret, pubkey: p }; setIdentity(next); return next;
   };
   const onboard = async (event) => {
@@ -806,6 +807,7 @@ function App() {
         </section>
 
         {profileError && <Notice action={!profile && identity?.pubkey === pubkey ? <Button size="sm" variant="secondary" onClick={() => { setInputKey(identity.secret); setDialog('import'); }}>Create it</Button> : null}>{profileError}</Notice>}
+        {owner && <StorageNotice />}
         {owner && walletError && <Notice tone="bad" action={<Button size="sm" variant="secondary" onClick={recoverWallet} disabled={!!busy}>Sync wallet</Button>}>{walletError}</Notice>}
 
         <div className="tabs-row">

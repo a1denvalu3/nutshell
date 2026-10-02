@@ -1,4 +1,5 @@
-import { initializeCoco, type Manager } from '@cashu/coco-core';
+import { MemoryRepositories, initializeCoco, type Manager } from '@cashu/coco-core';
+import { onDeviceStorage } from '../storage.ts';
 import { IndexedDbRepositories } from '@cashu/coco-indexeddb';
 import type { Plugin } from '@cashu/coco-core/plugin';
 import { hmac } from '@noble/hashes/hmac.js';
@@ -199,7 +200,10 @@ const opened = new Map<string, Promise<{ manager: Manager; wallet: BrowserNFTWal
 export function openWallet(secret: string, config: MintConfig) {
   const pubkey = profileKey(secret), id = pubkey + ':' + config.keyset_id;
   if (!opened.has(id)) opened.set(id, (async () => {
-    const repos = new IndexedDbRepositories({ name: 'cashu-nft-coco-v2:' + id });
+    // Coco's IndexedDB storage needs IndexedDB; without it (e.g. Safari
+    // Lockdown Mode) the wallet runs in memory and recovers from its
+    // encrypted server backups on every open.
+    const repos = (await onDeviceStorage()) ? new IndexedDbRepositories({ name: 'cashu-nft-coco-v2:' + id }) : new MemoryRepositories();
     await repos.init();
     const seed = await walletSeed(secret, config.keyset_id), vault = new EncryptedVault(secret, config.keyset_id);
     let wallet: BrowserNFTWallet | undefined;

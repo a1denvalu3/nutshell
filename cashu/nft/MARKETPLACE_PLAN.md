@@ -965,3 +965,16 @@ and `make check` clean.
   and in Explore. The owner's app reads pending card ids from the signed
   `POST /api/profiles/{pk}/cards/pending` and shows "Transfer pending" only
   to the owner.
+- **Browsers without IndexedDB.** Mobile Safari with Lockdown Mode (and some
+  in-app browsers) has no IndexedDB, and Coco's Dexie storage failed with
+  "IndexedDB API missing". `src/storage.ts` probes IndexedDB once. Without it,
+  the credential vault, the ecash wallet's local records and Coco's
+  repositories run in memory. Every open restores from the encrypted server
+  backups. In memory mode the ecash snapshot is pushed to the server about
+  250 ms after each change, not every 30 s. The device id is kept in
+  localStorage so a reload keeps its own lease. The owner's profile and the
+  wallet page show a notice. localStorage access is wrapped so blocked
+  storage cannot throw. Covered by `tests/storage.test.mjs`, which runs with
+  no IndexedDB at all, and by a headless Chromium run with `indexedDB`
+  removed: the collection was created, the wallet opened, and there were no
+  console errors.

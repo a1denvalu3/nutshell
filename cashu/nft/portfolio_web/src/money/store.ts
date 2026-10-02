@@ -12,6 +12,7 @@ import { Amount } from '@cashu/cashu-ts';
 import { MemoryRepositories } from '@cashu/coco-core';
 import { hexToBytes, bytesToHex } from '@noble/hashes/utils.js';
 import { profileKey } from '../crypto.mjs';
+import { local, openRecordStore, type RecordStore } from '../storage.ts';
 
 const enc = new TextEncoder();
 const copy = (b: Uint8Array) => Uint8Array.from(b);
@@ -128,53 +129,16 @@ export async function open<T>(key: CryptoKey, aad: string, sealed: Sealed): Prom
 
 // --- local storage ----------------------------------------------------------------
 
-function idb(name: string): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(name, 1);
-    request.onupgradeneeded = () => request.result.createObjectStore('records', { keyPath: 'id' });
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
 export class LocalRecords {
-  private db: Promise<IDBDatabase>;
-  constructor(pubkey: string) { this.db = idb(`cashu-money-v1:${pubkey}`); }
-  async get<T>(id: string): Promise<T | undefined> {
-    const db = await this.db;
-    return new Promise((resolve, reject) => {
-      const r = db.transaction('records').objectStore('records').get(id);
-      r.onsuccess = () => resolve(r.result?.value);
-      r.onerror = () => reject(r.error);
-    });
-  }
-  async put(id: string, value: unknown): Promise<void> {
-    const db = await this.db;
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction('records', 'readwrite');
-      tx.objectStore('records').put({ id, value });
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-  }
-  async remove(id: string): Promise<void> {
-    const db = await this.db;
-    await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction('records', 'readwrite');
-      tx.objectStore('records').delete(id);
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-    });
-  }
-  async all(): Promise<{ id: string; value: unknown }[]> {
-    const db = await this.db;
-    return new Promise((resolve, reject) => {
-      const r = db.transaction('records').objectStore('records').getAll();
-      r.onsuccess = () => resolve(r.result);
-      r.onerror = () => reject(r.error);
-    });
-  }
-  async close() { (await this.db).close(); }
+  private store: Promise<RecordStore>;
+  constructor(pubkey: string) { this.store = openRecordStore(`cashu-money-v1:${pubkey}`, 'records'); }
+  /** False when the browser keeps nothing on this device (memory fallback). */
+  async persistent() { return (await this.store).persistent; }
+  async get<T>(id: string): Promise<T | undefined> { return (await (await this.store).get<{ id: string; value: T }>(id))?.value; }
+  async put(id: string, value: unknown): Promise<void> { await (await this.store).put({ id, value }); }
+  async remove(id: string): Promise<void> { await (await this.store).remove(id); }
+  async all(): Promise<{ id: string; value: unknown }[]> { return (await this.store).all<{ id: string; value: unknown }>(); }
+  async close() { (await this.store).close(); }
 }
 
 // --- encrypted snapshot repositories ----------------------------------------------
@@ -191,6 +155,9 @@ const isRead = (name: string) => READ_PREFIXES.some((p) => name.startsWith(p));
 export class EncryptedRepositories extends MemoryRepositories {
   revision = 0;
   device = '';
+  /** True when nothing persists on this device: every change is pushed to the server backup right away. */
+  ephemeral = false;
+  private syncTimer: ReturnType<typeof setTimeout> | null = null;
   readOnly = false;
   private key!: CryptoKey;
   private local!: LocalRecords;
@@ -207,8 +174,17 @@ export class EncryptedRepositories extends MemoryRepositories {
     repos.key = await moneyKey(secret, 'snapshot');
     repos.aad = `Cashu_Money_Snapshot_v1\n${pubkey}`;
     repos.remote = remote;
+    repos.ephemeral = !(await repos.local.persistent());
+    // Without on-device storage, keep the device id in localStorage so a
+    // reload is the same device (and not locked out by its own lease).
+    const deviceKey = `cashu-money-device:${pubkey}`;
     let device = await repos.local.get<string>('device');
-    if (!device) { device = bytesToHex(crypto.getRandomValues(new Uint8Array(16))); await repos.local.put('device', device); }
+    if (!device && repos.ephemeral) { device = local.get(deviceKey) ?? undefined; }
+    if (!device) {
+      device = bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+      await repos.local.put('device', device);
+      if (repos.ephemeral) local.set(deviceKey, device);
+    }
     repos.device = device;
     await repos.load();
     // Wrap only after loading so hydration doesn't count as a mutation.
@@ -286,6 +262,9 @@ export class EncryptedRepositories extends MemoryRepositories {
       this.revision += 1;
       await this.local.put('snapshot', { revision: this.revision, envelope });
       this.dirtyRemote = true;
+      if (this.ephemeral && this.remote && !this.syncTimer) {
+        this.syncTimer = setTimeout(() => { this.syncTimer = null; this.sync().catch(() => { this.dirtyRemote = true; }); }, 250);
+      }
     });
     return this.writing;
   }
@@ -308,5 +287,9 @@ export class EncryptedRepositories extends MemoryRepositories {
     if (this.remote && !this.readOnly) await this.remote.lease(this.device, false, true);
   }
 
-  async close() { await this.writing; await this.local.close(); }
+  async close() {
+    await this.writing;
+    if (this.syncTimer) { clearTimeout(this.syncTimer); this.syncTimer = null; await this.sync().catch(() => {}); }
+    await this.local.close();
+  }
 }

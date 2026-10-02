@@ -1,6 +1,7 @@
 import { bytesToHex, hexToBytes } from '@noble/hashes/utils.js';
 import { profileKey } from '../crypto.mjs';
 import { utf8 } from './ps.ts';
+import { openRecordStore, type RecordStore } from '../storage.ts';
 
 export interface Envelope { version: 1; nonce: string; ciphertext: string; }
 const copy = (bytes: Uint8Array) => Uint8Array.from(bytes);
@@ -10,19 +11,13 @@ export async function walletSeed(secret: string, keyset: string) {
 }
 export class EncryptedVault {
   private key: Promise<CryptoKey>;
-  private database: Promise<IDBDatabase>;
+  private database: Promise<RecordStore>;
   constructor(private secret: string, private keyset: string) {
     this.key = (async () => {
       const material = await crypto.subtle.importKey('raw', copy(hexToBytes(secret)), 'HKDF', false, ['deriveKey']);
       return crypto.subtle.deriveKey({ name: 'HKDF', hash: 'SHA-256', salt: copy(hexToBytes(keyset)), info: copy(utf8('Cashu_NFT_Credential_Encryption_v1')) }, material, { name: 'AES-GCM', length: 256 }, false, ['encrypt', 'decrypt']);
     })();
-    this.database = new Promise((resolve, reject) => {
-      const request = indexedDB.open(`cashu-nft-vault-v2:${profileKey(secret)}:${keyset}`, 1);
-      request.onupgradeneeded = () => request.result.createObjectStore('encrypted', { keyPath: 'id' });
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
-      request.onblocked = () => reject(new Error('Close other portfolio tabs to upgrade the wallet'));
-    });
+    this.database = openRecordStore(`cashu-nft-vault-v2:${profileKey(secret)}:${keyset}`, 'encrypted');
   }
   private aad(scope: string) { return copy(utf8(`Cashu_NFT_Encrypted_v1\n${profileKey(this.secret)}\n${this.keyset}\n${scope}`)); }
   async encrypt(value: unknown, scope: string): Promise<Envelope> {
@@ -35,20 +30,11 @@ export class EncryptedVault {
     const raw = await crypto.subtle.decrypt({ name: 'AES-GCM', iv: copy(hexToBytes(envelope.nonce)), additionalData: this.aad(scope), tagLength: 128 }, await this.key, copy(hexToBytes(envelope.ciphertext)));
     return JSON.parse(new TextDecoder().decode(raw)) as T;
   }
-  async put(id: string, envelope: Envelope) { await this.transaction('readwrite', store => store.put({ id, envelope })); }
+  async put(id: string, envelope: Envelope) { await (await this.database).put({ id, envelope }); }
   async get(id: string): Promise<Envelope | null> {
-    const row = await this.transaction<{ id: string; envelope: Envelope } | undefined>('readonly', store => store.get(id));
+    const row = await (await this.database).get<{ id: string; envelope: Envelope }>(id);
     return row?.envelope || null;
   }
-  async remove(id: string) { await this.transaction('readwrite', store => store.delete(id)); }
-  private async transaction<T>(mode: IDBTransactionMode, operation: (store: IDBObjectStore) => IDBRequest<T>): Promise<T> {
-    const db = await this.database;
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction('encrypted', mode), request = operation(tx.objectStore('encrypted'));
-      tx.oncomplete = () => resolve(request.result);
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error || new Error('Wallet storage transaction aborted'));
-    });
-  }
+  async remove(id: string) { await (await this.database).remove(id); }
   async close() { (await this.database).close(); }
 }

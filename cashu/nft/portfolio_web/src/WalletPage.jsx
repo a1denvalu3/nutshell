@@ -6,7 +6,7 @@ import { toast } from 'sonner';
 import QRCode from 'qrcode';
 import { ArrowDownToLine, ArrowLeft, ArrowUpFromLine, ClipboardPaste, Coins, ExternalLink, Plus, Wallet, Zap } from 'lucide-react';
 import { getJSON } from './api.mjs';
-import { Button, CopyChip, DrawnCheck, HoldButton, Modal, Notice, SkeletonRows, Spinner, panel } from './ui.jsx';
+import { Button, CopyChip, DrawnCheck, HoldButton, Modal, Notice, SkeletonRows, StorageNotice, Spinner, panel } from './ui.jsx';
 import { Segmented, imageUrl } from './social.jsx';
 import { TestBadge, host, sats } from './market.jsx';
 
@@ -259,6 +259,7 @@ export function WalletPage({ market, navigate, then }) {
   const readOnly = money.readOnly;
 
   return <main className="page wallet-page">
+    <StorageNotice />
     {market.state === 'elsewhere' && <Notice action={<Button size="sm" variant="secondary" onClick={market.takeOver}>Use it here</Button>}>This wallet is open on another device.</Notice>}
     {market.error && <Notice tone="bad">{market.error}</Notice>}
     {then && <Guide goal={goal} balances={market.balances} onContinue={backToGoal} />}

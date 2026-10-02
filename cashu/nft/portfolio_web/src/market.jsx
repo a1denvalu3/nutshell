@@ -7,6 +7,7 @@ import { ChevronRight, Clock, Coins, Search, Store, Tag, Wallet, Zap } from 'luc
 import { getJSON } from './api.mjs';
 import { BackButton, Button, CheckRow, HoldButton, SkeletonCards, SkeletonDetail, SkeletonRows, Identicon, Modal, Notice, Spinner, Tilt, panel, short, useTint } from './ui.jsx';
 import { Segmented, ago, imageUrl } from './social.jsx';
+import { local } from './storage.ts';
 
 const loadMoney = () => import('./money/wallet.ts');
 export const sats = (n) => `${Number(n || 0).toLocaleString()} sat${Number(n) === 1 ? '' : 's'}`;
@@ -81,7 +82,7 @@ export function useMarket(identity, nftWallet, open) {
     if (!money) return;
     let stop = false;
     const key = `cashu-market-cursor:${identity.pubkey}`;
-    let cursor = Number(localStorage.getItem(key) || 0), first = !localStorage.getItem(key);
+    let cursor = Number(local.get(key) || 0), first = !local.get(key);
     (async () => {
       while (!stop) {
         try {
@@ -90,7 +91,7 @@ export function useMarket(identity, nftWallet, open) {
           if (stop) return;
           // Store the cursor before publishing the unread count, so "mark read"
           // always covers every event the badge counted.
-          if (data.events.length) { cursor = data.cursor; localStorage.setItem(key, String(cursor)); }
+          if (data.events.length) { cursor = data.cursor; local.set(key, String(cursor)); }
           setUnread(data.unread);
           for (const e of data.events) {
             if (first || e.read) continue;
@@ -108,7 +109,7 @@ export function useMarket(identity, nftWallet, open) {
   const markRead = useCallback(async () => {
     if (!money) return;
     const key = `cashu-market-cursor:${identity.pubkey}`;
-    await money.api.markRead(Number(localStorage.getItem(key) || 0)).catch(() => {});
+    await money.api.markRead(Number(local.get(key) || 0)).catch(() => {});
     setUnread(0);
   }, [money, identity]);
   const takeOver = async () => {
