@@ -134,7 +134,7 @@ async def test_browser_one_request_issuance_and_recovery(
         assert result["minted"]["custody"] == "browser"
         assert result["minted"]["signature"]
     rows = await server.db.fetchall("SELECT * FROM ps_issue_sessions")
-    assert len(rows) == 1 and rows[0]["session"].startswith("v2:")
+    assert len(rows) == 1 and rows[0]["session"].startswith("v3:")
     assert len(await server.db.fetchall("SELECT * FROM ps_asset_tags")) == 1
 
 

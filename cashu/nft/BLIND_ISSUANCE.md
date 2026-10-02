@@ -1,113 +1,111 @@
-# Blind NFT issuance
+# Hash-hidden NFT issuance
 
-The Python NFT wallet and the portfolio's browser wallet use blind issuance
-of the JPG hash scalar `h`. Global byte-identity uniqueness remains enforced by
-a public deterministic duplicate tag. There is no independent tag service.
+The Python NFT wallet and portfolio browser wallet send a deterministic
+commitment to the JPG hash scalar `h`, rather than the scalar itself. New
+issuance takes one request and response, with no asset blinding factor or
+unblinding step. Global byte-identity uniqueness remains enforced by the
+existing public duplicate tag; there is no independent tag service.
 
 ## Protocol
 
 All scalars are in BLS12-381 Fr. `G_ASSET` is a domain-separated hash-to-G1
 point, distinct from the signature generator `G1` and owner nullifier base
-`G_NULL`. The mint's existing public parameters and credential format do not
-change.
+`G_NULL`. Public parameters and the final credential format are unchanged.
 
 1. The wallet chooses a random 16-byte request ID (the `session` field),
-   calculates `h = hash_asset(canonical JPG)`, and chooses its owner secret
-   `s` and fresh blinding scalar `t`. Using the published `Y_h1 = y_h G1`:
+   calculates `h = hash_asset(canonical JPG)` and chooses its owner secret `s`.
+   Using the published `Y_h1 = y_h G1`, it constructs:
 
    ```text
    D = h G_ASSET
-   C = h Y_h1 + t G1
+   C = h Y_h1
    S = s G1
    ```
 
-   A noninteractive multi-witness Schnorr proof establishes knowledge of
-   `h, t, s` satisfying all three equations. Its Fiat–Shamir transcript binds
-   the request ID, keyset, points, bases and witness indices under
-   `Cashu_PS_BlindIssue_v2`. The duplicate tag and commitment must contain
-   the same hash. Fresh randomness makes `C` different for each attempt.
-2. One `POST /v1/nft/mint/private` sends `version: 2`, `session`, `asset_tag`
+   A noninteractive multi-witness Schnorr proof establishes knowledge of `h`
+   and `s` satisfying all three equations. The same `h` must open both the
+   duplicate tag and commitment. Its Fiat–Shamir transcript binds the request
+   ID, keyset, points, bases and witness indices under
+   `Cashu_PS_CommittedIssue_v3`. The proof has two witnesses, with no `t`.
+   Proof randomness is still fresh; the asset commitment is deterministic.
+2. One `POST /v1/nft/mint/private` sends `version: 3`, `session`, `asset_tag`
    (`D`), `b` (`C`), `owner_commitment` (`S`), the proof and an optional paid
    quote ID. There is no `/begin` request or preallocated issuance base.
-   Neither `h`, `s`, `t` nor JPG bytes are sent to this endpoint.
+   Neither `h`, `s` nor JPG bytes are sent to this endpoint.
 3. The mint verifies the proof, consumes any paid quote and inserts the tag
    into the shared uniqueness registry. It chooses a fresh secret `k` and
-   returns:
+   returns the finished credential signature:
 
    ```text
    u = k G1
-   v_raw = k (x G1 + C + y_s S)
+   v = k (x G1 + C + y_s S) = (x + y_h h + y_s s) u
    ```
 
-   The full response `(u, v_raw)` and exact request digest are persisted in
-   the same transaction as payment and duplicate registration. A `v2:`
-   prefix isolates these durable receipts from legacy session IDs. An exact
-   retry returns the original bytes, including after restart; changing the
+   The wallet verifies `(u, v)` against its local `h, s` and public mint key
+   before storing it. No unblinding occurs. Mint-chosen signature randomness
+   and the proofs of knowledge remain essential.
+4. The full response and exact request digest are persisted in the same
+   transaction as payment and duplicate registration. A `v3:` prefix isolates
+   these receipts from older protocol versions. Exact retries recover the
+   original bytes after restart; they do not issue a second NFT. Changing the
    request after successful issuance fails. Failed proof, payment or duplicate
-   checks do not consume the request ID or payment. A fresh request for a hash
-   that was already minted fails, regardless of owner, blinding or API version.
-4. The wallet unblinds locally and verifies before storing the credential:
+   checks do not consume the request ID or payment.
 
-   ```text
-   v = v_raw - t u = (x + y_h h + y_s s) u
-   ```
+A fresh request for a previously minted hash fails, even with a different
+owner, request ID, protocol version or mint key. Burned assets also remain in
+the duplicate registry. The key-independent `D` preserves uniqueness across
+mint key rotations; `C` alone would change when `Y_h1` changes.
 
-This is the signing-committed-messages construction from
-[Pointcheval–Sanders, section 6.1](https://eprint.iacr.org/2015/525.pdf), adapted
-with the existing owner commitment and duplicate-tag equality proof. The mint
-still controls signature randomness; the client does not choose the base.
+This uses the PS signing-committed-messages approach; see
+[Pointcheval–Sanders, section 6.1](https://eprint.iacr.org/2015/525.pdf).
 Payment quotes, key discovery, portfolio JPG uploads, encrypted backups and
-publication are separate from this single cryptographic issuance exchange.
+publication are separate from the single cryptographic issuance exchange.
 
-Public showing, public transfer, private transfer, EXIF bearer tokens and
-burning continue to use the existing credential format and proofs. Public
-showings and public transfers reveal `h`; private transfers do not send this
-issuance tag and keep their existing hiding commitments.
+## Compatibility and recovery
 
-## Payment and compatibility
+`/info` advertises `committed_issuance_versions: [3]` and the supported legacy
+`blind_issuance_versions: [1, 2]`. An omitted request version still selects
+version 1. New wallets explicitly request version 3.
 
-New wallet quotes use `POST /v1/nft/mint/private/quote` with `asset_tag` only.
-Quote responses expose the tag rather than the hash. The CLI saves the hash
-in its local wallet so a later `mint --quote` can work without re-reading the
-file. A different wallet must supply the original file if it lacks that
-local quote metadata.
+Existing randomized issuance remains supported for older clients and saved
+operations. Version 1 uses `/begin`, `B = h u + t G1` and removes `t Y_h1`.
+Version 2 uses `C = h Y_h1 + t G1` and removes `t u`. Their proof domains,
+receipt namespaces and recovery rules are unchanged. All issuance versions,
+including legacy clear-h issuance, share the duplicate registry.
 
-Before sending issuance, the wallet persists the original request, secret
-index and blinding value locally. If a response is lost, run
-`cashu nft retry-mint` to list pending sessions, then
-`cashu nft retry-mint <session>` to recover the original signature. Recovery
-material is deleted in the same local transaction that stores the credential.
-Minting a new request for the same JPG does not recover the old signature.
+Before issuance, the wallet saves its original request and owner-secret
+recovery material. Version 3 requires no blinding material. The Python wallet
+can list pending operations with `cashu nft retry-mint`, then recover one with
+`cashu nft retry-mint <session>`. Browser wallets recover through encrypted
+operation backups. Existing records containing `t` still use their original
+unblinding rule. Recovery material is retired only after storing the credential.
 
-Legacy clear-h and two-request blind issuance remain available for existing
-clients and pending operations. An omitted `version` selects the original
-blind protocol; `/info` advertises `blind_issuance_versions: [1, 2]`. Old saved
-wallet jobs retain their original unblinding rule (`v_raw - t Y_h1`). All
-issuance versions share the same tag registry, preventing a
-duplicate from bypassing the policy through the older endpoint. Previously
-created clear-h quotes remain redeemable.
+Quotes use `POST /v1/nft/mint/private/quote` with `asset_tag`. The CLI keeps the
+hash locally so a later `mint --quote` can work without re-reading the file.
+Previously created clear-h quotes remain redeemable.
 
-Startup ensures `ps_asset_tags` and `ps_issue_sessions` exist, and imports legacy
-`ps_assets` rows, including burned rows, into the tag registry. Existing
-credentials, spent nullifiers, images, collections and mint keys are retained.
-Repeated startup does not overwrite tag status or resurrect burned assets.
-Legacy hash records are retained as history; this does not erase hashes
-previously disclosed to the mint.
+Existing `ps_asset_tags` and `ps_issue_sessions` tables suffice; no additional
+schema migration is required. Startup retains legacy asset records, including
+burned assets. Images, collections, mint keys and spent nullifiers are unchanged.
 
-## Privacy and custody
+## Privacy boundary
 
-`D` is deterministic and publicly computable. The mint can recognize equal
-hashes, test candidate JPGs offline, and link a public hash disclosure to its
-issuance tag. This construction hides the raw scalar in issuance; it does
-not provide anonymity for publicly known images.
+Recovering an arbitrary scalar `h` from `C = h Y_h1` requires solving a discrete
+logarithm. This hides the raw scalar, not the identity of known images: both
+`C` and `D` are deterministic and permit offline candidate-JPG matching. This
+is intentional. The mint could already perform that matching through `D` in
+the randomized protocol, so randomizing `C` offered no protection against it.
 
-The portfolio receives and hosts the public JPG, so it still knows its hash.
-Its browser wallet constructs the blind commitments, unblinds the signatures,
-and stores only authenticated encrypted credentials at the backend. Private
-spending secrets never enter the backend during new minting or receiving.
-See [the browser wallet documentation](portfolio_web/README.md) for recovery,
-legacy migration, and the distinction between an encrypted portfolio backend
-and trust in the issuer or in code served to the browser.
+The portfolio receives and hosts the public JPG and therefore knows its hash.
+Public showings and public transfers also reveal `h`. Private transfers keep
+their existing randomized hiding commitments and do not send the issuance tag;
+this simplification applies only to issuance.
 
-These are experimental cryptographic and schema changes requiring human
-review before production use.
+Browser wallet credentials remain encrypted at the portfolio backend. The
+owner's spending secret never enters that backend during new minting or
+receiving. See [the browser wallet documentation](portfolio_web/README.md)
+for recovery and the distinction between encrypted portfolio storage and trust
+in the NFT issuer or browser-served code.
+
+These experimental cryptographic changes require human review before
+production use.

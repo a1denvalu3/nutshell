@@ -729,6 +729,7 @@ PS_COMMIT_DST = b"Cashu_PS_CommitEq_v1"
 PS_K2_DST = b"Cashu_PS_TransferK2_v1"
 PS_BLIND_ISSUE_DST = b"Cashu_PS_BlindIssue_v1"
 PS_BLIND_ISSUE_V2_DST = b"Cashu_PS_BlindIssue_v2"
+PS_COMMITTED_ISSUE_DST = b"Cashu_PS_CommittedIssue_v3"
 PS_ISSUE_K_DST = b"Cashu_PS_IssueK_v1"
 
 
@@ -855,7 +856,56 @@ def verify_blind_issue_v2(
     )
 
 
-def issue_blind_v2(
+def _issue_commitment_statements(
+    mint_public: MintPublicKeyPS, D: PublicKey, C: PublicKey, S: PublicKey
+) -> List[LinearStatement]:
+    return [
+        (D, [(G_ASSET, 0)]),
+        (C, [(mint_public.Y_h1, 0)]),
+        (S, [(G1, 1)]),
+    ]
+
+
+def issue_commitment(
+    mint_public: MintPublicKeyPS, h: int, s: int, request_id: bytes
+) -> Tuple[PublicKey, PublicKey, LinearProof]:
+    """Commit deterministically as C = h*Y_h1; prove h and s, without t.
+
+    The duplicate tag is retained across mint key rotations. The equality
+    proof ties it to C without sending h. Both points permit candidate matching.
+    """
+    if not 0 < s < curve_order:
+        raise ValueError("invalid owner secret")
+    D = asset_tag(h)
+    C = mint_public.Y_h1 * h
+    proof = prove_linear(
+        _issue_commitment_statements(mint_public, D, C, G1 * s),
+        [h, s],
+        PS_COMMITTED_ISSUE_DST,
+        blind_issue_binding(mint_public, request_id),
+    )
+    return D, C, proof
+
+
+def verify_issue_commitment(
+    mint_public: MintPublicKeyPS,
+    D: PublicKey,
+    C: PublicKey,
+    S: PublicKey,
+    proof: LinearProof,
+    request_id: bytes,
+) -> bool:
+    if S.is_infinity():
+        return False
+    return verify_linear(
+        _issue_commitment_statements(mint_public, D, C, S),
+        proof,
+        PS_COMMITTED_ISSUE_DST,
+        blind_issue_binding(mint_public, request_id),
+    )
+
+
+def issue_committed(
     mint_key: MintPrivateKeyPS, C: PublicKey, S: PublicKey
 ) -> Tuple[PublicKey, PublicKey]:
     """After proof verification, return (k*G1, k*(x*G1 + C + y_s*S)).
@@ -863,8 +913,9 @@ def issue_blind_v2(
     The mint chooses a fresh secret k per issuance, never a client-supplied
     or reused base. Persist both response points for exact-request recovery.
     """
-    if C.is_infinity() or S.is_infinity():
-        raise ValueError("points must not be the point at infinity")
+    # C may be the identity for the valid hash scalar h=0 in v3.
+    if S.is_infinity():
+        raise ValueError("owner commitment must not be the point at infinity")
     k = _random_scalar()
     return G1 * k, _add_p1(
         _add_p1(G1 * mint_key.x.scalar, C), S * mint_key.y_s.scalar

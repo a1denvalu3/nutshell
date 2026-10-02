@@ -29,9 +29,9 @@ from ..core.crypto.ps import (
     Presentation,
     asset_tag,
     blind_issue_commit,
-    blind_issue_commit_v2,
     blind_transfer_commit,
     hash_asset,
+    issue_commitment,
     present,
     present_private,
     present_showing,
@@ -96,11 +96,11 @@ class WalletAsset:
 class PendingMint:
     index: int
     h: int
-    t: int
-    u: str
     description: str
     request: Dict[str, Union[str, int]]
     version: int = 1
+    t: Optional[int] = None  # only legacy randomized issuance needs these
+    u: Optional[str] = None
 
 
 class NFTWallet:
@@ -378,7 +378,7 @@ class NFTClient:
     ) -> Credential:
         ticket = wallet.prepare_receive()
         session = uuid.uuid4().hex
-        tag, B, t, proof = blind_issue_commit_v2(
+        tag, B, proof = issue_commitment(
             self.keyset,
             h,
             _derive_owner_secret(wallet._seed, ticket.index),
@@ -390,12 +390,10 @@ class NFTClient:
             PendingMint(
                 index=ticket.index,
                 h=h,
-                t=t,
-                u="",
-                version=2,
+                version=3,
                 description=description,
                 request={
-                    "version": 2,
+                    "version": 3,
                     "session": session,
                     "asset_tag": tag.format().hex(),
                     "b": B.format().hex(),
@@ -413,6 +411,10 @@ class NFTClient:
         secret = _derive_owner_secret(wallet._seed, pending.index)
         S, pok = prove_owner_secret(secret)
         ticket = ReceiveTicket(pending.index, S, pok)
+        if pending.version not in (1, 2, 3):
+            raise ValueError("unsupported pending issuance version")
+        if pending.version != 3 and pending.t is None:
+            raise ValueError("legacy issuance is missing its blinding factor")
         try:
             resp = self._checked(
                 self.http.post(f"{NFT_API_PREFIX}/mint/private", json=pending.request)
@@ -423,14 +425,16 @@ class NFTClient:
             ) from exc
         u = self._g1(resp["u"])
         if resp["keyset_id"] != self.keyset_id or (
-            pending.version == 1 and u != self._g1(pending.u)
+            pending.version == 1 and (pending.u is None or u != self._g1(pending.u))
         ):
             raise RuntimeError("mint changed issuance base or keyset")
-        v = (
-            unblind_issued_v2(self._g1(resp["v"]), pending.t, u)
-            if pending.version == 2
-            else unblind_issued(self._g1(resp["v"]), pending.t, self.keyset)
-        )
+        v = self._g1(resp["v"])
+        if pending.version != 3 and pending.t is not None:
+            v = (
+                unblind_issued_v2(v, pending.t, u)
+                if pending.version == 2
+                else unblind_issued(v, pending.t, self.keyset)
+            )
         candidate = Credential(
             u=u,
             v=v,

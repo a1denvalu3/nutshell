@@ -7,8 +7,8 @@ directly for experiments:
 
 All cryptographic objects cross the wire as hex of their canonical
 encodings from cashu/core/crypto/ps.py. Asset hashes are computed
-client-side. Blind issuance reveals a deterministic duplicate tag rather
-than h; the legacy clear-h endpoints remain available for compatibility.
+client-side. New issuance sends C=h*Y_h1 and a deterministic duplicate tag
+rather than h. Legacy randomized and clear-h issuance remain compatible.
 """
 
 import time
@@ -62,12 +62,12 @@ class BlindMintQuoteRequest(BaseModel):
 
 
 class BlindMintRequest(BaseModel):
-    version: Literal[1, 2] = 1
+    version: Literal[1, 2, 3] = 1
     session: str
     asset_tag: str
     b: str
     owner_commitment: str
-    proof: str  # LinearProof over h, t and s
+    proof: str  # v3: h,s; legacy v1/v2: h,t,s
     quote: Optional[str] = None
 
 
@@ -197,6 +197,7 @@ def create_router(ledger: PSLedger) -> APIRouter:
             "public_key": ledger.keyset.to_bytes().hex(),
             "blind_issuance": True,
             "blind_issuance_versions": [1, 2],
+            "committed_issuance_versions": [3],
             "duplicate_detection": "public_asset_tag_v1",
             "payment_required": ledger.quote_backend is not None,
             "mint_price_sats": ledger.quote_backend.price_sats
@@ -263,11 +264,11 @@ def create_router(ledger: PSLedger) -> APIRouter:
         if len(session) != 16 or req.session != session.hex():
             raise HTTPException(400, "issuance session must be 32 lowercase hex chars")
         try:
-            issue = (
-                ledger.issue_nft_blind_v2
-                if req.version == 2
-                else ledger.issue_nft_blind
-            )
+            issue = {
+                1: ledger.issue_nft_blind,
+                2: ledger.issue_nft_blind_v2,
+                3: ledger.issue_nft_committed,
+            }[req.version]
             u, v = await issue(
                 session=req.session,
                 tag=_parse_g1(req.asset_tag),

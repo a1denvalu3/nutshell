@@ -76,6 +76,22 @@ export function blindIssueV2(config: MintConfig, h: bigint, s: bigint, session: 
   ], [h, t, s], 'Cashu_PS_BlindIssue_v2', concatBytes(hexToBytes(config.keyset_id), hexToBytes(session)));
   return { t: bytesToHex(integer(t)), request: { version: 2 as const, session, asset_tag: bytesToHex(encoded(D)), b: bytesToHex(encoded(C)), owner_commitment: bytesToHex(encoded(S)), proof: bytesToHex(proof) } };
 }
+export function issueCommitment(config: MintConfig, h: bigint, s: bigint, session: string) {
+  validateKeyset(config);
+  if (!/^[0-9a-f]{32}$/.test(session) || h < 0n || h >= ORDER || s <= 0n || s >= ORDER) throw new Error('Invalid issuance parameters');
+  const Yh1 = pointFromHexG1(config.public_key.slice(576));
+  const S = mul(g1, s), D = mul(G_ASSET, h), C = mul(Yh1, h);
+  const proof = linear([
+    { point: D, terms: [[G_ASSET, 0]] }, { point: C, terms: [[Yh1, 0]] }, { point: S, terms: [[g1, 1]] },
+  ], [h, s], 'Cashu_PS_CommittedIssue_v3', concatBytes(hexToBytes(config.keyset_id), hexToBytes(session)));
+  return { version: 3 as const, session, asset_tag: bytesToHex(encoded(D)), b: bytesToHex(encoded(C)), owner_commitment: bytesToHex(encoded(S)), proof: bytesToHex(proof) };
+}
+export function finishIssue(config: MintConfig, h: string, s: string, response: { u: string; v: string; keyset_id: string }): Credential {
+  if (response.keyset_id !== config.keyset_id) throw new Error('Mint changed the issuance keyset');
+  const cred = { u: response.u, v: response.v, h, s, keyset_id: config.keyset_id };
+  verifyCredential(cred, config);
+  return cred;
+}
 export function finishBlindIssueV2(config: MintConfig, h: string, s: string, t: string, response: { u: string; v: string; keyset_id: string }): Credential {
   if (response.keyset_id !== config.keyset_id) throw new Error('Mint changed the issuance keyset');
   const u = pointFromHexG1(response.u);

@@ -33,7 +33,7 @@ import hmac
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Literal, Optional, Tuple
 
 from sqlalchemy.exc import IntegrityError
 
@@ -51,10 +51,11 @@ from ..core.crypto.ps import (
     blind_base_for_nullifier,
     issue,
     issue_blind,
-    issue_blind_v2,
+    issue_committed,
     verify_blind_issue,
     verify_blind_issue_v2,
     verify_blind_transfer,
+    verify_issue_commitment,
     verify_owner_secret,
     verify_presentation,
 )
@@ -384,20 +385,52 @@ class PSLedger:
         quote: Optional[str] = None,
         conn: Optional[Connection] = None,
     ) -> Tuple[PublicKey, PublicKey]:
-        """Sign a randomized commitment in one request, with durable replay.
+        """Legacy randomized one-request issuance, including pending retries."""
+        return await self._issue_nft_committed(
+            session, tag, B, S, proof, quote, conn, 2
+        )
 
-        v2 IDs occupy a separate namespace from preallocated v1 sessions.
+    async def issue_nft_committed(
+        self,
+        session: str,
+        tag: PublicKey,
+        B: PublicKey,
+        S: PublicKey,
+        proof: LinearProof,
+        quote: Optional[str] = None,
+        conn: Optional[Connection] = None,
+    ) -> Tuple[PublicKey, PublicKey]:
+        """One-request issuance using C=h*Y_h1, with no unblinding."""
+        return await self._issue_nft_committed(
+            session, tag, B, S, proof, quote, conn, 3
+        )
+
+    async def _issue_nft_committed(
+        self,
+        session: str,
+        tag: PublicKey,
+        B: PublicKey,
+        S: PublicKey,
+        proof: LinearProof,
+        quote: Optional[str],
+        conn: Optional[Connection],
+        version: Literal[2, 3],
+    ) -> Tuple[PublicKey, PublicKey]:
+        """Sign a verified commitment in one request, with durable replay.
+
+        Each protocol version has a separate request/receipt namespace.
         Receipt insertion, quote consumption and duplicate registration commit
         together. Only an identical request can recover an existing response.
         """
         request_id = bytes.fromhex(session)
         if len(request_id) != 16 or request_id.hex() != session:
             raise InvalidProofError("invalid issuance request ID")
-        if not verify_blind_issue_v2(self.keyset, tag, B, S, proof, request_id):
-            raise InvalidProofError("invalid blind issuance proof")
+        verify = verify_issue_commitment if version == 3 else verify_blind_issue_v2
+        if not verify(self.keyset, tag, B, S, proof, request_id):
+            raise InvalidProofError("invalid issuance proof")
         quote_bytes = (quote or "").encode()
         request_hash = hashlib.sha256(
-            b"Cashu_PS_IssueRequest_v2"
+            f"Cashu_PS_IssueRequest_v{version}".encode()
             + bytes.fromhex(self.keyset.keyset_id)
             + request_id
             + tag.format()
@@ -407,7 +440,7 @@ class PSLedger:
             + len(quote_bytes).to_bytes(4, "big")
             + quote_bytes
         ).hexdigest()
-        receipt_id = "v2:" + session
+        receipt_id = f"v{version}:" + session
         async with self.db.get_connection(
             conn, locks=[LockOptions(table="ps_assets")]
         ) as c:
@@ -425,7 +458,7 @@ class PSLedger:
                 )
             await self._consume_quote(c, quote, tag)
             await self._register_asset(c, tag)
-            u, v_raw = issue_blind_v2(self.mint_key, B, S)
+            u, v_raw = issue_committed(self.mint_key, B, S)
             await c.execute(
                 """INSERT INTO ps_issue_sessions
                 (session,created,used,request_hash,response)

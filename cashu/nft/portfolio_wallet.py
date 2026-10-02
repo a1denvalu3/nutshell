@@ -49,7 +49,7 @@ class Envelope(BaseModel):
 
 class WalletProofRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
-    version: Literal[1, 2] = 1
+    version: Literal[1, 2, 3] = 1
     b: str
     proof: str
     asset_tag: Optional[str] = None
@@ -104,7 +104,7 @@ class BrowserPortfolio:
         data: bytes,
         title: str,
         card_id: Optional[str] = None,
-        issuance_version: Literal[1, 2] = 1,
+        issuance_version: Literal[1, 2, 3] = 1,
     ) -> dict:
         if kind not in ("mint", "receive", "rotate", "refresh", "migrate"):
             raise HTTPException(400, "Unknown wallet action.")
@@ -291,11 +291,11 @@ class BrowserPortfolio:
                     raise HTTPException(
                         400, "The blind commitment does not match the public JPG."
                     )
-                issue = (
-                    self.ledger.issue_nft_blind_v2
-                    if request.version == 2
-                    else self.ledger.issue_nft_blind
-                )
+                issue = {
+                    1: self.ledger.issue_nft_blind,
+                    2: self.ledger.issue_nft_blind_v2,
+                    3: self.ledger.issue_nft_committed,
+                }[request.version]
                 u, v = await issue(
                     operation_id,
                     tag,

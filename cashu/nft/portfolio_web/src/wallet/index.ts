@@ -8,12 +8,12 @@ import { bytesToHex, concatBytes } from '@noble/hashes/utils.js';
 import { profileKey, parseShowing } from '../crypto.mjs';
 import { checked, signedRequest } from '../api.mjs';
 import { EncryptedVault, walletSeed, type Envelope } from './vault.ts';
-import { ORDER, utf8, integer, boundPresentation, blindIssueV2, finishBlindIssueV2, blindTransfer, finishBlind, hashAsset, nullifier, decodeToken, encodeToken, verifyCredential, publicCard, type MintConfig, type Credential, type Card } from './ps.ts';
+import { ORDER, utf8, integer, boundPresentation, issueCommitment, finishIssue, finishBlindIssueV2, blindTransfer, finishBlind, hashAsset, nullifier, decodeToken, encodeToken, verifyCredential, publicCard, type MintConfig, type Credential, type Card } from './ps.ts';
 import { splitJpg, transferJpg } from './jpg.ts';
 
 interface Prepared { id: string; h: string; title: string; jpg: string; card_id?: string | null; begin: { session: string; u: string; keyset_id: string } | null; legacy_token: string | null; }
-interface ProofRequest { b: string; proof: string; version?: 1 | 2; session?: string; asset_tag?: string; owner_commitment?: string; presentation?: string; new_owner_commitment?: string; new_proof?: string; }
-interface Job { id: string; h: string; s: string; t: string; u: string; cardId: string; request: ProofRequest; }
+interface ProofRequest { b: string; proof: string; version?: 1 | 2 | 3; session?: string; asset_tag?: string; owner_commitment?: string; presentation?: string; new_owner_commitment?: string; new_proof?: string; }
+interface Job { id: string; h: string; s: string; t?: string; u?: string; cardId: string; request: ProofRequest; }
 const fromBase64 = (s: string) => Uint8Array.from(atob(s), c => c.charCodeAt(0));
 const scope = (id: string, h: string) => `card:${id}:${h}`;
 declare module '@cashu/coco-core/plugin' { interface PluginExtensions { nft: BrowserNFTWallet; } }
@@ -45,7 +45,7 @@ export class BrowserNFTWallet {
     if ((await response.json()).states[0]?.state !== 'UNSPENT') throw new Error('This NFT was already transferred or canceled');
   }
   private async prepare(kind: string, bytes: Uint8Array, title: string, cardId?: string): Promise<Prepared> {
-    return this.post(`/prepare?kind=${kind}&title=${encodeURIComponent(title)}${cardId ? '&card_id=' + cardId : ''}${kind === 'mint' ? '&issuance_version=2' : ''}`, bytes);
+    return this.post(`/prepare?kind=${kind}&title=${encodeURIComponent(title)}${cardId ? '&card_id=' + cardId : ''}${kind === 'mint' ? '&issuance_version=3' : ''}`, bytes);
   }
   async mint(bytes: Uint8Array, title: string): Promise<Card> {
     if (splitJpg(bytes).token) throw new Error('This is a transfer JPG. Use Receive JPG');
@@ -53,8 +53,8 @@ export class BrowserNFTWallet {
       const stage = await this.prepare('mint', bytes, title), jpg = fromBase64(stage.jpg);
       const h = hashAsset(jpg), s = await this.ownerSecret(stage.id);
       if (stage.h !== bytesToHex(integer(h))) throw new Error('Invalid mint preparation');
-      const blind = blindIssueV2(this.config, h, s, stage.id);
-      return this.saveAndExecute({ id: stage.id, h: stage.h, s: bytesToHex(integer(s)), t: blind.t, u: '', cardId: stage.id, request: blind.request });
+      const request = issueCommitment(this.config, h, s, stage.id);
+      return this.saveAndExecute({ id: stage.id, h: stage.h, s: bytesToHex(integer(s)), cardId: stage.id, request });
     });
   }
   async receive(bytes: Uint8Array, title: string): Promise<Card> {
@@ -94,10 +94,13 @@ export class BrowserNFTWallet {
     return this.execute(job);
   }
   private async execute(job: Job): Promise<Card> {
+    if (job.request.version !== 3 && (!job.t || (job.request.version !== 2 && !job.u))) throw new Error('Missing legacy unblinding material');
     const response = await this.post(`/operations/${job.id}/finish`, job.request);
-    const cred = job.request.version === 2
-      ? finishBlindIssueV2(this.config, job.h, job.s, job.t, response)
-      : finishBlind(this.config, job.h, job.s, job.t, job.u, response);
+    const cred = job.request.version === 3
+      ? finishIssue(this.config, job.h, job.s, response)
+      : job.request.version === 2
+        ? finishBlindIssueV2(this.config, job.h, job.s, job.t!, response)
+        : finishBlind(this.config, job.h, job.s, job.t!, job.u!, response);
     await this.unspent(cred);
     const encrypted = await this.vault.encrypt(cred, scope(job.cardId, cred.h));
     await this.vault.put('card:' + job.cardId, encrypted);
@@ -123,7 +126,7 @@ export class BrowserNFTWallet {
         catch (error) {
           // Never discard an issued credential. A prepared job can expire,
           // or lose a transfer race, without ever obtaining a signature.
-          let abandoned = op.state === 'prepared' && op.kind === 'mint' && job.request.version !== 2 && Date.now() / 1000 > op.created + 300;
+          let abandoned = op.state === 'prepared' && op.kind === 'mint' && (job.request.version ?? 1) === 1 && Date.now() / 1000 > op.created + 300;
           if (op.state === 'prepared' && job.request.presentation) {
             const N = job.request.presentation.slice(546, 642);
             const state = await checked(await fetch('/v1/nft/checkstate', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({nullifiers:[N]}) }));

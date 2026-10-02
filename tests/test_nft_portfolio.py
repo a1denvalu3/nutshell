@@ -23,6 +23,7 @@ from cashu.core.crypto.ps import (
     blind_issue_commit_v2,
     blind_transfer_commit,
     hash_asset,
+    issue_commitment,
     present,
     present_private,
     present_showing,
@@ -127,7 +128,7 @@ class Profile:
     def json_post(self, path, value):
         return self.post(path, json.dumps(value).encode())
 
-    def prepare(self, kind, jpg=b"", title="Art", card_id=None, issuance_version=2):
+    def prepare(self, kind, jpg=b"", title="Art", card_id=None, issuance_version=3):
         suffix = f"&card_id={card_id}" if card_id else ""
         if kind == "mint":
             suffix += f"&issuance_version={issuance_version}"
@@ -154,12 +155,14 @@ class Profile:
         config = self.client.get("/api/config").json()
         keyset = MintPublicKeyPS.from_bytes(bytes.fromhex(config["public_key"]))
         raw = response.json()
-        if request.get("version") == 2:
+        if request.get("version") in (2, 3):
             u = PublicKey(compressed=bytes.fromhex(raw["u"]), group="G1")
         raw_v = PublicKey(compressed=bytes.fromhex(raw["v"]), group="G1")
         cred = Credential(
             u,
-            unblind_issued_v2(raw_v, t, u)
+            raw_v
+            if request.get("version") == 3
+            else unblind_issued_v2(raw_v, t, u)
             if request.get("version") == 2
             else unblind_issued(raw_v, t, keyset),
             int(stage["h"], 16),
@@ -189,7 +192,7 @@ class Profile:
             self.credentials[published.json()["id"]] = cred
         return published
 
-    def mint(self, jpg: bytes, title: str = "Art", issuance_version=2):
+    def mint(self, jpg: bytes, title: str = "Art", issuance_version=3):
         response = self.prepare("mint", jpg, title, issuance_version=issuance_version)
         if response.status_code != 200:
             return response
@@ -198,7 +201,13 @@ class Profile:
         keyset = MintPublicKeyPS.from_bytes(bytes.fromhex(config["public_key"]))
         s = secrets.randbelow(curve_order - 1) + 1
         u = None
-        if issuance_version == 2:
+        if issuance_version == 3:
+            assert stage["begin"] is None
+            t = None
+            D, B, proof = issue_commitment(
+                keyset, int(stage["h"], 16), s, bytes.fromhex(stage["id"])
+            )
+        elif issuance_version == 2:
             assert stage["begin"] is None
             D, B, t, proof = blind_issue_commit_v2(
                 keyset, int(stage["h"], 16), s, bytes.fromhex(stage["id"])
@@ -216,7 +225,7 @@ class Profile:
             u,
             {
                 "session": stage["id"],
-                **({"version": 2} if issuance_version == 2 else {}),
+                **({"version": issuance_version} if issuance_version != 1 else {}),
                 "asset_tag": D.format().hex(),
                 "b": B.format().hex(),
                 "owner_commitment": S.format().hex(),
@@ -849,7 +858,7 @@ def test_new_cards_persist_only_encrypted_credentials(client):
     assert bob.post(bob.base + "/wallet/recover").json()["cards"] == []
 
 
-@pytest.mark.parametrize("issuance_version", [1, 2])
+@pytest.mark.parametrize("issuance_version", [1, 2, 3])
 def test_interrupted_publication_recovers_exact_issued_response(
     client, monkeypatch, issuance_version
 ):

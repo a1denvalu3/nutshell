@@ -40,7 +40,7 @@ from cashu.nft.ledger import (
     PSLedger,
 )
 from cashu.nft.quotes import DevQuoteBackend
-from cashu.nft.wallet import NFTClient, NFTWallet
+from cashu.nft.wallet import NFTClient, NFTWallet, _derive_owner_secret
 
 
 def point(raw):
@@ -295,13 +295,13 @@ def test_wallet_rejects_malformed_blind_signature(tmp_path, monkeypatch):
         MintPrivateKeyPS.from_seed(b"blind issuance seed"),
     )
     asyncio.run(ledger.migrate())
-    issue = ledger.issue_nft_blind_v2
+    issue = ledger.issue_nft_committed
 
     async def corrupt(*args, **kwargs):
         u, _ = await issue(*args, **kwargs)
         return u, G1 * 123
 
-    monkeypatch.setattr(ledger, "issue_nft_blind_v2", corrupt)
+    monkeypatch.setattr(ledger, "issue_nft_committed", corrupt)
     client = NFTClient(TestClient(create_app(ledger)))
     wallet = NFTWallet(str(tmp_path / "wallet.sqlite3"), seed=b"blind wallet seed")
     with pytest.raises(RuntimeError, match="invalid blind signature"):
@@ -333,6 +333,8 @@ def test_lost_response_recovers_after_wallet_and_mint_restart(tmp_path, monkeypa
     with pytest.raises(RuntimeError, match="retry-mint"):
         client.mint(wallet, b"jpeg", description="recover me")
     (session,) = wallet.pending_mint_sessions(client.keyset_id)
+    pending = wallet.pending_mint(client.keyset_id, session)
+    assert pending.version == 3 and pending.t is None and pending.u is None
     assert wallet.assets() == []
     wallet.db.close()
 
@@ -550,7 +552,9 @@ async def test_v2_quote_binding_and_duplicate_rollback(ledger):
     assert len(await ledger.db.fetchall("SELECT * FROM ps_issue_sessions")) == 1
 
 
-def test_v2_wallet_mints_once_and_duplicate_http_request_fails(tmp_path, monkeypatch):
+def test_committed_wallet_mints_once_and_duplicate_http_request_fails(
+    tmp_path, monkeypatch
+):
     ledger = PSLedger(
         Database("test_once", str(tmp_path / "mint")),
         MintPrivateKeyPS.from_seed(b"blind issuance seed"),
@@ -571,13 +575,16 @@ def test_v2_wallet_mints_once_and_duplicate_http_request_fails(tmp_path, monkeyp
     assert verify_presentation(client.keyset, present(cred))
     assert len(calls) == 1
     assert calls[0][0] == "/v1/nft/mint/private"
-    assert calls[0][1]["version"] == 2
+    assert calls[0][1]["version"] == 3
+    assert calls[0][1]["b"] == (client.keyset.Y_h1 * cred.h).format().hex()
+    assert len(bytes.fromhex(calls[0][1]["proof"])) == 96
     with pytest.raises(RuntimeError, match="409.*already minted"):
         client.mint(wallet, b"jpeg")
     assert len(wallet.assets()) == 1
 
 
-def test_wallet_recovers_legacy_pending_mint_without_version(tmp_path):
+@pytest.mark.parametrize("version", [1, 2])
+def test_wallet_recovers_legacy_pending_mint(tmp_path, version):
     ledger = PSLedger(
         Database("test_legacy_pending", str(tmp_path / "mint")),
         MintPrivateKeyPS.from_seed(b"blind issuance seed"),
@@ -586,12 +593,22 @@ def test_wallet_recovers_legacy_pending_mint_without_version(tmp_path):
     client = NFTClient(TestClient(create_app(ledger)))
     wallet = NFTWallet(str(tmp_path / "wallet.sqlite3"), seed=b"blind wallet seed")
     ticket = wallet.prepare_receive()
-    begin = client.http.post("/v1/nft/mint/private/begin").json()
     h = hash_asset(b"legacy pending jpg")
-    tag, B, t, proof = wallet.issuance_commit(
-        ticket, ledger.keyset, h, point(begin["u"]), bytes.fromhex(begin["session"])
-    )
+    if version == 1:
+        begin = client.http.post("/v1/nft/mint/private/begin").json()
+        tag, B, t, proof = wallet.issuance_commit(
+            ticket, ledger.keyset, h, point(begin["u"]), bytes.fromhex(begin["session"])
+        )
+    else:
+        begin = {"session": uuid.uuid4().hex, "u": ""}
+        tag, B, t, proof = blind_issue_commit_v2(
+            ledger.keyset,
+            h,
+            _derive_owner_secret(wallet._seed, ticket.index),
+            bytes.fromhex(begin["session"]),
+        )
     body = {
+        **({"version": 2} if version == 2 else {}),
         "session": begin["session"],
         "asset_tag": tag.format().hex(),
         "b": B.format().hex(),
@@ -600,11 +617,12 @@ def test_wallet_recovers_legacy_pending_mint_without_version(tmp_path):
     }
     response = client.http.post("/v1/nft/mint/private", json=body)
     assert response.status_code == 200
-    # Persist the old record shape, without a protocol version.
+    # Original v1 records omitted the version; v2 records explicitly included it.
     wallet._set_meta(
         f"blind-mint:{client.keyset_id}:{begin['session']}",
         json.dumps(
             {
+                **({"version": 2} if version == 2 else {}),
                 "index": ticket.index,
                 "h": h,
                 "t": t,
