@@ -12,7 +12,7 @@ than h; the legacy clear-h endpoints remain available for compatibility.
 """
 
 import time
-from typing import List, Optional
+from typing import List, Literal, Optional
 
 from fastapi import APIRouter, FastAPI, HTTPException
 from pydantic import BaseModel
@@ -62,6 +62,7 @@ class BlindMintQuoteRequest(BaseModel):
 
 
 class BlindMintRequest(BaseModel):
+    version: Literal[1, 2] = 1
     session: str
     asset_tag: str
     b: str
@@ -195,6 +196,7 @@ def create_router(ledger: PSLedger) -> APIRouter:
             "keyset_id": ledger.keyset.keyset_id,
             "public_key": ledger.keyset.to_bytes().hex(),
             "blind_issuance": True,
+            "blind_issuance_versions": [1, 2],
             "duplicate_detection": "public_asset_tag_v1",
             "payment_required": ledger.quote_backend is not None,
             "mint_price_sats": ledger.quote_backend.price_sats
@@ -261,7 +263,12 @@ def create_router(ledger: PSLedger) -> APIRouter:
         if len(session) != 16 or req.session != session.hex():
             raise HTTPException(400, "issuance session must be 32 lowercase hex chars")
         try:
-            u, v = await ledger.issue_nft_blind(
+            issue = (
+                ledger.issue_nft_blind_v2
+                if req.version == 2
+                else ledger.issue_nft_blind
+            )
+            u, v = await issue(
                 session=req.session,
                 tag=_parse_g1(req.asset_tag),
                 B=_parse_g1(req.b),

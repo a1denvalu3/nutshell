@@ -17,9 +17,18 @@ const input = JSON.parse(raw);
 // The app is same-origin in the browser; give relative requests the server origin.
 const realFetch = globalThis.fetch;
 let dropSwapReply = false;
+let dropNftReply = false;
+let nftIssueRequests = 0;
 globalThis.fetch = async (url, init) => {
   const target = typeof url === 'string' && url.startsWith('/') ? ORIGIN + url : url;
   const response = await realFetch(target, init);
+  if (String(target).includes('/wallet/operations/') && String(target).endsWith('/finish')) {
+    nftIssueRequests++;
+    if (dropNftReply && response.ok) {
+      dropNftReply = false;
+      throw new TypeError('NFT issuance reply lost');
+    }
+  }
   if (dropSwapReply && String(target).endsWith('/v1/swap')) {
     dropSwapReply = false;
     throw new TypeError('network connection lost'); // the mint processed it; the reply is gone
@@ -62,6 +71,31 @@ async function card(pubkey, cardId) {
 }
 
 const phases = {
+  async nft_mint({ secret, drop_reply = false }) {
+    const pubkey = await profile(secret, 'Collector');
+    const { manager, wallet } = await nftWallet(secret);
+    dropNftReply = drop_reply;
+    try {
+      const minted = await wallet.mint(jpg, 'One request');
+      let duplicateRejected = false;
+      try { await wallet.mint(jpg, 'Duplicate'); }
+      catch (error) { duplicateRejected = /already minted/i.test(error.message); }
+      return { pubkey, minted, duplicateRejected, nftIssueRequests };
+    } catch (error) {
+      if (!drop_reply || !/NFT issuance reply lost/.test(error.message)) throw error;
+      return { pubkey, interrupted: true, nftIssueRequests };
+    } finally { await manager.dispose(); }
+  },
+
+  async nft_recover({ secret }) {
+    const { manager, wallet } = await nftWallet(secret);
+    try {
+      const recovered = await wallet.recover();
+      const collection = await get(`/api/profiles/${profileKey(secret)}`);
+      return { recovered, cards: collection.cards, nftIssueRequests };
+    } finally { await manager.dispose(); }
+  },
+
   /** Seller mints an NFT in the browser wallet and lists it (rotating it first). */
   async seller_list({ secret, price, jpg_path, title = 'Sunset' }) {
     const pubkey = await profile(secret, 'Seller');

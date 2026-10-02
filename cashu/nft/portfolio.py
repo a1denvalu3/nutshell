@@ -821,12 +821,15 @@ def create_portfolio_app(
         kind: Literal["mint", "receive", "rotate", "refresh", "migrate"] = Query(),
         title: str = Query(default="Untitled JPG", min_length=1, max_length=80),
         card_id: Optional[str] = Query(default=None),
+        issuance_version: Literal["1", "2"] = Query(default="1"),
     ):
         raw = await read_body(request, max_jpg_bytes)
         await authorize(request, pubkey, raw)
         if card_id and kind in ("rotate", "refresh", "migrate"):
             await refuse_if_listed(card_id)
-        return await browser_wallet.prepare(pubkey, kind, raw, title, card_id)
+        return await browser_wallet.prepare(
+            pubkey, kind, raw, title, card_id, 2 if issuance_version == "2" else 1
+        )
 
     @app.post("/api/profiles/{pubkey}/wallet/operations/{operation_id}/backup")
     async def wallet_backup(pubkey: str, operation_id: str, request: Request):

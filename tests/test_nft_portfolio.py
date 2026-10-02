@@ -20,6 +20,7 @@ from cashu.core.crypto.ps import (
     Credential,
     MintPublicKeyPS,
     blind_issue_commit,
+    blind_issue_commit_v2,
     blind_transfer_commit,
     hash_asset,
     present,
@@ -27,6 +28,7 @@ from cashu.core.crypto.ps import (
     present_showing,
     prove_owner_secret,
     unblind_issued,
+    unblind_issued_v2,
 )
 from cashu.nft.imgmeta import embed_token, extract_token
 from cashu.nft.portfolio import (
@@ -125,8 +127,10 @@ class Profile:
     def json_post(self, path, value):
         return self.post(path, json.dumps(value).encode())
 
-    def prepare(self, kind, jpg=b"", title="Art", card_id=None):
+    def prepare(self, kind, jpg=b"", title="Art", card_id=None, issuance_version=2):
         suffix = f"&card_id={card_id}" if card_id else ""
+        if kind == "mint":
+            suffix += f"&issuance_version={issuance_version}"
         return self.post(
             f"{self.base}/wallet/prepare?kind={kind}&title={title}{suffix}", jpg
         )
@@ -150,11 +154,14 @@ class Profile:
         config = self.client.get("/api/config").json()
         keyset = MintPublicKeyPS.from_bytes(bytes.fromhex(config["public_key"]))
         raw = response.json()
+        if request.get("version") == 2:
+            u = PublicKey(compressed=bytes.fromhex(raw["u"]), group="G1")
+        raw_v = PublicKey(compressed=bytes.fromhex(raw["v"]), group="G1")
         cred = Credential(
             u,
-            unblind_issued(
-                PublicKey(compressed=bytes.fromhex(raw["v"]), group="G1"), t, keyset
-            ),
+            unblind_issued_v2(raw_v, t, u)
+            if request.get("version") == 2
+            else unblind_issued(raw_v, t, keyset),
             int(stage["h"], 16),
             s,
             keyset.keyset_id,
@@ -182,18 +189,25 @@ class Profile:
             self.credentials[published.json()["id"]] = cred
         return published
 
-    def mint(self, jpg: bytes, title: str = "Art"):
-        response = self.prepare("mint", jpg, title)
+    def mint(self, jpg: bytes, title: str = "Art", issuance_version=2):
+        response = self.prepare("mint", jpg, title, issuance_version=issuance_version)
         if response.status_code != 200:
             return response
         stage = response.json()
         config = self.client.get("/api/config").json()
         keyset = MintPublicKeyPS.from_bytes(bytes.fromhex(config["public_key"]))
         s = secrets.randbelow(curve_order - 1) + 1
-        u = PublicKey(compressed=bytes.fromhex(stage["begin"]["u"]), group="G1")
-        D, B, t, proof = blind_issue_commit(
-            keyset, int(stage["h"], 16), s, u, bytes.fromhex(stage["id"])
-        )
+        u = None
+        if issuance_version == 2:
+            assert stage["begin"] is None
+            D, B, t, proof = blind_issue_commit_v2(
+                keyset, int(stage["h"], 16), s, bytes.fromhex(stage["id"])
+            )
+        else:
+            u = PublicKey(compressed=bytes.fromhex(stage["begin"]["u"]), group="G1")
+            D, B, t, proof = blind_issue_commit(
+                keyset, int(stage["h"], 16), s, u, bytes.fromhex(stage["id"])
+            )
         S, _ = prove_owner_secret(s)
         return self.finish(
             stage,
@@ -202,6 +216,7 @@ class Profile:
             u,
             {
                 "session": stage["id"],
+                **({"version": 2} if issuance_version == 2 else {}),
                 "asset_tag": D.format().hex(),
                 "b": B.format().hex(),
                 "owner_commitment": S.format().hex(),
@@ -834,7 +849,10 @@ def test_new_cards_persist_only_encrypted_credentials(client):
     assert bob.post(bob.base + "/wallet/recover").json()["cards"] == []
 
 
-def test_interrupted_publication_recovers_exact_issued_response(client, monkeypatch):
+@pytest.mark.parametrize("issuance_version", [1, 2])
+def test_interrupted_publication_recovers_exact_issued_response(
+    client, monkeypatch, issuance_version
+):
     alice = Profile(client)
     alice.create()
     original = alice.json_post
@@ -852,7 +870,7 @@ def test_interrupted_publication_recovers_exact_issued_response(client, monkeypa
         return original(path, body)
 
     monkeypatch.setattr(alice, "json_post", interrupt)
-    assert alice.mint(make_jpg()).status_code == 503
+    assert alice.mint(make_jpg(), issuance_version=issuance_version).status_code == 503
     assert alice.get()["cards"] == []
     backups = alice.post(alice.base + "/wallet/recover").json()
     assert len(backups["operations"]) == 1

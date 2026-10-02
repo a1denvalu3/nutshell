@@ -3,7 +3,7 @@
 State:
     ps_assets     -- retained legacy clear-h records
     ps_asset_tags -- public duplicate tag -> status (active/burned)
-    ps_issue_sessions -- single-use, expiring blind issuance bases
+    ps_issue_sessions -- legacy bases and durable versioned issuance receipts
     ps_nullifiers -- spent presentation nullifiers (double-spend prevention)
     ps_quotes     -- mint quotes: tag (or legacy h) -> settlement state
     ps_nft_locks  -- spending conditions keyed by a credential's nullifier
@@ -51,7 +51,9 @@ from ..core.crypto.ps import (
     blind_base_for_nullifier,
     issue,
     issue_blind,
+    issue_blind_v2,
     verify_blind_issue,
+    verify_blind_issue_v2,
     verify_blind_transfer,
     verify_owner_secret,
     verify_presentation,
@@ -371,6 +373,71 @@ class PSLedger:
             "u": u.format().hex(),
             "keyset_id": self.keyset.keyset_id,
         }
+
+    async def issue_nft_blind_v2(
+        self,
+        session: str,
+        tag: PublicKey,
+        B: PublicKey,
+        S: PublicKey,
+        proof: LinearProof,
+        quote: Optional[str] = None,
+        conn: Optional[Connection] = None,
+    ) -> Tuple[PublicKey, PublicKey]:
+        """Sign a randomized commitment in one request, with durable replay.
+
+        v2 IDs occupy a separate namespace from preallocated v1 sessions.
+        Receipt insertion, quote consumption and duplicate registration commit
+        together. Only an identical request can recover an existing response.
+        """
+        request_id = bytes.fromhex(session)
+        if len(request_id) != 16 or request_id.hex() != session:
+            raise InvalidProofError("invalid issuance request ID")
+        if not verify_blind_issue_v2(self.keyset, tag, B, S, proof, request_id):
+            raise InvalidProofError("invalid blind issuance proof")
+        quote_bytes = (quote or "").encode()
+        request_hash = hashlib.sha256(
+            b"Cashu_PS_IssueRequest_v2"
+            + bytes.fromhex(self.keyset.keyset_id)
+            + request_id
+            + tag.format()
+            + B.format()
+            + S.format()
+            + proof.to_bytes()
+            + len(quote_bytes).to_bytes(4, "big")
+            + quote_bytes
+        ).hexdigest()
+        receipt_id = "v2:" + session
+        async with self.db.get_connection(
+            conn, locks=[LockOptions(table="ps_assets")]
+        ) as c:
+            row = await c.fetchone(
+                "SELECT request_hash,response FROM ps_issue_sessions WHERE session=:id",
+                {"id": receipt_id},
+            )
+            if row is not None:
+                if row["request_hash"] != request_hash:
+                    raise AlreadySpentError("issuance request ID was already used")
+                response = bytes(row["response"])
+                return (
+                    PublicKey(compressed=response[:48], group="G1"),
+                    PublicKey(compressed=response[48:], group="G1"),
+                )
+            await self._consume_quote(c, quote, tag)
+            await self._register_asset(c, tag)
+            u, v_raw = issue_blind_v2(self.mint_key, B, S)
+            await c.execute(
+                """INSERT INTO ps_issue_sessions
+                (session,created,used,request_hash,response)
+                VALUES(:id,:now,1,:hash,:response)""",
+                {
+                    "id": receipt_id,
+                    "now": int(time.time()),
+                    "hash": request_hash,
+                    "response": u.format() + v_raw.format(),
+                },
+            )
+        return u, v_raw
 
     async def issue_nft_blind(
         self,

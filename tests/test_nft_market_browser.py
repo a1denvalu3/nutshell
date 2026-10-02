@@ -109,6 +109,36 @@ def key() -> str:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("lose_reply", [False, True])
+async def test_browser_one_request_issuance_and_recovery(
+    server, monkeypatch, lose_reply
+):
+    async def forbidden_begin(*args, **kwargs):
+        raise AssertionError("One-request issuance must not allocate a base")
+
+    monkeypatch.setattr(
+        server.app.state.portfolio.ledger, "issue_nft_begin", forbidden_begin
+    )
+    secret = key()
+    result = await server.browser("nft_mint", secret=secret, drop_reply=lose_reply)
+    assert result["nftIssueRequests"] == 1
+    if lose_reply:
+        assert result["interrupted"]
+        recovered = await server.browser("nft_recover", secret=secret)
+        assert recovered["recovered"]["operations"] == 1
+        assert len(recovered["cards"]) == 1
+        assert recovered["cards"][0]["signature"]
+        assert recovered["nftIssueRequests"] == 1
+    else:
+        assert result["duplicateRejected"]
+        assert result["minted"]["custody"] == "browser"
+        assert result["minted"]["signature"]
+    rows = await server.db.fetchall("SELECT * FROM ps_issue_sessions")
+    assert len(rows) == 1 and rows[0]["session"].startswith("v2:")
+    assert len(await server.db.fetchall("SELECT * FROM ps_asset_tags")) == 1
+
+
+@pytest.mark.asyncio
 async def test_browser_offline_purchase_competing_refund_and_payout(server):
     seller, alice, bob = key(), key(), key()
 

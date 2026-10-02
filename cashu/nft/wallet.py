@@ -14,8 +14,9 @@ import hashlib
 import json
 import os
 import sqlite3
+import uuid
 from dataclasses import asdict, dataclass
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Union
 
 import httpx
 
@@ -28,6 +29,7 @@ from ..core.crypto.ps import (
     Presentation,
     asset_tag,
     blind_issue_commit,
+    blind_issue_commit_v2,
     blind_transfer_commit,
     hash_asset,
     present,
@@ -35,6 +37,7 @@ from ..core.crypto.ps import (
     present_showing,
     prove_owner_secret,
     unblind_issued,
+    unblind_issued_v2,
     verify_presentation,
     verify_showing,
 )
@@ -96,7 +99,8 @@ class PendingMint:
     t: int
     u: str
     description: str
-    request: Dict[str, str]
+    request: Dict[str, Union[str, int]]
+    version: int = 1
 
 
 class NFTWallet:
@@ -373,26 +377,26 @@ class NFTClient:
         description: str = "",
     ) -> Credential:
         ticket = wallet.prepare_receive()
-        begin = self._checked(
-            self.http.post(f"{NFT_API_PREFIX}/mint/private/begin")
-        ).json()
-        if begin["keyset_id"] != self.keyset_id:
-            raise RuntimeError("mint changed keyset during issuance")
-        u = self._g1(begin["u"])
-        tag, B, t, proof = wallet.issuance_commit(
-            ticket, self.keyset, h, u, bytes.fromhex(begin["session"])
+        session = uuid.uuid4().hex
+        tag, B, t, proof = blind_issue_commit_v2(
+            self.keyset,
+            h,
+            _derive_owner_secret(wallet._seed, ticket.index),
+            bytes.fromhex(session),
         )
         wallet.save_pending_mint(
             self.keyset_id,
-            begin["session"],
+            session,
             PendingMint(
                 index=ticket.index,
                 h=h,
                 t=t,
-                u=begin["u"],
+                u="",
+                version=2,
                 description=description,
                 request={
-                    "session": begin["session"],
+                    "version": 2,
+                    "session": session,
                     "asset_tag": tag.format().hex(),
                     "b": B.format().hex(),
                     "owner_commitment": ticket.commitment.format().hex(),
@@ -401,7 +405,7 @@ class NFTClient:
                 },
             ),
         )
-        return self.retry_mint(wallet, begin["session"])
+        return self.retry_mint(wallet, session)
 
     def retry_mint(self, wallet: NFTWallet, session: str) -> Credential:
         """Recover the exact original response without issuing a second NFT."""
@@ -409,7 +413,6 @@ class NFTClient:
         secret = _derive_owner_secret(wallet._seed, pending.index)
         S, pok = prove_owner_secret(secret)
         ticket = ReceiveTicket(pending.index, S, pok)
-        u = self._g1(pending.u)
         try:
             resp = self._checked(
                 self.http.post(f"{NFT_API_PREFIX}/mint/private", json=pending.request)
@@ -418,9 +421,16 @@ class NFTClient:
             raise RuntimeError(
                 f"{exc}. Pending request saved; retry with `cashu nft retry-mint {session}`"
             ) from exc
-        if resp["keyset_id"] != self.keyset_id or self._g1(resp["u"]) != u:
+        u = self._g1(resp["u"])
+        if resp["keyset_id"] != self.keyset_id or (
+            pending.version == 1 and u != self._g1(pending.u)
+        ):
             raise RuntimeError("mint changed issuance base or keyset")
-        v = unblind_issued(self._g1(resp["v"]), pending.t, self.keyset)
+        v = (
+            unblind_issued_v2(self._g1(resp["v"]), pending.t, u)
+            if pending.version == 2
+            else unblind_issued(self._g1(resp["v"]), pending.t, self.keyset)
+        )
         candidate = Credential(
             u=u,
             v=v,

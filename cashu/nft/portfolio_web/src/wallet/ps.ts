@@ -66,6 +66,25 @@ export function blindIssue(config: MintConfig, h: bigint, s: bigint, base: strin
   ], [h, t, s], 'Cashu_PS_BlindIssue_v1', concatBytes(hexToBytes(config.keyset_id), hexToBytes(session)));
   return { t: bytesToHex(integer(t)), request: { session, asset_tag: bytesToHex(encoded(D)), b: bytesToHex(encoded(B)), owner_commitment: bytesToHex(encoded(S)), proof: bytesToHex(proof) } };
 }
+export function blindIssueV2(config: MintConfig, h: bigint, s: bigint, session: string) {
+  validateKeyset(config);
+  if (!/^[0-9a-f]{32}$/.test(session) || h < 0n || h >= ORDER || s <= 0n || s >= ORDER) throw new Error('Invalid issuance parameters');
+  const Yh1 = pointFromHexG1(config.public_key.slice(576)), t = randomScalar();
+  const S = mul(g1, s), D = mul(G_ASSET, h), C = add(mul(Yh1, h), mul(g1, t));
+  const proof = linear([
+    { point: D, terms: [[G_ASSET, 0]] }, { point: C, terms: [[Yh1, 0], [g1, 1]] }, { point: S, terms: [[g1, 2]] },
+  ], [h, t, s], 'Cashu_PS_BlindIssue_v2', concatBytes(hexToBytes(config.keyset_id), hexToBytes(session)));
+  return { t: bytesToHex(integer(t)), request: { version: 2 as const, session, asset_tag: bytesToHex(encoded(D)), b: bytesToHex(encoded(C)), owner_commitment: bytesToHex(encoded(S)), proof: bytesToHex(proof) } };
+}
+export function finishBlindIssueV2(config: MintConfig, h: string, s: string, t: string, response: { u: string; v: string; keyset_id: string }): Credential {
+  if (response.keyset_id !== config.keyset_id) throw new Error('Mint changed the issuance keyset');
+  const u = pointFromHexG1(response.u);
+  if (u.equals(bls.G1.Point.ZERO)) throw new Error('Invalid issuance base');
+  const v = pointFromHexG1(response.v).subtract(mul(u, scalar(t, true)));
+  const cred = { u: response.u, v: bytesToHex(encoded(v)), h, s, keyset_id: config.keyset_id };
+  verifyCredential(cred, config);
+  return cred;
+}
 function presentation(cred: Credential, binding: Uint8Array) {
   const rho = randomScalar(), s = scalar(cred.s, true), h = scalar(cred.h);
   const u = mul(pointFromHexG1(cred.u), rho), v = mul(pointFromHexG1(cred.v), rho);

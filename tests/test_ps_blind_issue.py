@@ -1,6 +1,7 @@
 """Blind issuance: proof binding, uniqueness, payment and session safety."""
 
 import asyncio
+import json
 import uuid
 
 import httpx
@@ -18,11 +19,14 @@ from cashu.core.crypto.ps import (
     blind_base_for_issuance,
     blind_base_for_nullifier,
     blind_issue_commit,
+    blind_issue_commit_v2,
     hash_asset,
     present,
     prove_owner_secret,
     unblind_issued,
+    unblind_issued_v2,
     verify_blind_issue,
+    verify_blind_issue_v2,
     verify_presentation,
 )
 from cashu.core.db import Database
@@ -280,7 +284,6 @@ def test_wallet_http_never_sends_hash_during_quote_or_issuance(tmp_path, monkeyp
     )
     assert [url for url, _ in calls if "/pay" not in url] == [
         "/v1/nft/mint/private/quote",
-        "/v1/nft/mint/private/begin",
         "/v1/nft/mint/private",
     ]
     assert "asset_hash" not in client.get_quote(quote["quote"])
@@ -292,13 +295,13 @@ def test_wallet_rejects_malformed_blind_signature(tmp_path, monkeypatch):
         MintPrivateKeyPS.from_seed(b"blind issuance seed"),
     )
     asyncio.run(ledger.migrate())
-    issue = ledger.issue_nft_blind
+    issue = ledger.issue_nft_blind_v2
 
     async def corrupt(*args, **kwargs):
         u, _ = await issue(*args, **kwargs)
         return u, G1 * 123
 
-    monkeypatch.setattr(ledger, "issue_nft_blind", corrupt)
+    monkeypatch.setattr(ledger, "issue_nft_blind_v2", corrupt)
     client = NFTClient(TestClient(create_app(ledger)))
     wallet = NFTWallet(str(tmp_path / "wallet.sqlite3"), seed=b"blind wallet seed")
     with pytest.raises(RuntimeError, match="invalid blind signature"):
@@ -388,3 +391,230 @@ def test_api_rejects_bad_session_encoding(tmp_path, session):
         },
     )
     assert response.status_code == 400
+
+
+def request_v2(ledger, h, s=111, session=None):
+    session = session or uuid.uuid4().hex
+    tag, C, t, proof = blind_issue_commit_v2(
+        ledger.keyset, h, s, bytes.fromhex(session)
+    )
+    return session, tag, C, G1 * s, proof, t
+
+
+async def finish_v2(ledger, h, s=111, session=None, quote=None):
+    session, tag, C, S, proof, t = request_v2(ledger, h, s, session)
+    u, raw = await ledger.issue_nft_blind_v2(session, tag, C, S, proof, quote=quote)
+    return Credential(u, unblind_issued_v2(raw, t, u), h, s, ledger.keyset.keyset_id)
+
+
+@pytest.mark.asyncio
+async def test_v2_randomized_blinding_and_duplicate_hash_rejection(ledger):
+    h = hash_asset(b"identical JPG")
+    a = request_v2(ledger, h)
+    b = request_v2(ledger, h, s=222)
+    assert a[1] == b[1]  # stable duplicate tag
+    assert a[2] != b[2]  # independently blinded commitments
+    assert a[2] != ledger.keyset.Y_h1 * h
+    cred = await finish_v2(ledger, h)
+    assert verify_presentation(ledger.keyset, present(cred))
+    with pytest.raises(AlreadyMintedError):
+        await ledger.issue_nft_blind_v2(*b[:5])
+    assert await ledger.db.fetchall("SELECT * FROM ps_assets") == []
+    assert len(await ledger.db.fetchall("SELECT * FROM ps_asset_tags")) == 1
+    await ledger.burn(present(cred, binding=PS_BURN_BINDING))
+    with pytest.raises(AlreadyMintedError):
+        await finish_v2(ledger, h, s=333)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("other_version", [0, 1])
+@pytest.mark.parametrize("v2_first", [False, True])
+async def test_v2_uniqueness_shared_with_all_issuance_versions(
+    ledger, other_version, v2_first
+):
+    h = hash_asset(b"same asset across protocols")
+
+    async def older():
+        if other_version == 0:
+            S, proof = prove_owner_secret(222)
+            return await ledger.issue_nft(h, S, proof)
+        return await finish(ledger, await ledger.issue_nft_begin(), h, 222)
+
+    if v2_first:
+        await finish_v2(ledger, h)
+        with pytest.raises(AlreadyMintedError):
+            await older()
+    else:
+        await older()
+        with pytest.raises(AlreadyMintedError):
+            await finish_v2(ledger, h)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "tamper", ["tag", "commitment", "owner", "session", "keyset", "version"]
+)
+async def test_v2_proof_rejects_tampering(ledger, tamper):
+    session, tag, C, S, proof, _ = request_v2(ledger, hash_asset(b"jpeg"))
+    mint_public = ledger.keyset
+    if tamper == "tag":
+        tag = asset_tag(99)
+    elif tamper == "commitment":
+        C = G1 * 99
+    elif tamper == "owner":
+        S = G1 * 99
+    elif tamper == "session":
+        session = uuid.uuid4().hex
+    elif tamper == "keyset":
+        mint_public = MintPrivateKeyPS.from_seed(b"another mint seed").public_key
+    elif tamper == "version":
+        # Even with the same equations, a v1 transcript is not a v2 proof.
+        tag, C, _, proof = blind_issue_commit(
+            ledger.keyset,
+            hash_asset(b"jpeg"),
+            111,
+            ledger.keyset.Y_h1,
+            bytes.fromhex(session),
+        )
+    assert not verify_blind_issue_v2(
+        mint_public, tag, C, S, proof, bytes.fromhex(session)
+    )
+    if tamper != "keyset":
+        with pytest.raises(InvalidProofError):
+            await ledger.issue_nft_blind_v2(session, tag, C, S, proof)
+        assert await ledger.db.fetchall("SELECT * FROM ps_issue_sessions") == []
+        assert await ledger.db.fetchall("SELECT * FROM ps_asset_tags") == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("same_id", [False, True])
+async def test_v2_concurrent_duplicates_or_reused_ids_only_issue_once(ledger, same_id):
+    h = hash_asset(b"jpeg")
+    session = uuid.uuid4().hex
+    results = await asyncio.gather(
+        finish_v2(ledger, h, session=session),
+        finish_v2(
+            ledger, h + 1 if same_id else h, s=222, session=session if same_id else None
+        ),
+        return_exceptions=True,
+    )
+    assert sum(isinstance(result, Credential) for result in results) == 1
+    assert (
+        sum(
+            isinstance(result, (AlreadyMintedError, AlreadySpentError))
+            for result in results
+        )
+        == 1
+    )
+    assert len(await ledger.db.fetchall("SELECT * FROM ps_asset_tags")) == 1
+
+
+@pytest.mark.asyncio
+async def test_v2_exact_retry_and_changed_request_are_distinct(ledger):
+    h = hash_asset(b"jpeg")
+    session, tag, C, S, proof, _ = request_v2(ledger, h)
+    first = await ledger.issue_nft_blind_v2(session, tag, C, S, proof)
+    retries = await asyncio.gather(
+        *[ledger.issue_nft_blind_v2(session, tag, C, S, proof) for _ in range(2)]
+    )
+    assert retries == [first, first]
+    with pytest.raises(AlreadySpentError):
+        await finish_v2(ledger, h, session=session)
+    with pytest.raises(AlreadySpentError):
+        await ledger.issue_nft_blind_v2(session, tag, C, S, proof, quote="changed")
+    # v1 and v2 IDs cannot recover each other's receipts.
+    with pytest.raises(InvalidProofError):
+        await ledger.issue_nft_blind(session, tag, C, S, proof)
+
+
+@pytest.mark.asyncio
+async def test_v2_quote_binding_and_duplicate_rollback(ledger):
+    backend = DevQuoteBackend(b"operator secret!!")
+    ledger.quote_backend = backend
+    h = hash_asset(b"jpeg")
+    quote = await ledger.create_blind_quote(asset_tag(h))
+    with pytest.raises(PaymentError, match="not paid"):
+        await finish_v2(ledger, h, quote=quote["quote"])
+    await ledger.dev_pay_quote(quote["quote"], backend.issue_dev_ticket(quote["quote"]))
+    with pytest.raises(PaymentError, match="different asset"):
+        await finish_v2(ledger, h + 1, quote=quote["quote"])
+    assert await ledger.db.fetchall("SELECT * FROM ps_issue_sessions") == []
+    await finish_v2(ledger, h, quote=quote["quote"])
+    duplicate = await ledger.create_blind_quote(asset_tag(h))
+    await ledger.dev_pay_quote(
+        duplicate["quote"], backend.issue_dev_ticket(duplicate["quote"])
+    )
+    with pytest.raises(AlreadyMintedError):
+        await finish_v2(ledger, h, quote=duplicate["quote"])
+    assert (await ledger.get_quote(duplicate["quote"]))["state"] == "paid"
+    assert len(await ledger.db.fetchall("SELECT * FROM ps_issue_sessions")) == 1
+
+
+def test_v2_wallet_mints_once_and_duplicate_http_request_fails(tmp_path, monkeypatch):
+    ledger = PSLedger(
+        Database("test_once", str(tmp_path / "mint")),
+        MintPrivateKeyPS.from_seed(b"blind issuance seed"),
+    )
+    asyncio.run(ledger.migrate())
+    http = TestClient(create_app(ledger))
+    client = NFTClient(http)
+    wallet = NFTWallet(str(tmp_path / "wallet.sqlite3"), seed=b"blind wallet seed")
+    calls = []
+    post = http.post
+
+    def record(url, **kwargs):
+        calls.append((url, kwargs["json"]))
+        return post(url, **kwargs)
+
+    monkeypatch.setattr(http, "post", record)
+    cred = client.mint(wallet, b"jpeg")
+    assert verify_presentation(client.keyset, present(cred))
+    assert len(calls) == 1
+    assert calls[0][0] == "/v1/nft/mint/private"
+    assert calls[0][1]["version"] == 2
+    with pytest.raises(RuntimeError, match="409.*already minted"):
+        client.mint(wallet, b"jpeg")
+    assert len(wallet.assets()) == 1
+
+
+def test_wallet_recovers_legacy_pending_mint_without_version(tmp_path):
+    ledger = PSLedger(
+        Database("test_legacy_pending", str(tmp_path / "mint")),
+        MintPrivateKeyPS.from_seed(b"blind issuance seed"),
+    )
+    asyncio.run(ledger.migrate())
+    client = NFTClient(TestClient(create_app(ledger)))
+    wallet = NFTWallet(str(tmp_path / "wallet.sqlite3"), seed=b"blind wallet seed")
+    ticket = wallet.prepare_receive()
+    begin = client.http.post("/v1/nft/mint/private/begin").json()
+    h = hash_asset(b"legacy pending jpg")
+    tag, B, t, proof = wallet.issuance_commit(
+        ticket, ledger.keyset, h, point(begin["u"]), bytes.fromhex(begin["session"])
+    )
+    body = {
+        "session": begin["session"],
+        "asset_tag": tag.format().hex(),
+        "b": B.format().hex(),
+        "owner_commitment": ticket.commitment.format().hex(),
+        "proof": proof.to_bytes().hex(),
+    }
+    response = client.http.post("/v1/nft/mint/private", json=body)
+    assert response.status_code == 200
+    # Persist the old record shape, without a protocol version.
+    wallet._set_meta(
+        f"blind-mint:{client.keyset_id}:{begin['session']}",
+        json.dumps(
+            {
+                "index": ticket.index,
+                "h": h,
+                "t": t,
+                "u": begin["u"],
+                "description": "Legacy recovery",
+                "request": body,
+            }
+        ).encode(),
+    )
+    cred = client.retry_mint(wallet, begin["session"])
+    assert verify_presentation(client.keyset, present(cred))
+    assert wallet.assets()[0].description == "Legacy recovery"
+    assert wallet.pending_mint_sessions(client.keyset_id) == []

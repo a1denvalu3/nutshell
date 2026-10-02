@@ -49,6 +49,7 @@ class Envelope(BaseModel):
 
 class WalletProofRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    version: Literal[1, 2] = 1
     b: str
     proof: str
     asset_tag: Optional[str] = None
@@ -103,6 +104,7 @@ class BrowserPortfolio:
         data: bytes,
         title: str,
         card_id: Optional[str] = None,
+        issuance_version: Literal[1, 2] = 1,
     ) -> dict:
         if kind not in ("mint", "receive", "rotate", "refresh", "migrate"):
             raise HTTPException(400, "Unknown wallet action.")
@@ -206,7 +208,9 @@ class BrowserPortfolio:
                     507, "The mint has reached its image storage limit."
                 )
             begin = (
-                await self.ledger.issue_nft_begin(conn=conn) if kind == "mint" else None
+                await self.ledger.issue_nft_begin(conn=conn)
+                if kind == "mint" and issuance_version == 1
+                else None
             )
             operation_id = begin["session"] if begin else uuid.uuid4().hex
             await conn.execute(
@@ -258,8 +262,12 @@ class BrowserPortfolio:
     async def finish(
         self, pubkey: str, operation_id: str, request: WalletProofRequest
     ) -> dict:
+        # Preserve the v1 transcript for operations saved by old clients.
         body_hash = hashlib.sha256(
-            request.model_dump_json(exclude_none=True).encode()
+            request.model_dump_json(
+                exclude_none=True,
+                exclude={"version"} if request.version == 1 else set(),
+            ).encode()
         ).hexdigest()
         async with self.db.get_connection(locks=LOCKS) as conn:
             op = await self.operation(conn, pubkey, operation_id)
@@ -283,7 +291,12 @@ class BrowserPortfolio:
                     raise HTTPException(
                         400, "The blind commitment does not match the public JPG."
                     )
-                u, v = await self.ledger.issue_nft_blind(
+                issue = (
+                    self.ledger.issue_nft_blind_v2
+                    if request.version == 2
+                    else self.ledger.issue_nft_blind
+                )
+                u, v = await issue(
                     operation_id,
                     tag,
                     _parse_g1(request.b),

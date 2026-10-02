@@ -728,6 +728,7 @@ def verify_presentation_keysets(
 PS_COMMIT_DST = b"Cashu_PS_CommitEq_v1"
 PS_K2_DST = b"Cashu_PS_TransferK2_v1"
 PS_BLIND_ISSUE_DST = b"Cashu_PS_BlindIssue_v1"
+PS_BLIND_ISSUE_V2_DST = b"Cashu_PS_BlindIssue_v2"
 PS_ISSUE_K_DST = b"Cashu_PS_IssueK_v1"
 
 
@@ -812,6 +813,69 @@ def verify_blind_issue(
         PS_BLIND_ISSUE_DST,
         blind_issue_binding(mint_public, session),
     )
+
+
+def blind_issue_commit_v2(
+    mint_public: MintPublicKeyPS, h: int, s: int, request_id: bytes
+) -> Tuple[PublicKey, PublicKey, int, LinearProof]:
+    """One-request issuance: C = h*Y_h1 + t*G1, before the mint chooses u.
+
+    Prove knowledge of h,t,s and equality of h with the public duplicate tag.
+    Bind the noninteractive proof to this keyset and client-chosen request ID.
+    """
+    if not 0 < s < curve_order:
+        raise ValueError("invalid owner secret")
+    D = asset_tag(h)
+    t = _random_scalar()
+    C = _add_p1(mint_public.Y_h1 * h, G1 * t)
+    proof = prove_linear(
+        _blind_issue_statements(D, C, mint_public.Y_h1, G1 * s),
+        [h, t, s],
+        PS_BLIND_ISSUE_V2_DST,
+        blind_issue_binding(mint_public, request_id),
+    )
+    return D, C, t, proof
+
+
+def verify_blind_issue_v2(
+    mint_public: MintPublicKeyPS,
+    D: PublicKey,
+    C: PublicKey,
+    S: PublicKey,
+    proof: LinearProof,
+    request_id: bytes,
+) -> bool:
+    if C.is_infinity() or S.is_infinity():
+        return False
+    return verify_linear(
+        _blind_issue_statements(D, C, mint_public.Y_h1, S),
+        proof,
+        PS_BLIND_ISSUE_V2_DST,
+        blind_issue_binding(mint_public, request_id),
+    )
+
+
+def issue_blind_v2(
+    mint_key: MintPrivateKeyPS, C: PublicKey, S: PublicKey
+) -> Tuple[PublicKey, PublicKey]:
+    """After proof verification, return (k*G1, k*(x*G1 + C + y_s*S)).
+
+    The mint chooses a fresh secret k per issuance, never a client-supplied
+    or reused base. Persist both response points for exact-request recovery.
+    """
+    if C.is_infinity() or S.is_infinity():
+        raise ValueError("points must not be the point at infinity")
+    k = _random_scalar()
+    return G1 * k, _add_p1(
+        _add_p1(G1 * mint_key.x.scalar, C), S * mint_key.y_s.scalar
+    ) * k
+
+
+def unblind_issued_v2(v_raw: PublicKey, t: int, u: PublicKey) -> PublicKey:
+    """Remove t*u; the result is (x + y_h*h + y_s*s)*u."""
+    if not 0 < t < curve_order or u.is_infinity():
+        raise ValueError("invalid blinding scalar or issuance base")
+    return _add_p1(v_raw, _neg_p1(u * t))
 
 
 def blind_base_for_nullifier(
