@@ -820,6 +820,48 @@ async def test_listing_guards_revisions_and_unlisting(env, cash):
 
 
 @pytest.mark.asyncio
+async def test_bids_are_public_highest_first_and_in_activity(env, cash):
+    seller = await give_nft(env, await env.actor("Ana"), title="Dusk")
+    ben, cy = await env.actor("Ben"), await env.actor("Cy")
+    listing = await list_nft(env, seller, 10)
+    low = (
+        await submit(ben, await make_offer(env, ben, cash, listing, price=12))
+    ).json()
+    await submit(cy, await make_offer(env, cy, cash, listing, price=20))
+
+    bids = (await env.http.get(f"/api/market/listings/{listing['id']}/bids")).json()
+    assert [(b["buyer"], b["price"], b["status"]) for b in bids["items"]] == [
+        (cy.pubkey, 20, "open"),
+        (ben.pubkey, 12, "open"),
+    ]
+    assert (bids["count"], bids["bidders"], bids["top"]) == (2, 2, 20)
+    assert bids["items"][1]["buyer_name"] == "Ben"
+    # Settlement details stay with the participants.
+    assert not {"mint", "proofs", "amount", "manifest", "escrow"} & set(
+        bids["items"][0]
+    )
+    summary = {"count": 2, "bidders": 2, "top": 20}
+    one = (await env.http.get(f"/api/market/listings/{listing['id']}")).json()
+    assert one["bids"] == summary
+    browse = (await env.http.get("/api/market/listings")).json()["items"]
+    assert [i["bids"] for i in browse if i["id"] == listing["id"]] == [summary]
+
+    events = (await env.http.get("/api/activity")).json()
+    bid_events = {
+        (e["actor"], e["price"], e["title"]) for e in events if e["kind"] == "bid"
+    }
+    assert bid_events == {(cy.pubkey, 20, "Dusk"), (ben.pubkey, 12, "Dusk")}
+    mine = (await env.http.get(f"/api/activity?actor={ben.pubkey}")).json()
+    assert [e["price"] for e in mine if e["kind"] == "bid"] == [12]
+
+    # A declined bid stays visible but no longer counts.
+    await seller.actor.post(seller.actor.base() + f"/market/offers/{low['id']}/decline")
+    bids = (await env.http.get(f"/api/market/listings/{listing['id']}/bids")).json()
+    assert [b["status"] for b in bids["items"]] == ["open", "declined"]
+    assert (bids["count"], bids["top"]) == (1, 20)
+
+
+@pytest.mark.asyncio
 async def test_listed_nft_cannot_be_deleted_until_unlisted(env):
     seller = await give_nft(env, await env.actor("Ana"))
     listing = await list_nft(env, seller, 10)

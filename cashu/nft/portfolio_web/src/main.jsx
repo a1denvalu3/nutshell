@@ -469,7 +469,7 @@ function App() {
   const active = profile?.cards.filter((c) => c.status !== 'sent') || [];
   const sent = profile?.cards.filter((c) => c.status === 'sent') || [];
   const shown = tab === 'sent' ? sent : active;
-  const openCard = (item) => navigate(`/p/${item.pubkey || item.actor}?nft=${item.card_id || item.id}`);
+  const openCard = (item) => navigate(item.kind === 'bid' ? `/market/${item.listing_id}` : `/p/${item.pubkey || item.actor}?nft=${item.card_id || item.id}`);
   const [myCards, setMyCards] = useState(null);
   useEffect(() => {
     if (!identity || route.page !== 'offers') return;

@@ -3,7 +3,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { AnimatePresence, motion } from 'motion/react';
 import { toast } from 'sonner';
-import { ChevronRight, Clock, Coins, Search, Store, Tag, Wallet, Zap } from 'lucide-react';
+import { ChevronRight, Clock, Coins, Gavel, Search, Store, Tag, Wallet, Zap } from 'lucide-react';
 import { getJSON } from './api.mjs';
 import { BackButton, Button, CheckRow, HoldButton, SkeletonCards, SkeletonDetail, SkeletonRows, Identicon, Modal, Notice, Spinner, Tilt, panel, short, useTint } from './ui.jsx';
 import { Segmented, ago, imageUrl } from './social.jsx';
@@ -132,7 +132,8 @@ function ListingCard({ item, index, onOpen }) {
         <div className="nft-media"><img src={imageUrl(item.h)} alt="" loading="lazy" decoding="async" onLoad={onLoad} />{item.state === 'reserved' && <span className="media-tag">Sale in progress</span>}</div>
         <div className="nft-body">
           <span className="nft-meta"><span className="nft-title">{item.title || 'Untitled'}</span><Price value={item.price} /></span>
-          <span className="owner-chip"><Identicon pubkey={item.seller} size={18} /><span className="ellipsis">{item.seller_name || 'Collector'}</span></span>
+          <span className="nft-meta"><span className="owner-chip"><Identicon pubkey={item.seller} size={18} /><span className="ellipsis">{item.seller_name || 'Collector'}</span></span>
+            {item.bids?.count > 0 && <span className="bid-chip" title={`Top bid ${sats(item.bids.top)}`}><Gavel size={12} />{item.bids.count} {item.bids.count === 1 ? 'bid' : 'bids'}</span>}</span>
         </div>
       </button>
     </Tilt>
@@ -212,7 +213,8 @@ export function ListingPage({ id, navigate, identity, market, onStart, startOffe
         {step === 'info' && <motion.div key="info" className="detail-panel" {...panel}>
           <div className="detail-head"><span className={`badge ${open ? 'badge-good' : 'badge-warn'}`}>{open ? 'For sale' : listing.state === 'reserved' ? 'Sale in progress' : 'Not for sale'}</span><h2>{listing.title}</h2></div>
           <Price value={listing.price} big />
-          {mine && <ListingOffers listing={listing} market={market} navigate={navigate} />}
+          {mine ? <ListingOffers listing={listing} market={market} navigate={navigate} />
+            : <ListingBids listing={listing} navigate={navigate} viewer={identity?.pubkey} version={market.version} />}
           <dl className="props">
             <div><dt>Seller</dt><dd><button className="who" onClick={() => navigate(`/p/${listing.seller}`)}><Identicon pubkey={listing.seller} size={22} /><span>{listing.seller_name || short(listing.seller)}</span></button></dd></div>
             <div><dt>Listed</dt><dd>{ago(listing.updated)}</dd></div>
@@ -261,6 +263,46 @@ export function ListingPage({ id, navigate, identity, market, onStart, startOffe
       </AnimatePresence></div>
     </div>
   </main>;
+}
+
+/* ---------- public bids on a listing ---------- */
+
+const BID_STATUS = { open: ['Active', 'good'], expired: ['Expired', ''], accepted: ['Won', 'good'], declined: ['Declined', ''], closed: ['Closed', ''] };
+
+function ListingBids({ listing, navigate, viewer, version }) {
+  const [bids, setBids] = useState(null), [all, setAll] = useState(false);
+  useEffect(() => {
+    getJSON(`/api/market/listings/${listing.id}/bids`).then(setBids).catch(() => setBids({ items: [], count: 0, bidders: 0, top: null }));
+  }, [listing.id, version]);
+  const shown = bids ? (all ? bids.items : bids.items.slice(0, 5)) : [];
+  return <section className="listing-offers">
+    <header className="row-between">
+      <h3>Bids {bids?.count ? <span className="tab-count">{bids.count}</span> : null}</h3>
+      {bids?.top != null && <span className="muted small">{bids.bidders === 1 ? '1 bidder' : `${bids.bidders} bidders`} · top {sats(bids.top)}</span>}
+    </header>
+    {!bids ? <SkeletonRows count={2} className="sk-compact" />
+      : !bids.items.length ? <p className="muted">No bids yet. Bids are public: everyone sees who bid and how much.</p>
+        : <>
+          <ul className="listing-offer-list">{shown.map((b, i) => {
+            const top = b.status === 'open' && b.price === bids.top && i === bids.items.findIndex((x) => x.status === 'open');
+            const [label, tone] = BID_STATUS[b.status] || ['', ''];
+            return <motion.li key={b.id} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.04 }}>
+              <button className={`listing-offer bid-row ${top ? 'is-top' : ''} ${b.status === 'open' ? '' : 'is-past'}`} onClick={() => navigate(`/p/${b.buyer}`)}>
+                <Identicon pubkey={b.buyer} size={30} />
+                <span className="listing-offer-main">
+                  <strong className="ellipsis">{b.buyer_name || short(b.buyer)}{b.buyer === viewer ? ' (you)' : ''}</strong>
+                  <span className="muted small ellipsis">{ago(b.created)}{b.status === 'open' ? ` · open until ${when(b.expires)}` : ''}</span>
+                </span>
+                <span className="listing-offer-side">
+                  <Price value={b.price} />
+                  <span className="listing-offer-tags">{top && <span className="badge badge-good">Top bid</span>}<TestBadge on={b.test_value} />{!top && label && b.status !== 'open' && <span className={`badge ${tone ? 'badge-' + tone : ''}`}>{label}</span>}</span>
+                </span>
+              </button>
+            </motion.li>;
+          })}</ul>
+          {bids.items.length > 5 && <button className="link" onClick={() => setAll((v) => !v)}>{all ? 'Show fewer' : `Show all ${bids.items.length}`}</button>}
+        </>}
+  </section>;
 }
 
 /* ---------- offers on the seller's own listing ---------- */

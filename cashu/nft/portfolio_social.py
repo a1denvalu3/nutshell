@@ -20,7 +20,7 @@ if TYPE_CHECKING:
 
 CollectionSort = Literal["popular", "new", "largest"]
 NFTSort = Literal["new", "old", "title"]
-EventKind = Literal["collection", "mint", "receive", "like", "follow", "sale"]
+EventKind = Literal["collection", "mint", "receive", "like", "follow", "sale", "bid"]
 
 COLLECTION_ORDER: Dict[str, str] = {
     "popular": "likes DESC, followers DESC, nfts DESC, p.created DESC",
@@ -182,7 +182,7 @@ class Social:
         if actors is not None and not actors:
             return []
         wanted = set(
-            kinds or ["collection", "mint", "receive", "like", "follow", "sale"]
+            kinds or ["collection", "mint", "receive", "like", "follow", "sale", "bid"]
         )
         cutoff = before if before is not None else int(time.time()) + 1
         params: Dict[str, object] = {"before": cutoff, "limit": limit}
@@ -192,6 +192,7 @@ class Social:
             "likes": "",
             "follows": "",
             "sales": "",
+            "bids": "",
         }
         if actors is not None:
             clause, actor_params = _in("a", actors)
@@ -202,6 +203,7 @@ class Social:
                 "likes": f" AND l.liker IN ({clause})",
                 "follows": f" AND f.follower IN ({clause})",
                 "sales": f" AND s.buyer IN ({clause})",
+                "bids": f" AND o.buyer IN ({clause})",
             }
         events: List[dict] = []
         async with self.db.get_connection() as conn:
@@ -299,6 +301,34 @@ class Social:
                         "h": r["h"],
                         "title": r["title"],
                         "price": r["price"],
+                        "created": r["created"],
+                    }
+                    for r in rows
+                ]
+            if "bid" in wanted:
+                # Bids are public like on any NFT marketplace: bidder, NFT,
+                # amount and time. NFTs deleted since then drop out.
+                rows = await conn.fetchall(
+                    f"""SELECT o.id, o.listing_id, o.buyer, o.seller, o.price, o.test_value,
+                    o.created, l.card_id, c.h, c.title FROM market_offers o
+                    JOIN market_listings l ON l.id=o.listing_id
+                    JOIN portfolio_cards c ON c.id=l.card_id
+                    WHERE o.created<:before{actor_filter["bids"]}
+                    ORDER BY o.created DESC LIMIT :limit""",
+                    params,
+                )
+                events += [
+                    {
+                        "id": f"bid:{r['id']}",
+                        "kind": "bid",
+                        "actor": r["buyer"],
+                        "target": r["seller"],
+                        "listing_id": r["listing_id"],
+                        "card_id": r["card_id"],
+                        "h": r["h"],
+                        "title": r["title"],
+                        "price": r["price"],
+                        "test_value": bool(r["test_value"]),
                         "created": r["created"],
                     }
                     for r in rows

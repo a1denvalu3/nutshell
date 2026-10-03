@@ -218,6 +218,13 @@ def _parse(model: Any, raw: bytes) -> Any:
         raise HTTPException(400, f"Invalid request ({where or 'body'}).")
 
 
+def bid_status(disposition: str, accept_deadline: int, now: int) -> str:
+    """Public status of an offer, as a bid on its listing."""
+    if disposition == "funded":
+        return "open" if accept_deadline > now else "expired"
+    return {"accepted": "accepted", "declined": "declined"}.get(disposition, "closed")
+
+
 def fee_for(n_inputs: int, fee_ppk: int) -> int:
     """NUT-02 input fee for n inputs of one keyset."""
     return math.ceil(n_inputs * fee_ppk / 1000)
@@ -766,7 +773,61 @@ class Market:
                         {"t": self.clock(), "id": r["id"]},
                     )
 
-    def _public_listing(self, row: Any) -> Dict[str, Any]:
+    async def _bid_summaries(self, listing_ids: List[str]) -> Dict[str, Dict[str, Any]]:
+        """Open bids per listing: how many, from how many bidders, the top one."""
+        if not listing_ids:
+            return {}
+        params: Dict[str, Any] = {f"l{i}": v for i, v in enumerate(listing_ids)}
+        clause = ",".join(f":l{i}" for i in range(len(listing_ids)))
+        rows = await self.db.fetchall(
+            f"""SELECT listing_id, COUNT(*) AS n, COUNT(DISTINCT buyer) AS bidders,
+            MAX(price) AS top FROM market_offers
+            WHERE disposition='funded' AND accept_deadline>:now AND listing_id IN ({clause})
+            GROUP BY listing_id""",
+            {**params, "now": self.clock()},
+        )
+        return {
+            r["listing_id"]: {"count": r["n"], "bidders": r["bidders"], "top": r["top"]}
+            for r in rows
+        }
+
+    async def bids(self, listing_id: str) -> Dict[str, Any]:
+        """Every offer on a listing as a public bid, highest first. Bidder,
+        amount, time and status are public; the payment mint, proofs and
+        settlement details stay participant-only."""
+        await self.listing(listing_id)
+        rows = await self.db.fetchall(
+            """SELECT o.id, o.buyer, p.name AS buyer_name, o.price, o.test_value,
+            o.disposition, o.accept_deadline, o.created FROM market_offers o
+            LEFT JOIN portfolio_profiles p ON p.pubkey=o.buyer WHERE o.listing_id=:l
+            ORDER BY o.price DESC, o.created ASC""",
+            {"l": listing_id},
+        )
+        now = self.clock()
+        items = [
+            {
+                "id": r["id"],
+                "buyer": r["buyer"],
+                "buyer_name": r["buyer_name"],
+                "price": r["price"],
+                "test_value": bool(r["test_value"]),
+                "status": bid_status(r["disposition"], r["accept_deadline"], now),
+                "expires": r["accept_deadline"],
+                "created": r["created"],
+            }
+            for r in rows
+        ]
+        live = [i for i in items if i["status"] == "open"]
+        return {
+            "items": items,
+            "count": len(live),
+            "bidders": len({i["buyer"] for i in live}),
+            "top": live[0]["price"] if live else None,
+        }
+
+    def _public_listing(
+        self, row: Any, bids: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         r = dict(row)
         return {
             "id": r["id"],
@@ -782,6 +843,7 @@ class Market:
             "state": r["state"],
             "created": r["created"],
             "updated": r["updated"],
+            "bids": bids or {"count": 0, "bidders": 0, "top": None},
         }
 
     async def listing(self, listing_id: str) -> Dict[str, Any]:
@@ -800,7 +862,8 @@ class Market:
             LEFT JOIN portfolio_cards c ON c.id=l.card_id WHERE l.id=:id""",
             {"id": listing_id},
         )
-        return self._public_listing(row)
+        summary = await self._bid_summaries([listing_id])
+        return self._public_listing(row, summary.get(listing_id))
 
     async def listings(
         self, sort: str, q: str, seller: Optional[str], limit: int, offset: int
@@ -826,13 +889,14 @@ class Market:
             },
         )
         await self._refresh_stale(rows[:limit])
+        summaries = await self._bid_summaries([r["id"] for r in rows[:limit]])
         live = []
         for r in rows[:limit]:
             current = await self.db.fetchone(
                 "SELECT state FROM market_listings WHERE id=:id", {"id": r["id"]}
             )
             if current and current["state"] in ("active", "reserved"):
-                live.append(self._public_listing(r))
+                live.append(self._public_listing(r, summaries.get(r["id"])))
         return {"items": live, "more": len(rows) > limit}
 
     async def listing_for_card(self, card_id: str) -> Optional[Dict[str, Any]]:
@@ -1978,6 +2042,12 @@ def market_router(
         if len(listing_id) != 32:
             raise HTTPException(404, "Listing not found.")
         return await market.listing(listing_id)
+
+    @router.get("/api/market/listings/{listing_id}/bids")
+    async def bids(listing_id: str):
+        if len(listing_id) != 32:
+            raise HTTPException(404, "Listing not found.")
+        return await market.bids(listing_id)
 
     @router.get("/api/market/cards/{card_id}/listing")
     async def card_listing(card_id: str):

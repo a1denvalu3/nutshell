@@ -997,3 +997,22 @@ and `make check` clean.
   - `test_listed_nft_cannot_be_deleted_until_unlisted`;
   - the browser end-to-end tests `test_browser_deletes_nft_and_voids_its_link`
     and `test_browser_refuses_to_delete_a_listed_nft`.
+- **Bids are public.** At the user's request, offers are now shown publicly
+  as bids, like on other NFT marketplaces. This replaces the earlier rule that
+  offer amounts were participant-only.
+  - `GET /api/market/listings/{id}/bids` lists every offer on a listing, highest
+    first. Each bid shows the bidder, amount, time, expiry, the test-sats flag
+    and a status: `open`, `expired`, `accepted`, `declined` or `closed`.
+  - Listings carry a `bids` summary: open bids, distinct bidders and the top bid.
+  - The activity feed has `bid` events ("Cy bid 240 sats on Harbour, 6am"),
+    leaving out NFTs deleted since.
+  - The payment mint, proofs, escrow, manifest and settlement legs stay
+    participant-only.
+  - UI: a Bids panel on listings for visitors (the seller keeps the actionable
+    Offers panel) and a bid count on market cards.
+  - Covered by `test_bids_are_public_highest_first_and_in_activity`. Checked on
+    a local server: three bids placed through the browser wallet showed on the
+    listing (highest first, top bid marked), in activity and on the market card.
+- **Unlimited collections.** `NFT_PORTFOLIO_MAX_CARDS` is now opt-in. Unset, a
+  collection has no card limit; image storage and JPG size are still capped,
+  and unfinished wallet actions per profile stay bounded (100).

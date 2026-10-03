@@ -813,6 +813,9 @@ main.page > .back { margin-bottom: 20px; }
 .listing-offer-go { color: var(--muted); transition: transform .2s var(--pop); }
 .listing-offer:hover .listing-offer-go { transform: translateX(3px); color: var(--text); }
 .listing-offers .link { align-self: flex-start; }
+.bid-row.is-top { background: color-mix(in srgb, var(--lime) 45%, var(--paper)); }
+.bid-row.is-past { opacity: .62; }
+.bid-chip { display: inline-flex; align-items: center; gap: 4px; flex: none; padding: 2px 8px; border-radius: 999px; border: 1.5px solid var(--ink); background: var(--yellow); color: #111; font-size: 11px; font-weight: 800; }
 .offer-row.is-focus { box-shadow: 0 0 0 4px var(--lime), var(--shadow); }
 @media (max-width: 640px) {
   .listing-offer { grid-template-columns: auto minmax(0, 1fr) auto; }
