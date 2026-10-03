@@ -36,6 +36,9 @@ LOCKS = [
     for name in ("ps_assets", "ps_nullifiers", "portfolio_cards")
 ]
 CLAIM_DOMAIN = "Cashu_NFT_Portfolio_Claim_v1\n"
+# Unfinished wallet actions stage JPGs server-side; bound them per profile
+# even when collections themselves are unlimited.
+MAX_PENDING_OPS = 100
 
 
 class Envelope(BaseModel):
@@ -191,17 +194,21 @@ class BrowserPortfolio:
                 "SELECT count(*) AS n FROM portfolio_wallet_ops WHERE pubkey=:p AND state!='completed'",
                 {"p": pubkey},
             )
-            if pending is not None and pending["n"] >= self.portfolio.max_cards:
+            if pending is not None and pending["n"] >= MAX_PENDING_OPS:
                 raise HTTPException(
                     409, "Finish pending wallet actions before adding another JPG."
                 )
-            hashes = await conn.fetchall(
-                """SELECT h FROM portfolio_cards WHERE pubkey=:p AND status!='sent'
-                UNION SELECT h FROM portfolio_wallet_ops WHERE pubkey=:p AND state!='completed'""",
-                {"p": pubkey},
-            )
-            if len({row["h"] for row in hashes} | {h}) > self.portfolio.max_cards:
-                raise HTTPException(409, "Your collection has reached its card limit.")
+            limit = self.portfolio.max_cards
+            if limit is not None:
+                hashes = await conn.fetchall(
+                    """SELECT h FROM portfolio_cards WHERE pubkey=:p AND status!='sent'
+                    UNION SELECT h FROM portfolio_wallet_ops WHERE pubkey=:p AND state!='completed'""",
+                    {"p": pubkey},
+                )
+                if len({row["h"] for row in hashes} | {h}) > limit:
+                    raise HTTPException(
+                        409, "Your collection has reached its card limit."
+                    )
             image = await conn.fetchone(
                 "SELECT h FROM portfolio_images WHERE h=:h", {"h": h}
             )

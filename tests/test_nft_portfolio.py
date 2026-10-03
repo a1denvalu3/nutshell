@@ -812,6 +812,15 @@ def test_receive_garbage_token_rejected(client):
 # --- (10) quotas -----------------------------------------------------------------
 
 
+def test_collections_are_unlimited_by_default(client):
+    assert client.get("/api/config").json()["max_cards"] is None
+    alice = Profile(client)
+    alice.create()
+    for i in range(3):
+        minted_card(alice, make_jpg(color=(10 + i, 20, 30)))
+    assert len(alice.get()["cards"]) == 3
+
+
 def test_max_cards_limit(tmp_path):
     app = create_portfolio_app(str(tmp_path / "p"), max_cards=1)
     with TestClient(app) as client:

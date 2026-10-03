@@ -142,7 +142,7 @@ class Portfolio:
         self,
         data_dir: str,
         max_jpg_bytes: int = 10 * 1024 * 1024,
-        max_cards: int = 100,
+        max_cards: Optional[int] = None,
         max_storage_bytes: int = 1024**3,
     ):
         directory = Path(data_dir)
@@ -187,7 +187,9 @@ class Portfolio:
             "SELECT COUNT(*) AS n FROM portfolio_cards WHERE pubkey=:p AND status!='sent'",
             {"p": pubkey},
         )
-        if count is None or count["n"] >= self.max_cards:
+        if count is None or (
+            self.max_cards is not None and count["n"] >= self.max_cards
+        ):
             raise HTTPException(409, "This portfolio has reached its collection limit.")
         total = await conn.fetchone(
             "SELECT COALESCE(SUM(length(jpg)),0) AS n FROM portfolio_images"
@@ -411,7 +413,7 @@ def create_portfolio_app(
     data_dir: str,
     *,
     max_jpg_bytes: int = 10 * 1024 * 1024,
-    max_cards: int = 100,
+    max_cards: Optional[int] = None,
     max_storage_bytes: int = 1024**3,
     market_dev_mints: Optional[List[str]] = None,
     executor_interval: float = 5.0,
@@ -1049,7 +1051,12 @@ def main() -> None:
         max_jpg_bytes=int(
             os.environ.get("NFT_PORTFOLIO_MAX_JPG_BYTES", str(10 * 1024 * 1024))
         ),
-        max_cards=int(os.environ.get("NFT_PORTFOLIO_MAX_CARDS", "100")),
+        # Unset means no per-collection limit (storage is still capped).
+        max_cards=(
+            int(os.environ["NFT_PORTFOLIO_MAX_CARDS"])
+            if os.environ.get("NFT_PORTFOLIO_MAX_CARDS")
+            else None
+        ),
         max_storage_bytes=int(
             os.environ.get("NFT_PORTFOLIO_MAX_STORAGE_BYTES", str(1024**3))
         ),
